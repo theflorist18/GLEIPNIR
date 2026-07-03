@@ -1,0 +1,183 @@
+// Shared types for the GLEIPNIR SPA.
+//
+// The record/event shapes mirror docs/CONTRACTS.md §5 (Codex-Entry-inspired
+// evidence head + CoC event). The run manifest / checkpoint shapes mirror
+// docs/CONTRACTS.md §10/§11. CONTRACTS does not pin the exact field names the
+// metrics collector (collect.py / regress.py) writes back into a run, so every
+// metric field here is OPTIONAL and every consumer reads it defensively — a
+// "requested but not yet executed" run legitimately has none of them.
+
+export type Variant = 'standard' | 'anchoring' | 'parallel' | 'parallel-anchored';
+export type Regime = 'smoke' | 'steady';
+export type Op = 'CREATE' | 'TRANSFER' | 'ACCESS' | 'REMOVE';
+
+// ---- Evidence head record (CONTRACTS §5, Codex-Entry mapping) ----
+
+export interface StoragePointer {
+  protocol?: string;
+  location?: string;
+  integrity_proof?: string; // RFC 6920 ni-URI; computed by the gateway (or client-side hash)
+  jurisdiction?: string;
+}
+
+export interface EncryptionInfo {
+  alg?: string;
+  key_id?: string;
+  last_controlled_by?: string;
+}
+
+export interface IdentityInfo {
+  org?: string;
+  process?: string;
+  artifact?: string;
+  subject?: string;
+}
+
+export interface AnchorInfo {
+  chain?: string;
+  tx_hash?: string;
+  hash_alg?: string;
+}
+
+export interface SignatureInfo {
+  alg?: string;
+  kid?: string;
+  signature?: string;
+}
+
+export interface EvidenceRecord {
+  id?: string;
+  version?: string;
+  storage?: StoragePointer;
+  encryption?: EncryptionInfo;
+  identity?: IdentityInfo;
+  anchor?: AnchorInfo;
+  signatures?: SignatureInfo[];
+  previous_id?: string;
+  custodian?: string;
+  status?: string;
+  caseId?: string;
+}
+
+// ---- CoC event (CONTRACTS §5) ----
+
+export interface CoCEvent {
+  eventId?: string;
+  evidenceId?: string;
+  caseId?: string;
+  op?: Op;
+  actor?: string;
+  detail?: Record<string, unknown>;
+  ts?: string;
+}
+
+// ---- Verification (gateway /evidence/:id/verify -> verification service) ----
+
+export interface VerifyResult {
+  ok: boolean;
+  latencyMs?: number;
+  steps?: { fetchMs?: number; recomputeMs?: number; compareRootMs?: number };
+}
+
+// ---- Request bodies ----
+
+export interface CreateEvidenceRequest {
+  evidenceId?: string; // gateway generates a UUIDv4 if omitted
+  caseId?: string; // "shared" (standard/anchoring) or "case-00x" (parallel)
+  version?: string;
+  actor: string;
+  storage: StoragePointer;
+  identity?: IdentityInfo;
+  encryption?: EncryptionInfo;
+  previous_id?: string;
+  // Optional: raw bytes for the gateway to hash into storage.integrity_proof.
+  // Used ONLY for hashing, never for storage. Omitted when the client hashes locally.
+  payloadBase64?: string;
+}
+
+export interface TransferCustodyRequest {
+  newCustodian: string;
+  reason: string;
+  actor?: string;
+}
+
+export interface AccessLogRequest {
+  actor: string;
+  action: string;
+}
+
+// ---- Runs / sweep (CONTRACTS §10) ----
+
+export interface SweepCell {
+  N?: number;
+  K?: number;
+  channels?: number;
+  offeredLoadTps?: number;
+  repetition?: number;
+}
+
+export interface RunRequest {
+  variant: Variant;
+  regime: Regime;
+  cell: SweepCell;
+  repetitions?: number;
+  notes?: string;
+}
+
+export interface LatencyStat {
+  min?: number;
+  avg?: number;
+  max?: number;
+}
+
+export interface ThroughputMetric {
+  perChannel?: { channel: string; tps: number }[];
+  aggregateTps?: number;
+}
+
+export interface RunMetrics {
+  throughput?: ThroughputMetric;
+  latency?: {
+    writeMs?: LatencyStat; // submit-to-commit write latency (Caliper)
+    verificationMs?: LatencyStat; // audit/verification latency (Anchoring variants)
+  };
+  success?: { succ?: number; fail?: number; failureModes?: Record<string, number> };
+  bytePerLog?: number; // slope from regress() over the checkpoint series
+}
+
+export interface Checkpoint {
+  runId?: string;
+  label?: string; // e.g. "t0", "t1"
+  ts?: string;
+  ledgerBytes?: Record<string, number>; // per-channel block-store bytes (du -sb)
+  stateBytes?: number; // GoLevelDB world-state bytes
+  events?: number; // cumulative events written (x-axis for byte-per-log)
+}
+
+export type RunStatus =
+  | 'requested'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'unknown'
+  | string;
+
+export interface RunManifest {
+  runId: string;
+  startedAt?: string;
+  variant?: Variant;
+  regime?: Regime;
+  cell?: SweepCell;
+  gitCommit?: string;
+  configShas?: Record<string, string>;
+  caliper?: { binding?: string; version?: string };
+  notes?: string;
+}
+
+// GET /runs/:id returns the manifest, plus (when available) status, metrics and
+// the checkpoint series. Fields beyond runId may be absent for pending runs.
+export interface RunDetail extends RunManifest {
+  status?: RunStatus;
+  metrics?: RunMetrics;
+  checkpoints?: Checkpoint[];
+}
