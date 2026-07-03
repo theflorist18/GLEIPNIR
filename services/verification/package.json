@@ -1,0 +1,17 @@
+{
+  "name": "gleipnir-verification",
+  "version": "1.0.0",
+  "private": true,
+  "description": "GLEIPNIR verification service — audit-latency metric path (fetch -> recompute -> compare root)",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}

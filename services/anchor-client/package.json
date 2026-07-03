@@ -1,0 +1,19 @@
+{
+  "name": "@gleipnir/anchor-client",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cross-channel Merkle-root submission to the anchor channel (Parallel-Anchored variant).",
+  "type": "module",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@grpc/grpc-js": "^1.14.0",
+    "@hyperledger/fabric-gateway": "1.11.0"
+  }
+}
