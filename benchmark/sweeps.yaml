@@ -1,0 +1,12 @@
+# GLEIPNIR sweep constants — SINGLE SOURCE OF TRUTH (CONTRACTS.md sect. 10).
+# Every other file (benchmarks/*.yaml, orchestration/sweep.py, services BATCH_N/BATCH_K)
+# imports these values. Do not scatter literals elsewhere. If you change a value here,
+# re-run `npm run gen:rounds` so benchmarks/*.yaml stay in sync (see README sync rule).
+anchoring_batch_N: [10, 50, 100, 250]
+parallel_anchored_batch_K: [5, 10, 25, 50]
+channel_counts: [1, 2, 5]        # 10 deliberately cut — single host
+offered_load_tps: [25, 50, 100]  # conjecture until measured; tune per host
+repetitions: 3                   # N-runs loop for mean ± spread
+regimes:
+  smoke:  { cases: 10, logs_per_case_min: 10, logs_per_case_max: 25 }
+  steady: { min_events_per_channel: 1000 }

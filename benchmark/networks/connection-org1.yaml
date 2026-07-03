@@ -1,0 +1,20 @@
+# Standard Fabric connection profile for Org1 (peer-gateway binding uses this to
+# locate + TLS-trust the peer; `discover` is ignored by the gateway connector).
+# Paths are relative to the Caliper workspace (benchmark/).
+name: gleipnir-org1
+version: "1.0.0"
+client:
+  organization: Org1
+organizations:
+  Org1:
+    mspid: Org1MSP
+    peers:
+      - peer0.org1.example.com
+peers:
+  peer0.org1.example.com:
+    url: grpcs://localhost:7051
+    tlsCACerts:
+      path: ../network/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt
+    grpcOptions:
+      ssl-target-name-override: peer0.org1.example.com
+      grpc.keepalive_time_ms: 600000

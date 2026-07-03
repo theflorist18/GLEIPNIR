@@ -1,0 +1,32 @@
+# STEADY-STATE — VERIFICATION latency (thesis RQ2), the numerator of the
+# latency-vs-storage tradeoff. Drives the verification service through the gateway
+# via the REST connector. Each worker seeds events + forces a batch boundary in the
+# (untimed) init phase, then the timed round measures GET .../verify?eventId=...
+# Use --caliper-networkconfig networks/rest-gateway.yaml. Run per anchoring variant.
+test:
+  name: gleipnir-steady-verify
+  description: Verification/audit latency under load (fetch -> recompute branch -> compare root).
+  workers:
+    number: 4
+  rounds:
+    - label: verify-50tps
+      txNumber: 1000
+      rateControl:
+        type: fixed-rate
+        opts:
+          tps: 50
+      workload:
+        module: workload/verify.js
+        arguments:
+          seedCount: 100
+    - label: verify-fixed-load
+      txDuration: 60
+      rateControl:
+        type: fixed-load
+        opts:
+          transactionLoad: 5
+          startTps: 50
+      workload:
+        module: workload/verify.js
+        arguments:
+          seedCount: 100

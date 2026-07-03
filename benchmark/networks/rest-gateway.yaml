@@ -1,0 +1,13 @@
+# Caliper 0.6.0 network config — custom REST connector driving the GLEIPNIR
+# gateway BFF. Used by the Anchoring / Parallel-Anchored (rest-mode) and verify
+# rounds. caliper.blockchain points at the local connector module
+# (docs/research/caliper-0.6.0.md Q5). The connector reads GATEWAY_URL and
+# GLEIPNIR_TOKEN from the environment.
+#
+# NOTE: results from this connector measure the BFF path (enqueue / verify), not
+# the raw peer-gateway path — label them distinctly (see README).
+name: GLEIPNIR rest-gateway
+version: "2.0.0"
+
+caliper:
+  blockchain: ./connectors/rest/index.js

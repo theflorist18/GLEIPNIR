@@ -1,0 +1,34 @@
+# STEADY-STATE — Parallel-Anchored variant. Per-case batching (size K) with roots
+# committed to the anchor channel. Writes go through the gateway REST enqueue path
+# (rest-mode) with a per-case caseId; use --caliper-networkconfig networks/rest-gateway.yaml.
+# sweep.py sets caseId + K per cell and repeats per the N-runs loop.
+test:
+  name: gleipnir-steady-parallel-anchored
+  description: Parallel-Anchored steady-state — per-case enqueue -> anchor channel roots.
+  workers:
+    number: 4
+  rounds:
+    - label: create-case001-50tps
+      txNumber: 1000
+      rateControl:
+        type: fixed-rate
+        opts:
+          tps: 50
+      workload:
+        module: workload/createEvidence.js
+        arguments:
+          mode: rest
+          caseId: case-001
+    - label: access-case001-50tps
+      txNumber: 1000
+      rateControl:
+        type: fixed-rate
+        opts:
+          tps: 50
+      workload:
+        module: workload/accessLog.js
+        arguments:
+          mode: rest
+          scenario: spread
+          pool: 25
+          caseId: case-001

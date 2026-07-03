@@ -1,0 +1,32 @@
+# SMOKE test — functional correctness only. Its results MUST NOT be cited for any
+# scalability/throughput claim (CLAUDE.md, ARCHITECTURE §8). Artifacts are labelled
+# 'smoke' and kept in smoke-* result dirs, never mixed with steady-state data.
+test:
+  name: gleipnir-smoke-standard
+  description: Smoke functional check of the Standard variant (create + shared-access gate).
+  workers:
+    number: 2
+  rounds:
+    - label: smoke-create
+      txNumber: 50
+      rateControl:
+        type: fixed-rate
+        opts:
+          tps: 25
+      workload:
+        module: workload/createEvidence.js
+        arguments:
+          mode: fabric
+    # Stage-1 gate in miniature: many workers, one shared evidence, zero conflicts.
+    - label: smoke-access-shared-gate
+      txNumber: 200
+      rateControl:
+        type: fixed-rate
+        opts:
+          tps: 50
+      workload:
+        module: workload/accessLog.js
+        arguments:
+          mode: fabric
+          scenario: shared
+          sharedEvidenceId: ev-shared-gate
