@@ -1,0 +1,218 @@
+# GLEIPNIR channel configuration — Fabric 2.5, channel-participation only.
+#
+# There is NO consortium / bootstrap-genesis section: Fabric 2.5 creates
+# application channels with `configtxgen -outputBlock` + `osnadmin channel join`
+# (docs/research/fabric-2.5.md §5, §6). Capabilities: Channel/Orderer V2_0,
+# Application V2_5 (the only sets that exist at 2.5.x).
+#
+# Two profiles:
+#   AppChannel    — Org1MSP + Org2MSP (coc-main, case-*)      1-of-any endorsement
+#   AnchorChannel — AnchorClientMSP only (anchor-main)        single-org endorsement
+#
+# TLS cert paths point under ../organizations/... exactly where
+# network/crypto/registerEnroll.sh writes them.
+
+---
+Organizations:
+  - &OrdererOrg
+    Name: OrdererOrg
+    ID: OrdererMSP
+    MSPDir: ../organizations/ordererOrganizations/example.com/msp
+    Policies:
+      Readers:
+        Type: Signature
+        Rule: "OR('OrdererMSP.member')"
+      Writers:
+        Type: Signature
+        Rule: "OR('OrdererMSP.member')"
+      Admins:
+        Type: Signature
+        Rule: "OR('OrdererMSP.admin')"
+    OrdererEndpoints:
+      - orderer0.example.com:7050
+      - orderer1.example.com:8050
+      - orderer2.example.com:9050
+
+  - &Org1
+    Name: Org1MSP
+    ID: Org1MSP
+    MSPDir: ../organizations/peerOrganizations/org1.example.com/msp
+    Policies:
+      Readers:
+        Type: Signature
+        Rule: "OR('Org1MSP.admin', 'Org1MSP.peer', 'Org1MSP.client')"
+      Writers:
+        Type: Signature
+        Rule: "OR('Org1MSP.admin', 'Org1MSP.client')"
+      Admins:
+        Type: Signature
+        Rule: "OR('Org1MSP.admin')"
+      Endorsement:
+        Type: Signature
+        Rule: "OR('Org1MSP.peer')"
+
+  - &Org2
+    Name: Org2MSP
+    ID: Org2MSP
+    MSPDir: ../organizations/peerOrganizations/org2.example.com/msp
+    Policies:
+      Readers:
+        Type: Signature
+        Rule: "OR('Org2MSP.admin', 'Org2MSP.peer', 'Org2MSP.client')"
+      Writers:
+        Type: Signature
+        Rule: "OR('Org2MSP.admin', 'Org2MSP.client')"
+      Admins:
+        Type: Signature
+        Rule: "OR('Org2MSP.admin')"
+      Endorsement:
+        Type: Signature
+        Rule: "OR('Org2MSP.peer')"
+
+  - &AnchorOrg
+    Name: AnchorClientMSP
+    ID: AnchorClientMSP
+    MSPDir: ../organizations/peerOrganizations/anchor.example.com/msp
+    Policies:
+      Readers:
+        Type: Signature
+        Rule: "OR('AnchorClientMSP.member')"
+      Writers:
+        Type: Signature
+        Rule: "OR('AnchorClientMSP.member')"
+      Admins:
+        Type: Signature
+        Rule: "OR('AnchorClientMSP.admin')"
+      Endorsement:
+        Type: Signature
+        Rule: "OR('AnchorClientMSP.peer')"
+
+Capabilities:
+  Channel: &ChannelCapabilities
+    V2_0: true
+  Orderer: &OrdererCapabilities
+    V2_0: true
+  Application: &ApplicationCapabilities
+    V2_5: true
+
+Application: &ApplicationDefaults
+  Organizations:
+  Policies:
+    Readers:
+      Type: ImplicitMeta
+      Rule: "ANY Readers"
+    Writers:
+      Type: ImplicitMeta
+      Rule: "ANY Writers"
+    Admins:
+      Type: ImplicitMeta
+      Rule: "MAJORITY Admins"
+    LifecycleEndorsement:
+      Type: ImplicitMeta
+      Rule: "MAJORITY Endorsement"
+    Endorsement:
+      Type: ImplicitMeta
+      Rule: "MAJORITY Endorsement"
+  Capabilities:
+    <<: *ApplicationCapabilities
+
+Orderer: &OrdererDefaults
+  OrdererType: etcdraft
+  # Default batch settings from the 2.5 sampleconfig; a smaller BatchTimeout can
+  # be set when probing latency (document per run).
+  BatchTimeout: 2s
+  BatchSize:
+    MaxMessageCount: 10
+    AbsoluteMaxBytes: 99 MB
+    PreferredMaxBytes: 512 KB
+  Organizations:
+  Policies:
+    Readers:
+      Type: ImplicitMeta
+      Rule: "ANY Readers"
+    Writers:
+      Type: ImplicitMeta
+      Rule: "ANY Writers"
+    Admins:
+      Type: ImplicitMeta
+      Rule: "MAJORITY Admins"
+    BlockValidation:
+      Type: ImplicitMeta
+      Rule: "ANY Writers"
+
+Channel: &ChannelDefaults
+  Policies:
+    Readers:
+      Type: ImplicitMeta
+      Rule: "ANY Readers"
+    Writers:
+      Type: ImplicitMeta
+      Rule: "ANY Writers"
+    Admins:
+      Type: ImplicitMeta
+      Rule: "MAJORITY Admins"
+  Capabilities:
+    <<: *ChannelCapabilities
+
+Profiles:
+  # coc-main and every case-* channel are created from this profile.
+  AppChannel:
+    <<: *ChannelDefaults
+    Orderer:
+      <<: *OrdererDefaults
+      Organizations:
+        - *OrdererOrg
+      Capabilities:
+        <<: *OrdererCapabilities
+      EtcdRaft:
+        Consenters:
+          - Host: orderer0.example.com
+            Port: 7050
+            ClientTLSCert: ../organizations/ordererOrganizations/example.com/orderers/orderer0.example.com/tls/server.crt
+            ServerTLSCert: ../organizations/ordererOrganizations/example.com/orderers/orderer0.example.com/tls/server.crt
+          - Host: orderer1.example.com
+            Port: 8050
+            ClientTLSCert: ../organizations/ordererOrganizations/example.com/orderers/orderer1.example.com/tls/server.crt
+            ServerTLSCert: ../organizations/ordererOrganizations/example.com/orderers/orderer1.example.com/tls/server.crt
+          - Host: orderer2.example.com
+            Port: 9050
+            ClientTLSCert: ../organizations/ordererOrganizations/example.com/orderers/orderer2.example.com/tls/server.crt
+            ServerTLSCert: ../organizations/ordererOrganizations/example.com/orderers/orderer2.example.com/tls/server.crt
+    Application:
+      <<: *ApplicationDefaults
+      Organizations:
+        - *Org1
+        - *Org2
+      Capabilities:
+        <<: *ApplicationCapabilities
+
+  # anchor-main: the dedicated cross-channel root sink. Single-org (AnchorClientMSP)
+  # so the anchoring cost is a controlled variable held constant across runs.
+  AnchorChannel:
+    <<: *ChannelDefaults
+    Orderer:
+      <<: *OrdererDefaults
+      Organizations:
+        - *OrdererOrg
+      Capabilities:
+        <<: *OrdererCapabilities
+      EtcdRaft:
+        Consenters:
+          - Host: orderer0.example.com
+            Port: 7050
+            ClientTLSCert: ../organizations/ordererOrganizations/example.com/orderers/orderer0.example.com/tls/server.crt
+            ServerTLSCert: ../organizations/ordererOrganizations/example.com/orderers/orderer0.example.com/tls/server.crt
+          - Host: orderer1.example.com
+            Port: 8050
+            ClientTLSCert: ../organizations/ordererOrganizations/example.com/orderers/orderer1.example.com/tls/server.crt
+            ServerTLSCert: ../organizations/ordererOrganizations/example.com/orderers/orderer1.example.com/tls/server.crt
+          - Host: orderer2.example.com
+            Port: 9050
+            ClientTLSCert: ../organizations/ordererOrganizations/example.com/orderers/orderer2.example.com/tls/server.crt
+            ServerTLSCert: ../organizations/ordererOrganizations/example.com/orderers/orderer2.example.com/tls/server.crt
+    Application:
+      <<: *ApplicationDefaults
+      Organizations:
+        - *AnchorOrg
+      Capabilities:
+        <<: *ApplicationCapabilities

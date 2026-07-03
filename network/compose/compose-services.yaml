@@ -1,0 +1,114 @@
+# GLEIPNIR off-chain services (docs/CONTRACTS.md §6, §7, §8).
+# gateway (3000) + frontend (8081) run for every variant. The batcher (4001),
+# receipt-store (4002) and verification (4004) run under the `anchoring` and
+# `parallel-anchored` profiles; anchor-client (4003) only under `parallel-anchored`.
+# Crypto is mounted read-only from ../organizations.
+
+networks:
+  gleipnir-net:
+    name: gleipnir-net
+
+volumes:
+  receipt-data:
+
+services:
+  gateway:
+    container_name: gleipnir-gateway
+    build:
+      context: ../../gateway
+    environment:
+      - PORT=3000
+      - VARIANT=${VARIANT:-standard}
+      - GLEIPNIR_TOKEN=${GLEIPNIR_TOKEN:-dev-token}
+      - BATCHER_URL=http://merkle-batcher:4001
+      - VERIFICATION_URL=http://verification:4004
+      - PEER_ENDPOINT=peer0-org1:7051
+      - PEER_HOST_ALIAS=peer0.org1.example.com
+      - MSP_ID=Org1MSP
+      - CRYPTO_PATH=/organizations/peerOrganizations/org1.example.com/users/User1@org1.example.com/msp
+      - TLS_CERT_PATH=/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt
+      - DEFAULT_CHANNEL=coc-main
+      - CC_NAME=evidence
+      - RESULTS_DIR=/results
+    ports:
+      - "3000:3000"
+    volumes:
+      - ../organizations:/organizations:ro
+      - ../../benchmark/results:/results
+    networks: [gleipnir-net]
+
+  frontend:
+    container_name: gleipnir-frontend
+    build:
+      context: ../../frontend
+    ports:
+      - "8081:8081"
+    depends_on: [gateway]
+    networks: [gleipnir-net]
+
+  merkle-batcher:
+    container_name: gleipnir-merkle-batcher
+    profiles: ["anchoring", "parallel-anchored"]
+    build:
+      context: ../../services/merkle-batcher
+    environment:
+      - PORT=4001
+      - VARIANT=${VARIANT:-anchoring}
+      - BATCH_N=${BATCH_N:-100}
+      - BATCH_K=${BATCH_K:-25}
+      - RECEIPT_STORE_URL=http://receipt-store:4002
+      - GATEWAY_URL=http://gateway:3000
+      - ANCHOR_CLIENT_URL=http://anchor-client:4003
+    ports:
+      - "4001:4001"
+    networks: [gleipnir-net]
+
+  receipt-store:
+    container_name: gleipnir-receipt-store
+    profiles: ["anchoring", "parallel-anchored"]
+    build:
+      context: ../../services/receipt-store
+    environment:
+      - PORT=4002
+      - DATA_DIR=/data
+    ports:
+      - "4002:4002"
+    volumes:
+      - receipt-data:/data
+    networks: [gleipnir-net]
+
+  verification:
+    container_name: gleipnir-verification
+    profiles: ["anchoring", "parallel-anchored"]
+    build:
+      context: ../../services/verification
+    environment:
+      - PORT=4004
+      - VARIANT=${VARIANT:-anchoring}
+      - RECEIPT_STORE_URL=http://receipt-store:4002
+      - GATEWAY_URL=http://gateway:3000
+      - ANCHOR_CLIENT_URL=http://anchor-client:4003
+      - GLEIPNIR_TOKEN=${GLEIPNIR_TOKEN:-dev-token}
+    ports:
+      - "4004:4004"
+    networks: [gleipnir-net]
+
+  anchor-client:
+    container_name: gleipnir-anchor-client
+    profiles: ["parallel-anchored"]
+    build:
+      context: ../../services/anchor-client
+    environment:
+      - PORT=4003
+      - PEER_ENDPOINT=peer0-anchor:11051
+      - PEER_HOST_ALIAS=peer0.anchor.example.com
+      - MSP_ID=AnchorClientMSP
+      - CRYPTO_PATH=/organizations/peerOrganizations/anchor.example.com/users/anchorclient@anchor.example.com/msp
+      - TLS_CERT_PATH=/organizations/peerOrganizations/anchor.example.com/peers/peer0.anchor.example.com/tls/ca.crt
+      - ANCHOR_CHANNEL=anchor-main
+      - CC_NAME=evidence
+    ports:
+      - "4003:4003"
+    volumes:
+      - ../organizations:/organizations:ro
+    networks: [gleipnir-net]
