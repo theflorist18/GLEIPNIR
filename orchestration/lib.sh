@@ -132,9 +132,15 @@ set_env_var() {
 }
 
 # Wait for a host-published operations /healthz to answer (peers/orderers).
+# Peers register a docker-daemon health check that can never pass here: ccaas
+# peers have no docker socket BY DESIGN, so after startup their healthz is a
+# permanent 503 whose only failed check is "docker" — a bare 200 is just the
+# pre-registration startup window (audit F74, first parallel-anchored
+# bring-up). Ready therefore = status OK, or failed_checks == ["docker"].
 wait_healthz() {
-  local port="$1" name="$2" tries=0
-  until curl -fsS "http://localhost:${port}/healthz" >/dev/null 2>&1; do
+  local port="$1" name="$2" tries=0 body
+  until body="$(curl -sS --max-time 3 "http://localhost:${port}/healthz" 2>/dev/null)" && \
+        echo "${body}" | jq -e '(.status == "OK") or ([.failed_checks[]?.component] == ["docker"])' >/dev/null 2>&1; do
     tries=$((tries + 1))
     if [ "${tries}" -gt 60 ]; then
       echo "timeout waiting for ${name} (:${port}/healthz)" >&2

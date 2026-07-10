@@ -13,7 +13,9 @@
     "launch:smoke": "caliper launch manager --caliper-workspace . --caliper-benchconfig benchmarks/smoke-standard.yaml --caliper-networkconfig networks/coc-main.yaml"
   },
   "dependencies": {
-    "@hyperledger/caliper-cli": "0.6.0"
+    "@grpc/grpc-js": "^1.10.3",
+    "@hyperledger/caliper-cli": "0.6.0",
+    "@hyperledger/fabric-gateway": "^1.5.0"
   },
   "devDependencies": {
     "js-yaml": "^4.3.0"

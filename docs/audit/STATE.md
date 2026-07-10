@@ -124,3 +124,17 @@ git history.
       (`chunk-7-build-images.sh` — re-run only if the engine image store resets).
       **First benchmark: GO** per REPORT.md order; carry-forward watch: F23 token,
       F44 epoch, F53 calibration, spread rounds, F67 clean-tree case-001.
+- [x] **Step 2 — variant smokes** (2026-07-10, same session): **GREEN ×3** →
+      `step-2-variant-smokes.md`, F74–F76. anchoring N10 (10/250/100 zero fails; F23
+      token + F44 epoch batchIds confirmed; verify round = live RQ2 path), parallel c1
+      (10/250, fabric-gateway connector, provision-channel idempotency confirmed),
+      parallel-anchored K5c1 (10/250/100; anchor org + anchor-main + anchor-client all
+      first-time-live green). **F74 bug FIXED:** peers' ops healthz permanently 503s
+      once the by-design-unmet docker check registers (ccaas peers have no docker
+      socket) — 200 was only a startup race; wait_healthz now accepts
+      failed_checks==["docker"]. Caliper `fabric:fabric-gateway` binding executed +
+      lockfile-pinned (unbound = error code 6 — the CLAUDE.md trap, verbatim). Notes:
+      F75 9p stale-cwd python-launch flake (fresh shell / re-cd runner; env-only),
+      F76 sweep.py check=False hides collect failures (eyeball "collected N rounds").
+      **Step 3 (steady-state, Standard first): GO.** Ubuntu distro now also has
+      python3+PyYAML 6 and Node 20.19.6 (/usr/local).

@@ -154,3 +154,18 @@ observations (F35 didn't bite; F52 no crash-loop; F46 single install; healthz
 **Steps 2–4 are GO.** Prereq for any run on this machine: the compose images
 must already exist (`chunk-7-build-images.sh`) — the MITM proxy breaks
 in-build TLS if compose ever builds them itself.
+
+## Step 2 result (2026-07-10) — GREEN
+
+All three variant smokes pass: `smoke-anchoring-N10-r0` (10/250/100, 0 fails,
+live RQ2 verify path), `smoke-parallel-channels1-r0` (10/250, fabric-gateway
+connector on case-001), `smoke-parallel-anchored-K5-channels1-r0`
+(10/250/100, per-case roots via anchor-client on anchor-main). F23 token,
+F44 epoch, provision idempotency all confirmed live. One bug found+fixed:
+**F74** — peers' ops healthz permanently 503s once the (by-design unmet)
+docker check registers; wait_healthz now accepts failed_checks==["docker"].
+The Caliper `fabric:fabric-gateway` binding was executed and lockfile-pinned
+(first-run failure without it is Caliper error code 6, as CLAUDE.md warned).
+Notes F75 (9p stale-cwd python launches — use a fresh shell / re-cd runner)
+and F76 (sweep.py's check=False hides collect failures; verify "collected N
+rounds" per cell) in `step-2-variant-smokes.md`. **Step 3 is GO.**
