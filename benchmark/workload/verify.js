@@ -11,10 +11,15 @@
 //
 // Seeding/flush use direct fetch (they need response bodies + are not part of the
 // measurement); only the verify GETs go through sutAdapter.
-// roundArguments: { seedCount, caseId? }. Env: GATEWAY_URL, BATCHER_URL, GLEIPNIR_TOKEN.
+// roundArguments: { seedCount, caseId?, channels? }. With `channels: C`
+// (Parallel-Anchored multi-channel cells, audit F6/F24) seeds are spread
+// round-robin across case-001..case-00C; the verify GET itself is caseId-free
+// (the receipt's rootRef carries the scope). Env: GATEWAY_URL, BATCHER_URL,
+// GLEIPNIR_TOKEN.
 
 const { WorkloadModuleBase } = require('@hyperledger/caliper-core');
 const crypto = require('crypto');
+const { caseSelector } = require('./lib/payloads');
 
 class VerifyWorkload extends WorkloadModuleBase {
   async initializeWorkloadModule(workerIndex, totalWorkers, roundIndex, roundArguments, sutAdapter, sutContext) {
@@ -23,6 +28,7 @@ class VerifyWorkload extends WorkloadModuleBase {
     this.batcherUrl = process.env.BATCHER_URL || 'http://localhost:4001';
     this.token = process.env.GLEIPNIR_TOKEN || 'dev-token';
     this.caseId = roundArguments.caseId;
+    const nextCase = caseSelector(roundArguments, workerIndex);
     this.eventIds = [];
     this.n = 0;
 
@@ -30,7 +36,8 @@ class VerifyWorkload extends WorkloadModuleBase {
     const headers = { 'content-type': 'application/json', authorization: `Bearer ${this.token}` };
     for (let i = 0; i < seedCount; i += 1) {
       const id = `ev-verify-w${workerIndex}-r${roundIndex}-${i}-${crypto.randomUUID().slice(0, 8)}`;
-      const body = { evidenceId: id, version: '1.0', identity: { org: 'Org1MSP', subject: `custodian-${workerIndex}` }, storage: { protocol: 'file', location: `blob://${id}` }, ...(this.caseId ? { caseId: this.caseId } : {}) };
+      const caseId = nextCase ? nextCase() : this.caseId;
+      const body = { evidenceId: id, version: '1.0', identity: { org: 'Org1MSP', subject: `custodian-${workerIndex}` }, storage: { protocol: 'file', location: `blob://${id}` }, ...(caseId ? { caseId } : {}) };
       const resp = await fetch(`${this.gatewayUrl}/api/v1/evidence`, { method: 'POST', headers, body: JSON.stringify(body) });
       const j = await resp.json().catch(() => ({}));
       if (j.eventId) this.eventIds.push(j.eventId);

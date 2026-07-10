@@ -2,8 +2,8 @@
 # SMOKE test — functional correctness only (regimes.smoke: 10 cases x 10-25 logs). Its results MUST NOT be
 # cited for any scalability/throughput claim (CLAUDE.md, ARCHITECTURE §8).
 test:
-  name: gleipnir-smoke-standard
-  description: Smoke functional check of the Standard variant (create + logs + shared-access gate).
+  name: gleipnir-smoke-anchoring
+  description: Smoke functional check of the Anchoring variant (enqueue + verify round-trip).
   workers:
     number: 2
   rounds:
@@ -16,7 +16,7 @@ test:
       workload:
         module: workload/createEvidence.js
         arguments:
-          mode: fabric
+          mode: rest
     - label: smoke-logs
       txNumber: 250
       rateControl:
@@ -26,18 +26,16 @@ test:
       workload:
         module: workload/accessLog.js
         arguments:
-          mode: fabric
+          mode: rest
           scenario: spread
           pool: 10
-    - label: smoke-access-shared-gate
-      txNumber: 200
+    - label: smoke-verify
+      txNumber: 100
       rateControl:
         type: fixed-rate
         opts:
-          tps: 50
+          tps: 10
       workload:
-        module: workload/accessLog.js
+        module: workload/verify.js
         arguments:
-          mode: fabric
-          scenario: shared
-          sharedEvidenceId: ev-shared-gate
+          seedCount: 10

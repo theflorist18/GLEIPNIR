@@ -3,12 +3,12 @@
 # branch -> compare anchored root, driven through the gateway (rest connector;
 # use networks/rest-gateway.yaml). Seeding + /flush happen in the untimed init.
 test:
-  name: gleipnir-steady-verify
-  description: Verification/audit latency under load (fetch -> recompute branch -> compare root).
+  name: gleipnir-steady-verify-c2
+  description: Verification latency, Parallel-Anchored 2-channel cell (seeds spread per case).
   workers:
     number: 4
   rounds:
-    - label: verify-50tps
+    - label: verify-50tps-c2
       txNumber: 1000
       rateControl:
         type: fixed-rate
@@ -18,7 +18,8 @@ test:
         module: workload/verify.js
         arguments:
           seedCount: 100
-    - label: verify-fixed-load
+          channels: 2
+    - label: verify-fixed-load-c2
       txDuration: 60
       rateControl:
         type: fixed-load
@@ -29,3 +30,4 @@ test:
         module: workload/verify.js
         arguments:
           seedCount: 100
+          channels: 2

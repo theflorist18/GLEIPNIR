@@ -61,7 +61,9 @@ class RestGatewayConnector extends ConnectorBase {
     } catch (_err) {
       status.SetStatusFail();
     }
-    status.SetTimeFinal(Date.now());
+    // No extra time stamping here: SetStatusSuccess()/SetStatusFail() record
+    // time_final themselves; TxStatus has no SetTimeFinal in Caliper 0.6.0
+    // (calling it threw and aborted every rest-mode round — audit F45).
     return status;
   }
 }

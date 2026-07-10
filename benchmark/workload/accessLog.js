@@ -11,10 +11,13 @@
 //
 //   'spread'  — each worker logs access to its own seeded pool (throughput shape).
 //
-// roundArguments: { mode, scenario, sharedEvidenceId?, caseId?, channel?, pool? }.
+// roundArguments: { mode, scenario, sharedEvidenceId?, caseId?, channel?, channels?, pool? }.
+// With `channels: C` (multi-channel Parallel cells, audit F6/F24) the spread pool
+// is seeded round-robin across case-001..case-00C and every access targets the
+// SAME case its evidence was created on.
 
 const { WorkloadModuleBase } = require('@hyperledger/caliper-core');
-const { evidenceId, codexJson, createRestBody, fabricRequest } = require('./lib/payloads');
+const { evidenceId, codexJson, createRestBody, fabricRequest, caseSelector } = require('./lib/payloads');
 
 class AccessLogWorkload extends WorkloadModuleBase {
   async initializeWorkloadModule(workerIndex, totalWorkers, roundIndex, roundArguments, sutAdapter, sutContext) {
@@ -29,36 +32,38 @@ class AccessLogWorkload extends WorkloadModuleBase {
       // The shared evidence is expected to already exist (created by the
       // orchestration gate before the round). AccessLog never reads the head,
       // so even a not-yet-created id would still be appended without conflict.
-      this.targets = [roundArguments.sharedEvidenceId || 'ev-shared-gate'];
+      this.targets = [{ id: roundArguments.sharedEvidenceId || 'ev-shared-gate', caseId: this.caseId, channel: this.channel }];
     } else {
       const poolSize = roundArguments.pool || 25;
+      const nextCase = caseSelector(roundArguments, workerIndex);
       this.targets = [];
       for (let i = 0; i < poolSize; i += 1) {
         const id = evidenceId(this.workerIndex, this.roundIndex, `seed${i}`);
-        this.targets.push(id);
+        const spread = nextCase ? nextCase() : null;
+        this.targets.push({ id, caseId: spread || this.caseId, channel: spread || this.channel });
         if (this.mode === 'rest') {
-          await this.sutAdapter.sendRequests({ method: 'POST', path: '/api/v1/evidence', body: createRestBody(id, this.workerIndex, this.caseId) });
+          await this.sutAdapter.sendRequests({ method: 'POST', path: '/api/v1/evidence', body: createRestBody(id, this.workerIndex, spread || this.caseId) });
         } else {
-          await this.sutAdapter.sendRequests(fabricRequest('CreateEvidence', [id, codexJson(id, this.workerIndex)], this.channel));
+          await this.sutAdapter.sendRequests(fabricRequest('CreateEvidence', [id, codexJson(id, this.workerIndex)], spread || this.channel));
         }
       }
     }
   }
 
   async submitTransaction() {
-    const id = this.targets[this.n % this.targets.length];
+    const target = this.targets[this.n % this.targets.length];
     this.n += 1;
     const actor = `worker-${this.workerIndex}`;
     const action = `access-${this.n}`;
     if (this.mode === 'rest') {
       return this.sutAdapter.sendRequests({
         method: 'POST',
-        path: `/api/v1/evidence/${encodeURIComponent(id)}/access`,
-        body: { actor, action, caseId: this.caseId },
+        path: `/api/v1/evidence/${encodeURIComponent(target.id)}/access`,
+        body: { actor, action, caseId: target.caseId },
       });
     }
     return this.sutAdapter.sendRequests(
-      fabricRequest('AccessLog', [id, actor, action], this.channel),
+      fabricRequest('AccessLog', [target.id, actor, action], target.channel),
     );
   }
 }
