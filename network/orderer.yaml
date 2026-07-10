@@ -5,7 +5,8 @@
 # GLEIPNIR: Hyperledger Fabric 2.5.15 sampleconfig orderer.yaml (extracted from
 # hyperledger/fabric-orderer:2.5.15). Two GLEIPNIR changes only: BootstrapMethod
 # set to "none" (channel-participation only), and stock comments that referenced
-# the removed "system channel" neutralized to honor the terminology ban — no
+# the legacy bootstrap channel (removed in Fabric 3.0) neutralized to honor the
+# terminology ban — no
 # other value changed. Version-controlled and referenced by commit SHA in every
 # run manifest. Orderers mount
 # this at FABRIC_CFG_PATH; the runtime overrides (channel participation, the

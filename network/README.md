@@ -23,7 +23,8 @@ Used by **all variants**. Referenced by commit SHA in every run manifest (method
 `coc-main` (Org1+Org2; Standard, Anchoring) · `case-001..005` (Org1+Org2; Parallel*) ·
 `anchor-main` (AnchorClientMSP; Parallel-Anchored). Channel creation is
 channel-participation only: `configtxgen -outputBlock` → `osnadmin channel join` on all
-three orderer admin endpoints (HTTP 201) → `peer channel join`. **No system channel.**
+three orderer admin endpoints (HTTP 201) → `peer channel join`. **No legacy bootstrap
+channel of any kind** (that mechanism is removed in Fabric 3.0).
 
 ## Files
 

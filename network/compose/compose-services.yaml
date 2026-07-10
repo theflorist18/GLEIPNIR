@@ -56,9 +56,14 @@ services:
       - VARIANT=${VARIANT:-anchoring}
       - BATCH_N=${BATCH_N:-100}
       - BATCH_K=${BATCH_K:-25}
+      # Namespaces batchIds per sweep cell so recreates against a persistent
+      # ledger never reuse a committed (scope,batchId) key (audit F44).
+      - BATCH_EPOCH=${BATCH_EPOCH:-}
       - RECEIPT_STORE_URL=http://receipt-store:4002
       - GATEWAY_URL=http://gateway:3000
       - ANCHOR_CLIENT_URL=http://anchor-client:4003
+      # The gateway bearer-auths /internal/anchor-root (audit F23).
+      - GLEIPNIR_TOKEN=${GLEIPNIR_TOKEN:-dev-token}
     ports:
       - "4001:4001"
     networks: [gleipnir-net]
