@@ -1,0 +1,26 @@
+# Per-case Caliper network config TEMPLATE (Parallel variant). The provisioning
+# orchestrator (orchestration/provision-channel.sh) copies this to
+# networks/<caseId>.yaml and substitutes __CHANNEL__ with the case channel name.
+name: GLEIPNIR __CHANNEL__
+version: "2.0.0"
+
+caliper:
+  blockchain: fabric
+
+channels:
+  - channelName: __CHANNEL__
+    contracts:
+      - id: evidence
+
+organizations:
+  - mspid: Org1MSP
+    identities:
+      certificates:
+        - name: User1
+          clientPrivateKey:
+            path: ../network/organizations/peerOrganizations/org1.example.com/users/User1@org1.example.com/msp/keystore/priv_sk
+          clientSignedCert:
+            path: ../network/organizations/peerOrganizations/org1.example.com/users/User1@org1.example.com/msp/signcerts/cert.pem
+    connectionProfile:
+      path: networks/connection-org1.yaml
+      discover: false

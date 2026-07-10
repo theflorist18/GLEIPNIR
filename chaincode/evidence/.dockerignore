@@ -1,0 +1,5 @@
+# keep local build artifacts out of the image build context
+evidence
+*.test
+.dockerignore
+Dockerfile
