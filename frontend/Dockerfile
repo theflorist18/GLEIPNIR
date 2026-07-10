@@ -1,8 +1,10 @@
 # Build stage — pinned Node 20.19 (CLAUDE.md target runtime).
 FROM node:20.19-alpine AS build
 WORKDIR /app
-COPY package.json package-lock.json* ./
-RUN npm ci || npm install
+# Lockfile-exact install; no npm-install fallback — a silent re-resolve would
+# defeat the commit-cited reproducibility story (audit F69).
+COPY package.json package-lock.json ./
+RUN npm ci
 COPY . .
 RUN npm run build
 
