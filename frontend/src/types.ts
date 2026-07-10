@@ -75,6 +75,10 @@ export interface CoCEvent {
 
 export interface VerifyResult {
   ok: boolean;
+  // 'root-mismatch' (tamper signal, HTTP 200), 'missing-receipt' /
+  // 'missing-anchor-root' (404 — batch not yet closed / root not committed),
+  // 'malformed-receipt' (422), or a transport-level reason.
+  reason?: string;
   latencyMs?: number;
   steps?: { fetchMs?: number; recomputeMs?: number; compareRootMs?: number };
 }
@@ -99,11 +103,13 @@ export interface TransferCustodyRequest {
   newCustodian: string;
   reason: string;
   actor?: string;
+  caseId?: string; // required by the gateway in parallel variants (audit F68)
 }
 
 export interface AccessLogRequest {
   actor: string;
   action: string;
+  caseId?: string; // required by the gateway in parallel variants (audit F68)
 }
 
 // ---- Runs / sweep (CONTRACTS §10) ----
@@ -148,10 +154,12 @@ export interface RunMetrics {
 export interface Checkpoint {
   runId?: string;
   label?: string; // e.g. "t0", "t1"
-  ts?: string;
+  ts?: string; // legacy alias; collect.py writes tsUtc
+  tsUtc?: string;
   ledgerBytes?: Record<string, number>; // per-channel block-store bytes (du -sb)
-  stateBytes?: number; // GoLevelDB world-state bytes
-  events?: number; // cumulative events written (x-axis for byte-per-log)
+  stateBytes?: number; // GoLevelDB world-state bytes (summed per container)
+  receiptBytes?: number | null; // receipt-store volume (anchoring variants)
+  events?: number; // cumulative successful events (x-axis for byte-per-log)
 }
 
 export type RunStatus =

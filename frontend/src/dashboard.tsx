@@ -134,7 +134,7 @@ function LatencyChart({ run }: { run: RunDetail }) {
 
 function StorageChart({ checkpoints }: { checkpoints: Checkpoint[] }) {
   const data = checkpoints.map((c) => ({
-    label: c.label ?? c.ts ?? '',
+    label: c.label ?? c.tsUtc ?? c.ts ?? '',
     state: c.stateBytes ?? 0,
     ledger: c.ledgerBytes ? Object.values(c.ledgerBytes).reduce((a, b) => a + b, 0) : 0,
   }));

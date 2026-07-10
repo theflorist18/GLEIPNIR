@@ -147,18 +147,28 @@ export class GatewayClient {
     });
   }
 
-  async getEvidence(id: string): Promise<EvidenceRecord> {
-    const raw = await this.request<unknown>('GET', `/evidence/${encodeURIComponent(id)}`);
+  // caseId routes reads to the right case channel in parallel variants (F68);
+  // the gateway 400s parallel reads without it.
+  async getEvidence(id: string, caseId?: string): Promise<EvidenceRecord> {
+    const q = caseId ? `?caseId=${encodeURIComponent(caseId)}` : '';
+    const raw = await this.request<unknown>('GET', `/evidence/${encodeURIComponent(id)}${q}`);
     return normalizeRecord(raw);
   }
 
-  async getAudit(id: string): Promise<CoCEvent[]> {
-    const raw = await this.request<unknown>('GET', `/evidence/${encodeURIComponent(id)}/audit`);
+  async getAudit(id: string, caseId?: string): Promise<CoCEvent[]> {
+    const q = caseId ? `?caseId=${encodeURIComponent(caseId)}` : '';
+    const raw = await this.request<unknown>('GET', `/evidence/${encodeURIComponent(id)}/audit${q}`);
     return normalizeEvents(raw);
   }
 
-  verifyEvidence(id: string): Promise<VerifyResult> {
-    return this.request<VerifyResult>('GET', `/evidence/${encodeURIComponent(id)}/verify`);
+  // The verify chain is keyed by EVENT id, not evidence id (F33/F49): the
+  // receipt store holds one witness per event. eventId comes from a write
+  // response (every variant returns it).
+  verifyEvidence(id: string, eventId: string): Promise<VerifyResult> {
+    return this.request<VerifyResult>(
+      'GET',
+      `/evidence/${encodeURIComponent(id)}/verify?eventId=${encodeURIComponent(eventId)}`,
+    );
   }
 
   // ---- Scope A: runs ----
