@@ -12,6 +12,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib.sh"
 
 CASE_ID="${1:?usage: teardown-channel.sh case-NNN}"
+# Same guard as provision-channel.sh (audit F71): an arbitrary arg would reach
+# `rm -f networks/${CASE_ID}.yaml` — e.g. `case-template` would delete the SOURCE.
+if ! [[ "${CASE_ID}" =~ ^case-[0-9]{3}$ ]]; then
+  echo "invalid CASE_ID '${CASE_ID}' (expected case-NNN)" >&2
+  exit 1
+fi
 for admin in "${ORDERER_ADMINS[@]}"; do
   echo "osnadmin channel remove ${CASE_ID} -> ${admin}"
   cli "osnadmin channel remove --channelID ${CASE_ID} -o ${admin} \

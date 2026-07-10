@@ -2,12 +2,22 @@
 """GLEIPNIR storage checkpoint (docs/CONTRACTS.md §11; ARCHITECTURE §4.7).
 
 `checkpoint.py <runId> --label <t>` runs `du -sb` inside each peer container against
-the block store (per channel) and the GoLevelDB world-state dir, and appends one
-JSONL row per (container, channel) to benchmark/results/<runId>/checkpoints.jsonl.
+the block store (per channel) and the GoLevelDB world-state dir, plus the
+receipt-store's data volume (the off-chain witness is the cost side of the
+anchoring storage trade-off — audit F9), and appends JSONL rows to
+benchmark/results/<runId>/checkpoints.jsonl.
+
+Row schema (uniform keys; audit F70 — world state is ONE GoLevelDB dir shared by
+all of a peer's channels, so it is emitted once per container, never per channel):
+  {runId, label, tsUtc, container, channel, blockstoreBytes, stateBytes, receiptBytes}
+  - per-channel row:   channel set, blockstoreBytes set, others null
+  - per-container row: channel null, stateBytes set, others null
+  - receipt-store row: container gleipnir-receipt-store, receiptBytes set
 
 Paths (named volumes at stable mounts):
   block store   /var/hyperledger/production/ledgersData/chains/chains/<channel>
   world state   /var/hyperledger/production/ledgersData/stateLeveldb
+  receipts      /data (receipt-data volume)
 """
 import argparse
 import json
@@ -66,22 +76,32 @@ def main():
     ts = datetime.now(timezone.utc).isoformat()
     rows = []
 
+    def row(container, channel=None, blockstore=None, state=None, receipts=None):
+        return {
+            "runId": args.run_id,
+            "label": args.label,
+            "tsUtc": ts,
+            "container": container,
+            "channel": channel,
+            "blockstoreBytes": blockstore,
+            "stateBytes": state,
+            "receiptBytes": receipts,
+        }
+
     for container, _org in PEERS:
         channels = list_channels(container)
         if not channels:
             continue
-        state_bytes = du_bytes(container, f"{LEDGER}/stateLeveldb")
+        # World state once per container (shared GoLevelDB dir — F70).
+        rows.append(row(container, state=du_bytes(container, f"{LEDGER}/stateLeveldb")))
         for channel in channels:
-            block_bytes = du_bytes(container, f"{LEDGER}/chains/chains/{channel}")
-            rows.append({
-                "runId": args.run_id,
-                "label": args.label,
-                "tsUtc": ts,
-                "container": container,
-                "channel": channel,
-                "blockstoreBytes": block_bytes,
-                "stateBytes": state_bytes,
-            })
+            rows.append(row(container, channel=channel,
+                            blockstore=du_bytes(container, f"{LEDGER}/chains/chains/{channel}")))
+
+    # Receipt store (anchoring variants; container absent otherwise — F9).
+    receipt_bytes = du_bytes("gleipnir-receipt-store", "/data")
+    if receipt_bytes is not None:
+        rows.append(row("gleipnir-receipt-store", receipts=receipt_bytes))
 
     path = os.path.join(out_dir, "checkpoints.jsonl")
     with open(path, "a", encoding="utf-8") as fh:

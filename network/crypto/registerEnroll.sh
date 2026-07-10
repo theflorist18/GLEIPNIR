@@ -58,7 +58,11 @@ EOF
 # (Peer/orderer MSP keystores are left untouched — their loaders expect one key.)
 normalize_client_key() {
   local msp="$1" key
-  key="$(ls "${msp}/keystore/" | head -1)"
+  # Re-enrollment ADDS a new hash-named key beside the old one(s); the stale
+  # priv_sk copy and alphabetical order both mislead. Remove the old copy and
+  # pair the NEWEST real key with the (overwritten) cert (audit F47).
+  rm -f "${msp}/keystore/priv_sk"
+  key="$(ls -t "${msp}/keystore/" | head -1)"
   cp "${msp}/keystore/${key}" "${msp}/keystore/priv_sk"
 }
 

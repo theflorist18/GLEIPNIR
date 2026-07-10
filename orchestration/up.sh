@@ -61,21 +61,28 @@ wait_healthz 9447 peer0-org2
 [ "${VARIANT}" = "parallel-anchored" ] && wait_healthz 9448 peer0-anchor
 
 # 3) channels + chaincode
-deploy_app_chaincode() {  # <channel>
-  local channel="$1"
+# Chaincode install is ORG-scoped, not channel-scoped: package + install happen
+# exactly once (audit F46 — a per-channel re-install exits non-zero under
+# set -e and killed `--channels N>1` bring-up at the second channel).
+APP_PKGID=""
+install_app_chaincode() {
   local pkg_host="ccaas-evidence"
-  local pkgid
-  pkgid="$(package_ccaas "${pkg_host}" "" | tail -1 | tr -d '\r')"
-  echo "    package id (${channel}) = ${pkgid}"
-  set_env_var CCAAS_ID_APP "${pkgid}"
+  APP_PKGID="$(package_ccaas "${pkg_host}" "" | tail -1 | tr -d '\r')"
+  echo "    app package id = ${APP_PKGID}"
+  set_env_var CCAAS_ID_APP "${APP_PKGID}"
 
   cli "$(peer_env org1)
 peer lifecycle chaincode install ${CTN_ARTIFACTS}/${CC_NAME}-${pkg_host}.tar.gz"
   cli "$(peer_env org2)
 peer lifecycle chaincode install ${CTN_ARTIFACTS}/${CC_NAME}-${pkg_host}.tar.gz"
 
-  # (re)start the ccaas server with the resolved package id before commit.
+  # (re)start the ccaas server with the resolved package id before any commit.
   compose "${PROFILE_ARGS[@]}" up -d ccaas-evidence
+}
+
+deploy_app_chaincode() {  # <channel> — approve + commit only (install hoisted)
+  local channel="$1"
+  local pkgid="${APP_PKGID}"
 
   local policy="OR('Org1MSP.peer','Org2MSP.peer')"
   for org in org1 org2; do
@@ -115,12 +122,14 @@ peer lifecycle chaincode commit -o ${ORDERER0} --ordererTLSHostnameOverride orde
 
 case "${VARIANT}" in
   standard|anchoring)
+    install_app_chaincode
     create_channel coc-main AppChannel
     join_peer org1 coc-main
     join_peer org2 coc-main
     deploy_app_chaincode coc-main
     ;;
   parallel|parallel-anchored)
+    install_app_chaincode
     for i in $(seq 1 "${CHANNELS}"); do
       ch="$(printf 'case-%03d' "${i}")"
       create_channel "${ch}" AppChannel
