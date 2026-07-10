@@ -96,6 +96,11 @@ ReadAnchorRoot(ctx, scopeId, batchId) (string, error)   // scopeId: caseId, or "
 
 ## 4. Canonical JSON, hashing, Merkle spec (MUST be byte-identical in batcher and verification)
 
+The byte-identity requirement applies to the implementation file itself:
+`services/merkle-batcher/src/merkle.js` and `services/verification/src/merkle.js` are
+the same file, and **each service's unit suite asserts byte equality** (drift fails the
+tests before it can fail a verification).
+
 - **Canonical JSON**: recursively sort object keys lexicographically (code-unit order);
   arrays keep order; no insignificant whitespace; UTF-8; numbers as produced by
   `JSON.stringify` (events only ever carry strings + safe integers — never floats).
@@ -126,8 +131,11 @@ SHA-256 only. No Poseidon, no ZK, per CLAUDE.md.
 
 ## 5. Event & record shapes
 
-**CoC event** (the unit that is written on-chain in Standard/Parallel, or hashed into a
-leaf in Anchoring/Parallel-Anchored):
+There are **two event shapes** (they differ deliberately — determinism forbids the
+chaincode from accepting a gateway wall-clock timestamp or an off-chain uuid):
+
+**CoC event** (gateway-built; the batcher enqueue unit and the Merkle **leaf** in
+Anchoring/Parallel-Anchored):
 
 ```json
 {
@@ -141,20 +149,31 @@ leaf in Anchoring/Parallel-Anchored):
 }
 ```
 
+**On-chain event record** (chaincode-built under the `"evt"` key in Standard/Parallel;
+`ts`/`txId` come from the signed proposal so the record is byte-identical across
+endorsers): `{"evidenceId","op","actor","detail?","txId","ts"}` — no `eventId`, no
+`caseId` (the channel itself scopes the case), `txId` instead.
+
 **Evidence head record** stored on-chain is the Codex-Entry-inspired mapping from
 ARCHITECTURE §1a (`id`,`version`,`storage{...}`,`encryption?`,`identity{...}`,
 `anchor{...}`,`signatures[]`,`previous_id?`) plus `custodian` and `status`.
-`storage.integrity_proof` is an RFC 6920 ni-URI computed by the **gateway**, never by
-chaincode.
+`storage.integrity_proof` is an RFC 6920 ni-URI computed by the **client** — the
+gateway on the REST path, the Caliper workload in fabric mode — **never by chaincode**.
 
 **Receipt** (receipt-store): `{"eventId","leafHash","siblingPath":[{"pos","hash"}],
 "batchId","leafIndex","rootRef":{"scopeId","batchId","txId"}}`. `txId` may be filled in
-by a follow-up PUT after the root commit returns.
+by a follow-up PUT after the root commit returns. `batchId` is an **opaque string**,
+unique per (scope, batcher lifetime) — currently `<scopeId>-<epoch>-b<seq>`, where the
+epoch (BATCH_EPOCH env or batcher start time) keeps ids from colliding with roots an
+earlier batcher process already committed to the persistent ledger. Duplicate-eventId
+enqueues are rejected 409 **within the open batch only**; a retry after the boundary
+lands in the next batch and its receipt PUT overwrites the previous witness
+(at-most-once per batch, not per ledger).
 
 **Anchor root record** (on-chain): `{"scopeId","batchId","merkleRoot","leafCount",
 "meta":{...},"txTimestamp"}`.
 
-## 6. Service ports & REST APIs (all JSON; all expose `GET /healthz` → `{"ok":true}`)
+## 6. Service ports & REST APIs (all JSON; all expose `GET /healthz` → `{"ok":true}`; the gateway's healthz adds a `variant` field)
 
 | Service | Port | Endpoints |
 |---|---|---|
@@ -162,14 +181,19 @@ by a follow-up PUT after the root commit returns.
 | merkle-batcher | **4001** | `POST /events` (CoC event) → `202 {batchId,leafIndex}`; `POST /flush` → force batch boundary (partial-batch policy at run end); `GET /status` |
 | receipt-store | **4002** | `PUT /receipts/:eventId`; `GET /receipts/:eventId` (404 if missing) |
 | anchor-client | **4003** | `POST /roots` `{caseId,batchId,merkleRoot,meta}` → `201 {txId}` (submit on `anchor-main`); `GET /roots/:caseId/:batchId` (evaluate on `anchor-main`) |
-| verification | **4004** | `GET /verify/:eventId` → `{ok,latencyMs,steps:{fetchMs,recomputeMs,compareRootMs}}` |
-| frontend (nginx) | **8081** | serves SPA; proxies `/api/*` → `gateway:3000` |
+| verification | **4004** | `GET /verify/:eventId` → `{ok,reason?,latencyMs,steps:{fetchMs,recomputeMs,compareRootMs}}`; `reason`: `root-mismatch` (200, tamper signal), `missing-receipt`/`missing-anchor-root` (404, not yet anchored), `malformed-receipt` (422 — the un-hardened witness stored junk) |
+| frontend (nginx) | **8081** | serves SPA; `GET /healthz`; proxies `/api/*` → `gateway:3000` |
 
 **Gateway public API** (prefix `/api/v1`, per ARCHITECTURE §6): `POST /evidence`,
 `POST /evidence/:id/transfer`, `POST /evidence/:id/access`, `DELETE /evidence/:id`,
-`GET /evidence/:id`, `GET /evidence/:id/audit`, `GET /evidence/:id/verify`,
+`GET /evidence/:id`, `GET /evidence/:id/audit`,
+`GET /evidence/:id/verify?eventId=<eventId>` (the verify chain is keyed by **event**
+id — receipts are per event; without the query param the gateway falls back to the
+path id, which only matches when callers pass an eventId there),
 `POST /runs`, `GET /runs`, `GET /runs/:id`. Auth: static bearer token
-(`GLEIPNIR_TOKEN`, default `dev-token`) — documented as non-production.
+(`GLEIPNIR_TOKEN`, default `dev-token`) — documented as non-production. The token
+guards **everything after `/healthz`, internal routes included** — so the batcher and
+the verification service both authenticate to the gateway.
 
 **Session ownership** (resolves the §3-table "only the gateway holds fabric-gateway
 sessions" vs the anchor-client's need to write `anchor-main`): the **gateway** holds the
@@ -180,19 +204,25 @@ anchor-client (Parallel-Anchored) depending on `VARIANT`. Flagged in §12.
 
 ## 7. Environment variables (exact names)
 
-Shared: `VARIANT` ∈ `standard|anchoring|parallel|parallel-anchored`; `LOG_LEVEL`.
+`VARIANT` ∈ `standard|anchoring|parallel|parallel-anchored` — read by gateway, batcher,
+verification (the other services are variant-agnostic). `LOG_LEVEL` — read by batcher,
+receipt-store, verification (default `info`; compose does not set it).
 Gateway: `PORT=3000`, `GLEIPNIR_TOKEN`, `BATCHER_URL=http://merkle-batcher:4001`,
 `VERIFICATION_URL=http://verification:4004`, `PEER_ENDPOINT=peer0-org1:7051`,
 `PEER_HOST_ALIAS=peer0.org1.example.com`, `MSP_ID=Org1MSP`, `CRYPTO_PATH`
-(User1@org1 MSP dir), `TLS_CERT_PATH`, `DEFAULT_CHANNEL=coc-main`, `CC_NAME=evidence`.
-Batcher: `PORT=4001`, `BATCH_N=100`, `BATCH_K=25`,
+(User1@org1 MSP dir), `TLS_CERT_PATH`, `DEFAULT_CHANNEL=coc-main`, `CC_NAME=evidence`,
+`RESULTS_DIR=/results` (runs-API store; compose binds `benchmark/results`).
+Batcher: `PORT=4001`, `BATCH_N=100`, `BATCH_K=25`, `BATCH_EPOCH` (optional; namespaces
+batchIds per batcher lifetime — sweep.py sets it per cell, empty ⇒ start-time default),
+`GLEIPNIR_TOKEN` (bearer for the gateway's authed `/internal/anchor-root`),
 `RECEIPT_STORE_URL=http://receipt-store:4002`, `GATEWAY_URL=http://gateway:3000`,
 `ANCHOR_CLIENT_URL=http://anchor-client:4003`.
 Receipt-store: `PORT=4002`, `DATA_DIR=/data`.
 Anchor-client: `PORT=4003`, `PEER_ENDPOINT=peer0-anchor:11051`,
 `PEER_HOST_ALIAS=peer0.anchor.example.com`, `MSP_ID=AnchorClientMSP`, `CRYPTO_PATH`,
 `TLS_CERT_PATH`, `ANCHOR_CHANNEL=anchor-main`, `CC_NAME=evidence`.
-Verification: `PORT=4004`, `RECEIPT_STORE_URL`, `GATEWAY_URL`, `ANCHOR_CLIENT_URL`.
+Verification: `PORT=4004`, `RECEIPT_STORE_URL`, `GATEWAY_URL`, `ANCHOR_CLIENT_URL`,
+`GLEIPNIR_TOKEN` (bearer for the gateway's authed root-read endpoint).
 
 ## 8. Compose: project, profiles, volumes
 
@@ -200,7 +230,9 @@ Verification: `PORT=4004`, `RECEIPT_STORE_URL`, `GATEWAY_URL`, `ANCHOR_CLIENT_UR
   `compose-net.yaml` (orderers, peers, ccaas, cli/tools), `compose-ca.yaml` (4 CAs),
   `compose-services.yaml` (gateway, batcher, receipt-store, anchor-client, verification,
   frontend).
-- Profiles: base (no profile) = orderers, peers org1/org2, ccaas, cli, gateway, frontend.
+- Profiles: base (no profile) = orderers, peers org1/org2, ccaas, cli, gateway,
+  frontend, **plus the three always-on CAs** (ca-org1, ca-org2, ca-orderer — only
+  ca-anchor is behind a profile).
   `anchoring` = + merkle-batcher, receipt-store, verification.
   `parallel-anchored` = + merkle-batcher, receipt-store, verification, anchor-client,
   peer0-anchor, ccaas-evidence-anchor, ca-anchor.
@@ -209,6 +241,9 @@ Verification: `PORT=4004`, `RECEIPT_STORE_URL`, `GATEWAY_URL`, `ANCHOR_CLIENT_UR
   `peer0org2-ledger`, `peer0anchor-ledger` → `/var/hyperledger/production`;
   `orderer0-ledger`, `orderer1-ledger`, `orderer2-ledger` →
   `/var/hyperledger/production/orderer`; `receipt-data` → `/data`.
+  (Runtime `docker volume` names carry the compose project prefix, e.g.
+  `gleipnir_peer0org1-ledger`; measurement tooling probes paths inside containers, so
+  the prefix does not affect it.)
 - Node service images: `node:20.19-alpine` (or `-slim`) base; engines field pinned.
 
 ## 9. Variant routing matrix (gateway `variantRouter`)
@@ -219,6 +254,15 @@ Verification: `PORT=4004`, `RECEIPT_STORE_URL`, `GATEWAY_URL`, `ANCHOR_CLIENT_UR
 | anchoring | `POST batcher /events` | batcher → gateway `/internal/anchor-root` → `CommitAnchorRoot` on `coc-main` | verification ← gateway `/internal/anchor-root/...` |
 | parallel | `submit` on `case-<id>` (from request `caseId`) | — | — |
 | parallel-anchored | `POST batcher /events` (per-case queues, size K) | batcher → anchor-client `POST /roots` → `CommitAnchorRoot` on `anchor-main` | verification ← anchor-client `GET /roots/...` |
+
+Scope note (deliberate default): on the **anchoring** root path the batcher sends
+`meta:{scopeId,leafCount}` with **no `caseId` key**, so the chaincode's
+`meta.caseId || "shared"` default selects the `shared` scope; receipts and the
+verification reader use the same literal, so the round-trip is consistent by
+construction. On the **parallel-anchored** path the anchor-client injects `caseId`
+into metaJSON last, making it authoritative. Per-case writes (direct **and** batched)
+require a valid `case-NNN` caseId at the gateway — a missing caseId is a 400, never a
+silent fall-through to `shared`.
 
 ## 10. Benchmark & sweep config
 
@@ -239,36 +283,57 @@ regimes:
   verified `caliper bind` string is recorded in `benchmark/README.md`.
 - Workloads (same four modules, all variants): `workload/createEvidence.js`,
   `transferCustody.js`, `accessLog.js`, `verify.js`. Standard/Parallel drive Fabric via
-  the peer-gateway connector; Anchoring variants drive the gateway REST enqueue path and
-  `verify.js` drives the verification service (mechanism per research; if a custom REST
-  connector is used it lives in `benchmark/connectors/`).
+  the peer-gateway connector; Anchoring variants drive the gateway REST enqueue path via
+  the custom connector in `benchmark/connectors/rest/`, and `verify.js` drives the
+  verification service.
+- **Every round config is generated** from `sweeps.yaml` by
+  `benchmark/generate-rounds.js` (`npm run gen:rounds`) — steady standard/anchoring,
+  per-channel-count `steady-parallel{,-anchored}-c{1,2,5}.yaml`, `steady-verify*.yaml`,
+  and the `smoke-<variant>.yaml` configs derived from `regimes.smoke`. Multi-channel
+  cells use a `channels: C` round argument: the workloads spread transactions
+  round-robin across `case-001..case-00C` in ONE Caliper round, so the reported round
+  throughput is the **aggregate across channels**; per-channel rate is uniform by
+  construction and derived by collect.py as aggregate/C. `networks/parallel-c{C}.yaml`
+  (also generated) list the C channels for fabric mode.
 - Results land in `benchmark/results/<runId>/` (gitignored):
-  `manifest.json`, `report.html`, `report.json`, `checkpoints.jsonl`.
-- **Run manifest** schema: `{runId, startedAt, variant, regime: "smoke"|"steady",
-  cell:{N,K,channels,offeredLoadTps,repetition}, gitCommit, configShas:{<file>:
-  <git blob sha1>}, caliper:{binding,version}, notes}` — configShas covers
+  `manifest.json`, `report.html`, `caliper.log` (the tee'd stdout collect.py parses —
+  Caliper's own `report.json` is not produced; decision recorded here),
+  `checkpoints.jsonl`. RQ2 verification runs land beside their write run as
+  `<runId>-verify/`.
+- **Run manifest** schema — seeded by sweep.py before Caliper runs: `{runId, startedAt,
+  variant, regime: "smoke"|"steady", phase: "write"|"verify",
+  cell:{N,K,channels,offeredLoadTps,repetition}, caliper:{binding,version,connector},
+  notes}`; merged by collect.py after the run: `{collectedAt, gitCommit,
+  configShas:{<file>:<git blob sha1>}, rounds[], failureClasses, throughputPolicy,
+  checkpoints[], storage{...bytesPerEventBlockstore},
+  payloadCompressionVsBaseline?}` — configShas covers
   `network/configtx/configtx.yaml`, `network/core.yaml`, `network/orderer.yaml`, all
   three compose files. Smoke artifacts are labelled `smoke` and never mixed with
   steady-state data (separate `results/smoke-*` runIds).
-- Throughput is reported **successful-only** (recompute from Caliper JSON:
-  `Succ / (lastCommit − firstSubmit)`), stated in `benchmark/README.md`.
+- Throughput is reported **successful-only** (recomputed from the Caliper round table:
+  `reported × Succ/(Succ+Fail)`), stated in `benchmark/README.md`. Storage compression
+  is reported as the reduction in on-chain log-payload **bytes per event** vs a
+  Standard baseline run (`collect.py --baseline`), never as 1/N of total ledger size.
 
 ## 11. Orchestration entry points
 
 ```
-orchestration/up.sh --variant <v> [--channels <n>]   # enroll → compose up → channels → ccaas → commit
+orchestration/up.sh --variant <v> [--channels <n>] [--skip-crypto]  # enroll → compose up → channels → ccaas → commit
 orchestration/down.sh [--wipe]                       # teardown; --wipe removes named volumes
 orchestration/provision-channel.sh <caseId>          # genesis → osnadmin join(201) → peer join → commit cc → emit benchmark/networks/<caseId>.yaml
 orchestration/teardown-channel.sh <caseId>
+orchestration/smoke-standard.sh                      # REST-path functional gate: create → transfer → access×2 → audit(==4) → remove → transfer-fails
 orchestration/checkpoint.py <runId> [--label t0]     # du -sb probes via docker exec, appends checkpoints.jsonl
-orchestration/collect.py <runId>                     # parse Caliper report.json → manifest metrics
-orchestration/sweep.py --variant <v> [--regime steady|smoke]  # full N/K/channel × repetitions loop
+orchestration/collect.py <runId> [--baseline <id>]   # parse caliper.log round table (after the last "All test results" marker) → manifest metrics + storage deltas
+orchestration/sweep.py --variant <v> [--regime steady|smoke]  # full N/K/channel × repetitions loop (+ RQ2 verify runs per anchoring cell)
 ```
 
 Scripts are bash (target: Ubuntu 22.04 / WSL2) + Python 3.10+ (deps: `pyyaml` only,
 `orchestration/requirements.txt`). `du` probes: block store
 `/var/hyperledger/production/ledgersData/chains/chains/<channel>`, world state
-`/var/hyperledger/production/ledgersData/stateLeveldb`.
+`/var/hyperledger/production/ledgersData/stateLeveldb`, receipt store `/data`
+(container `gleipnir-receipt-store`; world state is recorded once per container —
+it is one GoLevelDB directory shared by all of a peer's channels).
 
 ## 12. Decision record (deviations/extensions vs ARCHITECTURE tables — all flagged)
 
