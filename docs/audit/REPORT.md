@@ -142,3 +142,15 @@ python orchestration/collect.py run-anchoring-N50-r0 --baseline run-standard-bas
 
 Between variant sweeps: `./orchestration/down.sh --wipe` then fresh `up.sh`
 (cells within one sweep intentionally share the network; variants must not).
+
+## Chunk 7 result (2026-07-10) — GREEN
+
+Step 1 above executed live: `up.sh --variant standard` exit 0 from a fresh
+tree, smoke PASS 6/6, `down.sh --wipe` clean. Two live-only bugs found and
+fixed (F72 registerEnroll nested-cacerts NodeOU corruption; F73 package_ccaas
+missing channel-artifacts dir after the F46 hoist) — details, watch-list
+observations (F35 didn't bite; F52 no crash-loop; F46 single install; healthz
+200s) and the host-environment runbook are in `chunk-7-live-e2e.md`.
+**Steps 2–4 are GO.** Prereq for any run on this machine: the compose images
+must already exist (`chunk-7-build-images.sh`) — the MITM proxy breaks
+in-build TLS if compose ever builds them itself.

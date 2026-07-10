@@ -106,6 +106,21 @@ git history.
       (author-optional), paper-side F7/F10/F11/F14-F17/F50/F60 (listed in REPORT.md).
       ELF blob stays in history (no rewrite). → `REPORT.md` (go/no-go: **GO for
       chunk 7**; benchmarks GO after chunk 7 green, exact command order inside).
-- [ ] **Chunk 7 — live E2E run** (`up.sh --variant standard` + smoke; CA-trust image builds;
-      watch: F35 orderer1/2 waits, F52 ccaas placeholder-id noise pre-recreate, F46
-      duplicate-install exit code on 2.5.15, F53 MVCC-count calibration vs real caliper.log)
+- [x] **Chunk 7 — live E2E run** (2026-07-10): **GREEN** — `up.sh --variant standard`
+      exit 0 (fresh tree, ~80 s), smoke PASS 6/6, `down.sh --wipe` clean →
+      `chunk-7-live-e2e.md`, F72–F73 (both found live, both FIXED this chunk):
+      **F72** registerEnroll `cp -r` into the CA-admin-created `msp/cacerts` nests
+      `cacerts/cacerts` → two `ls` entries → newline inside every NodeOU config.yaml →
+      peers fail YAML parse, orderers panic loadLocalMSP (flat-copy fix, both org
+      functions); **F73** package_ccaas wrote to `channel-artifacts/` before any
+      `mkdir` — the F46 install hoist moved packaging ahead of create_channel's mkdir
+      (mkdir now in package_ccaas). Watch list: F35 did NOT bite (3×201 first try),
+      F52 NO crash-loop (placeholder quiet, RestartCount=0), F46 install ran once per
+      org, nginx+gateway /healthz 200, early gateway start harmless (lazy connect).
+      Environment established for all future runs (see chunk-7-live-e2e.md §Env):
+      Ubuntu-22.04 WSL orchestration host (fabric-ca-client 1.5.19 extracted from the
+      pinned CA image, jq, proxy CA trusted), Docker Desktop WSL integration (BOM-less
+      settings-store.json!), images pre-built with build-time CA injection
+      (`chunk-7-build-images.sh` — re-run only if the engine image store resets).
+      **First benchmark: GO** per REPORT.md order; carry-forward watch: F23 token,
+      F44 epoch, F53 calibration, spread rounds, F67 clean-tree case-001.

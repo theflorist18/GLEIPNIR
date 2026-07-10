@@ -122,8 +122,14 @@ create_peer_org() {
   cp "${peer_dir}/tls/signcerts/"*   "${peer_dir}/tls/server.crt"
   cp "${peer_dir}/tls/keystore/"*    "${peer_dir}/tls/server.key"
 
-  # Derive the org MSP and cacert name from the peer MSP.
-  cp -r "${peer_dir}/msp/cacerts" "${org_root}/msp/cacerts"
+  # Derive the org MSP and cacert name from the peer MSP. The CA-admin
+  # enrollment above already created ${org_root}/msp/cacerts, so the pem must
+  # be copied flat: `cp -r` would nest a second cacerts/ inside it and the
+  # two `ls` entries then corrupt every NodeOU config.yaml with an embedded
+  # newline — peers fail YAML parsing, orderers panic in loadLocalMSP
+  # (audit F72, first live bring-up).
+  mkdir -p "${org_root}/msp/cacerts"
+  cp "${peer_dir}/msp/cacerts/"* "${org_root}/msp/cacerts/"
   mkdir -p "${org_root}/msp/tlscacerts"
   cp "${peer_dir}/tls/tlscacerts/"* "${org_root}/msp/tlscacerts/ca.crt"
   local cacert_name
@@ -192,7 +198,9 @@ create_orderer_org() {
     cp "${odir}/tls/keystore/"*    "${odir}/tls/server.key"
 
     if [ "${i}" = "0" ]; then
-      cp -r "${odir}/msp/cacerts" "${org_root}/msp/cacerts"
+      # Flat copy for the same reason as create_peer_org (audit F72).
+      mkdir -p "${org_root}/msp/cacerts"
+      cp "${odir}/msp/cacerts/"* "${org_root}/msp/cacerts/"
       cp "${odir}/tls/tlscacerts/"* "${org_root}/msp/tlscacerts/tlsca.example.com-cert.pem"
       local cacert_name
       cacert_name="$(ls "${org_root}/msp/cacerts")"

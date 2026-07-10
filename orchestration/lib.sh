@@ -108,7 +108,11 @@ peer channel join -b ${CTN_ARTIFACTS}/${channel}.block"
 # args: <ccaas-service-host> <pkg-file>
 package_ccaas() {
   local ccaas_host="$1" pkg="$2"
+  # channel-artifacts must already exist here: installs are hoisted before the
+  # first create_channel (F46), whose mkdir used to cover this on a clean tree
+  # (audit F73, first live bring-up).
   cli "set -e
+mkdir -p ${CTN_ARTIFACTS}
 tmp=\$(mktemp -d)
 printf '{\"address\":\"%s:9999\",\"dial_timeout\":\"10s\",\"tls_required\":false}' '${ccaas_host}' > \$tmp/connection.json
 printf '{\"type\":\"ccaas\",\"label\":\"${CC_LABEL}\"}' > \$tmp/metadata.json
