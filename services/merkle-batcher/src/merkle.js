@@ -1,9 +1,12 @@
 'use strict';
 
-// Pure, dependency-free Merkle primitives for GLEIPNIR anchoring.
+// Pure, dependency-free Merkle primitives for GLEIPNIR anchoring/verification.
 //
-// This file MUST stay byte-for-byte compatible with the verification service
-// (docs/CONTRACTS.md §4). Any change here that alters a hash is a breaking
+// This file is deployed BYTE-FOR-BYTE IDENTICALLY as
+//   services/merkle-batcher/src/merkle.js   and
+//   services/verification/src/merkle.js
+// (docs/CONTRACTS.md §4; each service's test suite asserts byte equality).
+// Edit both copies together. Any change here that alters a hash is a breaking
 // change to the on-chain anchored roots and every stored receipt.
 //
 // Determinism constraints (do not "optimise" away):
@@ -95,15 +98,21 @@ function siblingPath(layers, leafIndex) {
   return path;
 }
 
-// Recompute a root from a leaf hash + its sibling path and compare.
-function verifyPath(leaf, path, root) {
+// Fold a leaf hash up its sibling path to the root it implies.
+// Each step is {pos, hash} where `pos` is the side the SIBLING sits on.
+function computeRoot(leaf, path) {
   let current = leaf;
   for (const step of path) {
     current = step.pos === 'L'
       ? interiorHash(step.hash, current)
       : interiorHash(current, step.hash);
   }
-  return current === root;
+  return current;
+}
+
+// Recompute a root from a leaf hash + its sibling path and compare.
+function verifyPath(leaf, path, root) {
+  return computeRoot(leaf, path) === root;
 }
 
 module.exports = {
@@ -113,5 +122,6 @@ module.exports = {
   interiorHash,
   buildTree,
   siblingPath,
+  computeRoot,
   verifyPath,
 };

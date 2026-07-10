@@ -29,6 +29,14 @@ function loadConfig() {
     receiptStoreUrl: process.env.RECEIPT_STORE_URL || 'http://receipt-store:4002',
     gatewayUrl: process.env.GATEWAY_URL || 'http://gateway:3000',
     anchorClientUrl: process.env.ANCHOR_CLIENT_URL || 'http://anchor-client:4003',
+    // Bearer token for the gateway's authed /internal/anchor-root (audit F23).
+    token: process.env.GLEIPNIR_TOKEN || 'dev-token',
+    // batchEpoch namespaces batchIds per batcher lifetime: the ledger persists
+    // across batcher recreates (sweep cells recreate the batcher), so a bare
+    // per-scope sequence would collide with roots already committed by an
+    // earlier process and poison verification (audit F44). sweep.py sets
+    // BATCH_EPOCH per cell; the startup timestamp covers every other restart.
+    batchEpoch: process.env.BATCH_EPOCH || Date.now().toString(36),
     logLevel: process.env.LOG_LEVEL || 'info',
   };
 }
@@ -49,8 +57,11 @@ function createApp(overrides) {
   const batchSize = () =>
     (cfg.variant === 'parallel-anchored' ? cfg.batchK : cfg.batchN);
 
+  // batchId = scope + epoch + sequence. Opaque at every consumer (receipt
+  // rootRef, chaincode composite key, verification query); the epoch component
+  // keeps ids unique across batcher restarts against a persistent ledger (F44).
   const batchIdFor = (scopeId, seq) =>
-    `${scopeId}-b${String(seq).padStart(6, '0')}`;
+    `${scopeId}-${cfg.batchEpoch}-b${String(seq).padStart(6, '0')}`;
 
   function getQueue(scopeId) {
     let q = queues.get(scopeId);
@@ -99,9 +110,14 @@ function createApp(overrides) {
       return body.txId || null;
     }
     // anchoring (and any default): submit via the gateway internal endpoint.
+    // The gateway bearer-auths everything after /healthz, internal routes
+    // included (F23) — same token the verification service uses to read roots.
     const resp = await fetch(`${cfg.gatewayUrl}/internal/anchor-root`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${cfg.token}`,
+      },
       body: JSON.stringify({
         batchId,
         merkleRoot,

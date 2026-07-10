@@ -3,7 +3,10 @@
 // GLEIPNIR verification service (port 4004) — THE audit-latency metric path.
 //
 // GET /verify/:eventId times three steps with process.hrtime.bigint():
-//   fetchMs        = GET the receipt (off-chain witness) from the receipt-store
+//   fetchMs        = GET the receipt (off-chain witness) from the receipt-store,
+//                    INCLUDING body download + JSON parse — the body scales
+//                    with the O(log N) sibling path, so excluding it would
+//                    undercount exactly the N-dependent cost RQ2 measures (F55)
 //   recomputeMs    = fold leafHash up the sibling path to the implied root
 //   compareRootMs  = read the ANCHORED root and compare
 // and returns { ok, latencyMs, steps:{fetchMs,recomputeMs,compareRootMs} }.
@@ -66,23 +69,46 @@ function createApp(overrides) {
     const { eventId } = req.params;
     const steps = { fetchMs: 0, recomputeMs: 0, compareRootMs: 0 };
 
-    // 1) fetch the receipt (the witness).
+    // 1) fetch the receipt (the witness). fetchMs spans headers + body + parse:
+    // the body is the sibling path, whose size is the N-dependent quantity (F55).
     let receipt;
     const t0 = process.hrtime.bigint();
     try {
       const r = await fetch(`${cfg.receiptStoreUrl}/receipts/${encodeURIComponent(eventId)}`);
-      steps.fetchMs = msSince(t0);
       if (r.status === 404) {
+        steps.fetchMs = msSince(t0);
         return res.status(404).json({ ok: false, reason: 'missing-receipt', latencyMs: steps.fetchMs, steps });
       }
       if (!r.ok) {
+        steps.fetchMs = msSince(t0);
         return res.status(502).json({ ok: false, reason: 'receipt-store-error', latencyMs: steps.fetchMs, steps });
       }
       receipt = await r.json();
+      steps.fetchMs = msSince(t0);
     } catch (err) {
       steps.fetchMs = msSince(t0);
       log(`fetch receipt ${eventId} failed: ${err.message}`);
       return res.status(502).json({ ok: false, reason: 'receipt-store-error', latencyMs: steps.fetchMs, steps });
+    }
+
+    // 1b) validate the witness shape BEFORE touching it — the receipt-store is
+    // deliberately un-hardened and stores any JSON, so a corrupt witness must
+    // yield a graceful verdict, not an unhandled throw that kills the process
+    // (F54). Deliberately OFF the timed path: shape checking is not part of the
+    // Merkle verification cost RQ2 isolates.
+    const HEX64 = /^[0-9a-f]{64}$/;
+    const pathOk = receipt && (receipt.siblingPath == null || (
+      Array.isArray(receipt.siblingPath) &&
+      receipt.siblingPath.every(
+        (s) => s && typeof s === 'object' && (s.pos === 'L' || s.pos === 'R') &&
+          typeof s.hash === 'string' && HEX64.test(s.hash),
+      )
+    ));
+    if (
+      !receipt || typeof receipt !== 'object' || Array.isArray(receipt) ||
+      typeof receipt.leafHash !== 'string' || !HEX64.test(receipt.leafHash) || !pathOk
+    ) {
+      return res.status(422).json({ ok: false, reason: 'malformed-receipt', latencyMs: steps.fetchMs, steps });
     }
 
     // 2) recompute the root implied by leafHash + siblingPath.

@@ -2,6 +2,8 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const {
   canonicalJSON,
@@ -62,6 +64,20 @@ test('V2 — three leaves: leaves, parent, root, and L1 sibling path', () => {
     { pos: 'R', hash: V2.L2 },
   ]);
   assert.equal(verifyPath(L1, pathL1, tree.root), true);
+});
+
+// CONTRACTS §4: the two merkle.js copies MUST be byte-identical. This is the
+// enforcement mechanism (audit F5) — semantic drift starts as byte drift.
+test('merkle.js is byte-identical to the verification service copy', () => {
+  const here = fs.readFileSync(path.join(__dirname, '..', 'src', 'merkle.js'));
+  const other = fs.readFileSync(
+    path.join(__dirname, '..', '..', 'verification', 'src', 'merkle.js'),
+  );
+  assert.equal(
+    here.equals(other),
+    true,
+    'merkle.js has diverged from services/verification/src/merkle.js — edit both copies together',
+  );
 });
 
 test('property — every leaf path verifies for batch sizes 1..9', () => {

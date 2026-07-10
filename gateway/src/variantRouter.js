@@ -46,8 +46,16 @@ function channelFor(variant, caseId, defaultChannel) {
 async function routeWrite(spec, deps) {
   const { variant, fn, ccArgs, event, caseId } = spec;
   if (isBatched(variant)) {
+    // Per-case variants require a valid caseId on the batched path too (F57):
+    // without this check a missing caseId would be silently defaulted to the
+    // "shared" scope — events from different cases pooled into one batch —
+    // where the direct parallel path correctly answers 400.
+    if (isParallel(variant)) channelFor(variant, caseId, deps.defaultChannel);
     const placement = await deps.batcher.enqueue(event);
-    return { status: 202, body: { batched: true, eventId: event.eventId, ...placement } };
+    return {
+      status: 202,
+      body: { batched: true, evidenceId: event.evidenceId, eventId: event.eventId, ...placement },
+    };
   }
   const channel = channelFor(variant, caseId, deps.defaultChannel);
   const txId = await deps.fabric.submit(channel, fn, ccArgs);

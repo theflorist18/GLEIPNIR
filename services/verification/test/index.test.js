@@ -116,6 +116,30 @@ test('anchor read error -> 502 anchor-read-error', async (t) => {
   assert.equal((await resp.json()).reason, 'anchor-read-error');
 });
 
+// The receipt-store is deliberately un-hardened and stores ANY JSON, so a
+// corrupt witness must produce a graceful verdict — never an unhandled throw
+// that kills the metric service mid-run (audit F54).
+test('malformed receipt -> 422 malformed-receipt, service stays up', async (t) => {
+  const badPath = goodReceipt('shared');
+  badPath.siblingPath = [{ pos: 'X', hash: 'not-hex' }];
+  const rstore = await receiptStore(new Map([
+    ['evt-empty', {}],
+    ['evt-badpath', badPath],
+  ]));
+  const app = createApp({ variant: 'anchoring', receiptStoreUrl: rstore.url, gatewayUrl: 'http://127.0.0.1:1', logLevel: 'silent' });
+  const v = await listen(app);
+  t.after(() => { v.server.close(); rstore.server.close(); });
+
+  for (const id of ['evt-empty', 'evt-badpath']) {
+    const resp = await fetch(`${v.url}/verify/${id}`);
+    assert.equal(resp.status, 422, `${id} must be rejected as malformed`);
+    assert.equal((await resp.json()).reason, 'malformed-receipt');
+  }
+  // Process survived both: the handler is still serving.
+  const health = await fetch(`${v.url}/healthz`);
+  assert.equal((await health.json()).ok, true);
+});
+
 test('parallel-anchored path reads the anchor-client, not the gateway', async (t) => {
   const rstore = await receiptStore(new Map([['evt-1', goodReceipt('case-001')]]));
   let anchorHits = 0;

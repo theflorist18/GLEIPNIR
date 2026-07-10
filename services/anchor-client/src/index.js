@@ -179,7 +179,9 @@ async function start() {
 }
 
 // Only start the server when run directly, not when imported by tests.
-if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].replace(/\\/g, '/')}`).href) {
+// pathToFileURL handles Windows drive letters correctly (a hand-rolled
+// `file://C:/...` puts the drive in the URL host and never matches — F66).
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   start().catch((err) => {
     console.error(`anchor-client failed to start: ${err.stack || err.message}`);
     process.exit(1);

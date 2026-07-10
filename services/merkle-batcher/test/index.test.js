@@ -58,9 +58,11 @@ test('anchoring boundary: N events -> receipts stored, one root submitted, recei
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end('{"ok":true}');
   });
+  const authHeaders = [];
   const gw = await startServer(async (req, res) => {
     const body = await readBody(req);
     rootCalls.push(body);
+    authHeaders.push(req.headers.authorization);
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ txId: 'tx-anchor-1' }));
   });
@@ -68,8 +70,10 @@ test('anchoring boundary: N events -> receipts stored, one root submitted, recei
   const app = createApp({
     variant: 'anchoring',
     batchN: 3,
+    batchEpoch: 'e0',
     receiptStoreUrl: rstore.url,
     gatewayUrl: gw.url,
+    token: 'test-token',
     logLevel: 'silent',
   });
   const batcher = await listen(app);
@@ -89,15 +93,16 @@ test('anchoring boundary: N events -> receipts stored, one root submitted, recei
     });
     assert.equal(resp.status, 202);
     const j = await resp.json();
-    assert.equal(j.batchId, 'shared-b000000');
+    assert.equal(j.batchId, 'shared-e0-b000000');
     assert.equal(j.leafIndex, i);
   }
 
   // Boundary was triggered by the 3rd enqueue; flush awaits in-flight work.
   await fetch(`${batcher.url}/flush`, { method: 'POST' });
 
-  // Exactly one root submitted for the batch.
+  // Exactly one root submitted for the batch, bearer-authed (F23).
   assert.equal(rootCalls.length, 1);
+  assert.equal(authHeaders[0], 'Bearer test-token');
   const expectedRoot = buildTree(events.map((e) => leafHash(e))).root;
   assert.equal(rootCalls[0].merkleRoot, expectedRoot);
   assert.equal(rootCalls[0].meta.scopeId, 'shared');
@@ -211,6 +216,7 @@ test('parallel-anchored routes per-case queues to the anchor-client', async (t) 
   const app = createApp({
     variant: 'parallel-anchored',
     batchK: 2,
+    batchEpoch: 'e0',
     receiptStoreUrl: rstore.url,
     anchorClientUrl: anchor.url,
     logLevel: 'silent',
@@ -230,7 +236,7 @@ test('parallel-anchored routes per-case queues to the anchor-client', async (t) 
       body: JSON.stringify(ev),
     });
     const j = await resp.json();
-    assert.equal(j.batchId, 'case-001-b000000');
+    assert.equal(j.batchId, 'case-001-e0-b000000');
   }
   await fetch(`${batcher.url}/flush`, { method: 'POST' });
 

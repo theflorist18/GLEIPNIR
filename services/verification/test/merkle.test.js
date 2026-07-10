@@ -2,6 +2,8 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const { canonicalJSON, leafHash, interiorHash, computeRoot, verifyPath } = require('../src/merkle');
 
 // Normative vectors from docs/CONTRACTS.md §4 — MUST match the merkle-batcher.
@@ -13,6 +15,20 @@ const V2 = {
   PARENT_L0_L1: '4a89ef3715145c84282de7016b554021cd5019c03446f069e6061efbac670266',
   ROOT: 'c859dbaf0c89a0c3d8acd14558d491171dd4381073d79935182301300d296d2f',
 };
+
+// CONTRACTS §4: the two merkle.js copies MUST be byte-identical. This is the
+// enforcement mechanism (audit F5) — semantic drift starts as byte drift.
+test('merkle.js is byte-identical to the merkle-batcher copy', () => {
+  const here = fs.readFileSync(path.join(__dirname, '..', 'src', 'merkle.js'));
+  const other = fs.readFileSync(
+    path.join(__dirname, '..', '..', 'merkle-batcher', 'src', 'merkle.js'),
+  );
+  assert.equal(
+    here.equals(other),
+    true,
+    'merkle.js has diverged from services/merkle-batcher/src/merkle.js — edit both copies together',
+  );
+});
 
 test('canonicalJSON sorts keys, preserves array order', () => {
   assert.equal(canonicalJSON({ b: 2, a: { d: 4, c: 3 } }), '{"a":{"c":3,"d":4},"b":2}');

@@ -54,8 +54,23 @@ test('parallel-anchored: enqueue to batcher (per-case), 202', async () => {
   const f = fakes();
   const r = await routeWrite({ variant: 'parallel-anchored', fn: 'CreateEvidence', ccArgs: ['ev-1', '{}'], event: evt('case-003'), caseId: 'case-003' }, f.deps);
   assert.equal(r.status, 202);
+  assert.equal(r.body.evidenceId, 'ev-1'); // batched response carries evidenceId too (F68)
   assert.equal(f.enqueues[0].caseId, 'case-003');
   assert.equal(f.submits.length, 0);
+});
+
+// F57: the batched path must be as strict as the direct path — a missing or
+// invalid caseId in a per-case variant is a 400, never a silent pool into the
+// "shared" scope.
+test('parallel-anchored: missing/invalid caseId rejected 400 BEFORE enqueue', async () => {
+  const f = fakes();
+  for (const caseId of [undefined, 'x']) {
+    await assert.rejects(
+      routeWrite({ variant: 'parallel-anchored', fn: 'AccessLog', ccArgs: ['ev-1', 'a', 'read'], event: evt(caseId), caseId }, f.deps),
+      (err) => err instanceof RequestError && err.status === 400,
+    );
+  }
+  assert.equal(f.enqueues.length, 0, 'nothing may reach the batcher');
 });
 
 test('parallel without a valid caseId is a 400 RequestError', async () => {
