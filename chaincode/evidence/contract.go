@@ -45,7 +45,7 @@ func (c *EvidenceContract) CreateEvidence(ctx contractapi.TransactionContextInte
 	}
 
 	custodian := entry.Identity.Subject
-	head := EvidenceHead{Codex: entry, Custodian: custodian, Status: StatusActive}
+	head := EvidenceHead{CodexEntry: entry, Custodian: custodian, Status: StatusActive}
 	headBytes, err := json.Marshal(head)
 	if err != nil {
 		return err
@@ -265,8 +265,8 @@ func (c *EvidenceContract) readActiveHead(ctx contractapi.TransactionContextInte
 }
 
 // appendEvent writes one immutable audit event under the "evt" composite key.
-// The sortKey (tx timestamp + txID) makes every event key distinct and
-// commit-ordered without a shared counter — the MVCC-conflict-free design.
+// The sortKey (proposal timestamp + txID) makes every event key distinct and
+// proposal-time-ordered without a shared counter — the MVCC-conflict-free design.
 func (c *EvidenceContract) appendEvent(ctx contractapi.TransactionContextInterface, evidenceId, op, actor string, detail map[string]string) error {
 	stub := ctx.GetStub()
 	ts, err := stub.GetTxTimestamp()

@@ -155,6 +155,19 @@ func TestCreateReadRoundtrip(t *testing.T) {
 	if head.Custodian != "custodian-a" {
 		t.Errorf("custodian = %q, want custodian-a", head.Custodian)
 	}
+	// Pin the contracted WIRE shape, not just the Go struct: CONTRACTS sect. 5
+	// requires the flat Codex mapping — id at top level, never nested under
+	// a "codex" key (audit finding F25).
+	var wire map[string]any
+	if err := json.Unmarshal([]byte(out), &wire); err != nil {
+		t.Fatalf("unmarshal head as map: %v", err)
+	}
+	if wire["id"] != id {
+		t.Errorf(`stored head JSON top-level "id" = %v, want %q (flat sect. 5 shape)`, wire["id"], id)
+	}
+	if _, nested := wire["codex"]; nested {
+		t.Error(`stored head JSON has a "codex" key — head must be the FLAT Codex mapping (CONTRACTS sect. 5)`)
+	}
 	if ops := auditOps(t, c, ctx, id); len(ops) != 1 || ops[0] != OpCreate {
 		t.Errorf("audit ops = %v, want [CREATE]", ops)
 	}

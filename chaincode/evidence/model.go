@@ -80,13 +80,16 @@ type CodexEntry struct {
 }
 
 // EvidenceHead is the mutable "head" record stored under the "evd" composite
-// key. It is the Codex-Entry mapping plus custodian and status (CONTRACTS
-// sect. 5). Written ONLY by CreateEvidence/TransferCustody/RemoveEvidence,
-// which are semantically serial per evidence. AccessLog never touches it.
+// key. It IS the Codex-Entry mapping plus custodian and status (CONTRACTS
+// sect. 5): CodexEntry is embedded WITHOUT a json tag so the stored JSON is
+// the flat sect. 5 shape ({id, version, storage, ..., custodian, status}),
+// never nested under a "codex" key. Written ONLY by CreateEvidence/
+// TransferCustody/RemoveEvidence, which are semantically serial per evidence.
+// AccessLog never touches it.
 type EvidenceHead struct {
-	Codex     CodexEntry `json:"codex"`
-	Custodian string     `json:"custodian"`
-	Status    string     `json:"status"`
+	CodexEntry
+	Custodian string `json:"custodian"`
+	Status    string `json:"status"`
 }
 
 // Event is one append-only audit record stored under the "evt" composite key.

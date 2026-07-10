@@ -36,8 +36,10 @@ func zeroPad19(n int64) string {
 //	zeroPad19(txTimestampUnixNanos) + "-" + txID[:12]
 //
 // Both inputs come from the signed transaction proposal, so the sortKey is
-// deterministic across endorsers, unique per transaction, and sortable by
-// commit time WITHOUT any shared counter key (CONTRACTS sect. 3). Concurrent
+// deterministic across endorsers, unique per transaction, and ordered by the
+// client's PROPOSAL timestamp — not commit order; skewed client clocks can
+// reorder the trail (irrelevant on the single-host benchmark, one clock) —
+// WITHOUT any shared counter key (CONTRACTS sect. 3). Concurrent
 // AccessLog calls to the same evidence therefore write DISTINCT keys — zero
 // MVCC_READ_CONFLICT by construction, not by client-side retry.
 func sortKey(ts *timestamppb.Timestamp, txID string) string {
