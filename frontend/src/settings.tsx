@@ -1,30 +1,21 @@
-import { createContext, useContext, useMemo, useState, type ReactNode } from 'react';
-import { GatewayClient } from './api';
+import { createContext, useContext, useState, type ReactNode } from 'react';
 import type { Variant } from './types';
 
-// App-wide settings: the bearer token, the active variant (display/context only —
-// the real routing variant is set on the gateway), and a memoised GatewayClient.
+// App-level display settings (M14: trimmed to `variant` only — the token and
+// the GatewayClient moved into auth/AuthContext). `variant` mirrors the
+// gateway's active VARIANT for display/verify-badge purposes; the real routing
+// variant lives server-side.
+
 interface Settings {
-  token: string;
-  setToken: (t: string) => void;
   variant: Variant;
   setVariant: (v: Variant) => void;
-  client: GatewayClient;
 }
 
 const SettingsContext = createContext<Settings | null>(null);
 
 export function SettingsProvider({ children }: { children: ReactNode }) {
-  const [token, setToken] = useState<string>('dev-token');
   const [variant, setVariant] = useState<Variant>('standard');
-
-  const client = useMemo(
-    () => new GatewayClient({ getToken: () => token }),
-    [token],
-  );
-
-  const value: Settings = { token, setToken, variant, setVariant, client };
-  return <SettingsContext.Provider value={value}>{children}</SettingsContext.Provider>;
+  return <SettingsContext.Provider value={{ variant, setVariant }}>{children}</SettingsContext.Provider>;
 }
 
 export function useSettings(): Settings {

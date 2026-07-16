@@ -71,3 +71,39 @@ button.small { padding: 3px 8px; font-size: 12px; margin-left: 8px; }
 .runs th, .runs td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); }
 .clickable { cursor: pointer; }
 .clickable:hover { background: #223449; }
+
+/* ---- M14: multi-page shell (login, sidebar nav, library pages) ---- */
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.body { display: flex; flex: 1; min-height: 0; }
+.sidebar { width: 190px; flex-shrink: 0; background: var(--panel); border-right: 1px solid var(--line); padding: 14px 10px; display: flex; flex-direction: column; gap: 18px; }
+.nav-group { display: flex; flex-direction: column; gap: 2px; }
+.nav-title { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; padding: 0 8px; }
+.sidebar a { color: var(--muted); padding: 6px 8px; border-radius: 6px; }
+.sidebar a:hover { color: var(--text); text-decoration: none; }
+.sidebar a.active { color: var(--text); background: #223449; }
+
+.tagline { font-size: 12px; }
+.whoami { margin-left: auto; display: flex; gap: 10px; align-items: center; color: var(--muted); }
+
+.login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+.login-card { width: 320px; }
+.login-card .brand { margin-bottom: 4px; }
+
+.page-narrow { max-width: 560px; display: flex; flex-direction: column; gap: 14px; }
+.form select { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 6px; }
+.btn-row { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
+.kv { display: grid; grid-template-columns: 130px 1fr; gap: 4px 10px; margin: 0 0 8px; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; word-break: break-all; }
+
+.filters .filter-row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+.filters .filter-row label { margin-bottom: 0; }
+.filters + .card { margin-top: 14px; }
+.card + .card { margin-top: 14px; }
+
+.plain-list { list-style: none; margin: 0 0 10px; padding: 0; }
+.plain-list li { display: flex; gap: 10px; align-items: center; padding: 5px 0; border-bottom: 1px solid var(--line); }
+.plain-list li > :first-child { flex: 1; }

@@ -189,3 +189,82 @@ export interface RunDetail extends RunManifest {
   metrics?: RunMetrics;
   checkpoints?: Checkpoint[];
 }
+
+// ---- Evidence library (M14): auth, cases, evidence index ----
+// Wire shapes pinned by docs/CONTRACTS.md (M12/M13 additions).
+
+export type Role = 'admin' | 'investigator';
+
+export interface User {
+  id: string;
+  username: string;
+  displayName: string;
+  role: Role;
+  active: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export type CaseStatus = 'OPEN' | 'CLOSED' | 'ARCHIVED';
+export type CaseRole = 'viewer' | 'contributor';
+
+export interface CaseParticipant {
+  userId: string; // the immutable username
+  roleInCase: CaseRole;
+  addedBy?: string;
+  addedAt?: string;
+}
+
+export interface CaseSummary {
+  id: string; // CASE-<uuid> — never the parallel channel key case-NNN
+  name: string;
+  description: string;
+  status: CaseStatus;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CaseDetail extends CaseSummary {
+  participants: CaseParticipant[];
+  evidence: EvidenceIndexRow[];
+}
+
+// Read-model row from case-registry — a cache; the ledger stays authoritative
+// for status/custodian.
+export interface EvidenceIndexRow {
+  evidenceId: string;
+  caseId: string | null;
+  originalFilename: string | null;
+  mimeType: string | null;
+  sizeBytes: number | null;
+  integrityProof: string | null;
+  uploadedBy: string | null;
+  uploadedAt: string | null;
+  status: string;
+  lastSyncedAt: string | null;
+}
+
+export interface UploadResult {
+  evidenceId: string;
+  eventId?: string;
+  integrityProof: string;
+  txId?: string;
+  batched?: boolean;
+}
+
+export interface ExportBundle {
+  evidenceId: string;
+  exportedAt: string;
+  record: EvidenceRecord | string;
+  auditTrail: CoCEvent[] | string;
+}
+
+export interface EvidenceSearchParams {
+  q?: string;
+  caseId?: string;
+  uploadedBy?: string;
+  type?: string;
+  from?: string;
+  to?: string;
+}

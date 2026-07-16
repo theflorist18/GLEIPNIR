@@ -2,13 +2,17 @@ import { useEffect, useMemo, useState, type ReactElement } from 'react';
 import {
   Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
-import { useSettings } from './settings';
-import { GatewayError } from './api';
-import type { Checkpoint, RunDetail, Variant } from './types';
+import { useAuth } from '../../auth/AuthContext';
+import { useSettings } from '../../settings';
+import { GatewayError } from '../../api';
+import type { Checkpoint, RunDetail, Variant } from '../../types';
 
-// ---- Scope A: operator dashboard (variant/sweep config, run control, charts,
-// run history + comparison). ARCHITECTURE §5. Execution is host-side (sweep.py);
-// the UI creates a run REQUEST and polls the manifest — surfaced honestly below.
+// ---- Operator dashboard (variant/sweep config, run control, charts, run
+// history + comparison). ARCHITECTURE §5. Execution is host-side (sweep.py);
+// the UI creates a run REQUEST and polls the manifest — surfaced honestly
+// below. Relocated from dashboard.tsx in M14: now an admin-gated route
+// (starting a run requires an admin session server-side too), with the client
+// coming from AuthContext instead of the old token setting.
 
 const VARIANTS: Variant[] = ['standard', 'anchoring', 'parallel', 'parallel-anchored'];
 
@@ -27,7 +31,8 @@ function VariantSelector() {
 }
 
 function SweepConfigForm({ onSubmitted }: { onSubmitted: (runId: string) => void }) {
-  const { client, variant } = useSettings();
+  const { client } = useAuth();
+  const { variant } = useSettings();
   const [n, setN] = useState(100);
   const [k, setK] = useState(25);
   const [channels, setChannels] = useState(1);
@@ -66,7 +71,7 @@ function SweepConfigForm({ onSubmitted }: { onSubmitted: (runId: string) => void
 }
 
 function RunControl({ runId }: { runId: string }) {
-  const { client } = useSettings();
+  const { client } = useAuth();
   const [detail, setDetail] = useState<RunDetail | null>(null);
   const [err, setErr] = useState('');
 
@@ -162,7 +167,7 @@ function Empty({ label }: { label: string }) {
 }
 
 function RunHistory({ onSelect, refreshKey }: { onSelect: (id: string) => void; refreshKey: number }) {
-  const { client } = useSettings();
+  const { client } = useAuth();
   const [runs, setRuns] = useState<RunDetail[]>([]);
   useEffect(() => { client.listRuns().then(setRuns).catch(() => setRuns([])); }, [client, refreshKey]);
   if (runs.length === 0) return <div className="card muted">No runs yet.</div>;
@@ -209,8 +214,8 @@ function RunCompare({ runs }: { runs: RunDetail[] }) {
   );
 }
 
-export function Dashboard() {
-  const { client } = useSettings();
+export function DashboardPage() {
+  const { client } = useAuth();
   const [selected, setSelected] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
   const [compare, setCompare] = useState<RunDetail[]>([]);

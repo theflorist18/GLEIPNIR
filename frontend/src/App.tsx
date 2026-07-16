@@ -1,37 +1,57 @@
-import { useState } from 'react';
-import { useSettings } from './settings';
-import { Demo } from './demo';
-import { Dashboard } from './dashboard';
+import { Navigate, Outlet, Route, Routes } from 'react-router-dom';
+import { RequireAuth } from './auth/RequireAuth';
+import { RequireRole } from './auth/RequireRole';
+import { LoginPage } from './auth/LoginPage';
+import { TopBar } from './components/Layout/TopBar';
+import { Sidebar } from './components/Layout/Sidebar';
+import { IngestPage } from './pages/investigator/IngestPage';
+import { MyCasesPage } from './pages/investigator/MyCasesPage';
+import { CaseDetailPage } from './pages/investigator/CaseDetailPage';
+import { EvidenceDetailPage } from './pages/investigator/EvidenceDetailPage';
+import { SearchPage } from './pages/investigator/SearchPage';
+import { UsersPage } from './pages/admin/UsersPage';
+import { CasesAdminPage } from './pages/admin/CasesAdminPage';
+import { DashboardPage } from './pages/admin/DashboardPage';
+import { UnauthorizedPage } from './pages/shared/UnauthorizedPage';
+import { NotFoundPage } from './pages/shared/NotFoundPage';
 
-type Scope = 'demo' | 'dashboard';
+// Multi-page evidence library (M14). The old single-page demo/dashboard scope
+// toggle became real routes: the library pages for any signed-in role, the
+// admin section RequireRole-gated. nginx's SPA fallback (try_files ->
+// /index.html) makes deep links refresh-safe.
 
-// One app, two scopes (ARCHITECTURE §5): the CoC demo (Scope B) and the operator
-// dashboard (Scope A). A simple top-level switch selects between them.
-export function App() {
-  const [scope, setScope] = useState<Scope>('demo');
-  const { token, setToken } = useSettings();
-
+function Shell() {
   return (
     <div className="app">
-      <header className="topbar">
-        <div className="brand">GLEIPNIR</div>
-        <nav className="scopes">
-          <button className={scope === 'demo' ? 'active' : ''} onClick={() => setScope('demo')}>
-            Chain-of-Custody Demo
-          </button>
-          <button className={scope === 'dashboard' ? 'active' : ''} onClick={() => setScope('dashboard')}>
-            Operator Dashboard
-          </button>
-        </nav>
-        <label className="token">
-          token
-          <input value={token} onChange={(e) => setToken(e.target.value)} />
-        </label>
-      </header>
-      <main className="content">{scope === 'demo' ? <Demo /> : <Dashboard />}</main>
+      <TopBar />
+      <div className="body">
+        <Sidebar />
+        <main className="content"><Outlet /></main>
+      </div>
       <footer className="foot">
         Talks only to the API gateway · Hyperledger Fabric 2.5 LTS · localhost thesis demo
       </footer>
     </div>
+  );
+}
+
+export function App() {
+  return (
+    <Routes>
+      <Route path="/login" element={<LoginPage />} />
+      <Route element={<RequireAuth><Shell /></RequireAuth>}>
+        <Route index element={<Navigate to="/cases" replace />} />
+        <Route path="/ingest" element={<IngestPage />} />
+        <Route path="/cases" element={<MyCasesPage />} />
+        <Route path="/cases/:caseId" element={<CaseDetailPage />} />
+        <Route path="/evidence/:evidenceId" element={<EvidenceDetailPage />} />
+        <Route path="/search" element={<SearchPage />} />
+        <Route path="/admin/users" element={<RequireRole role="admin"><UsersPage /></RequireRole>} />
+        <Route path="/admin/cases" element={<RequireRole role="admin"><CasesAdminPage /></RequireRole>} />
+        <Route path="/admin/dashboard" element={<RequireRole role="admin"><DashboardPage /></RequireRole>} />
+        <Route path="/unauthorized" element={<UnauthorizedPage />} />
+        <Route path="*" element={<NotFoundPage />} />
+      </Route>
+    </Routes>
   );
 }

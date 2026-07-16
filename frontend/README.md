@@ -1,52 +1,66 @@
 # frontend
 
-**Responsibility:** the operator/demo SPA — one React + Vite (TypeScript) app with two
-scopes. It **talks only to the API gateway** (`/api/v1`, proxied); it never contacts Fabric
-or any service directly.
+**Responsibility:** the evidence-library SPA (M14) — one React + Vite
+(TypeScript) app with real login, role-aware navigation, and multi-page
+routing (react-router v6). It **talks only to the API gateway** (`/api/v1`,
+proxied); it never contacts Fabric or any service directly.
 
-Port **8081** (nginx). Serves for all variants.
+Port **8081** (nginx). Serves for all variants; the library pages are wired
+for **Standard and Anchoring** (Parallel variants keep the benchmark path
+only).
 
-## Scopes (ARCHITECTURE §5)
+## Structure (ARCHITECTURE §5)
 
-- **Scope B — CoC demo** (`src/demo.tsx`): `CreateEvidenceForm`, `TransferCustodyForm`,
-  `AccessLogForm`, `EvidenceCard` (Codex-style signed card), `AuditTrail` (on-chain event
-  timeline), `SessionTrail` (this-session events with per-event **Verify** — in batched
-  variants this is the honest client-side view, since CoC events live off-chain and the
-  on-chain trail is empty by design), `MerkleBadge` (green VERIFIED / red MISMATCH /
-  amber *not yet anchored* / N-A — Anchoring variants only). Verification is **per event**
-  (the receipt store keys witnesses by eventId), so Verify targets come from write
-  responses captured this session.
+- `src/auth/` — `AuthContext` (session token in localStorage, `GatewayClient`
+  owner, 401 → drop session), `LoginPage`, `RequireAuth`, `RequireRole`.
+- `src/components/` — `EvidenceCard`, `AuditTrail`, `MerkleBadge`,
+  `SessionTrail` (promoted verbatim from the old `demo.tsx`),
+  `Layout/TopBar` + `Layout/Sidebar` (role-aware nav).
+- `src/pages/investigator/` — `IngestPage` (real file upload → multipart
+  `POST /evidence`; bytes go to the evidence-store, the ledger records the
+  ni-URI proof), `MyCasesPage`, `CaseDetailPage` (metadata + evidence roster),
+  `EvidenceDetailPage` (card + trail + Merkle badge + download/export +
+  transfer/access forms), `SearchPage` (evidence + case search,
+  participant-scoped server-side).
+- `src/pages/admin/` — `UsersPage`, `CasesAdminPage` (roster + categorize),
+  `DashboardPage` (the old operator dashboard, now admin-gated: variant/sweep
+  config, run control, charts, history/compare — execution stays host-side,
+  `orchestration/sweep.py`).
+- `src/settings.tsx` — trimmed to the display `variant` only; the token input
+  is gone (login replaced it).
 
-  **Demo tip:** with the default `BATCH_N=100` a demo batch may never close, so Verify
-  legitimately reports *not yet anchored*. Bring the network up with a small batch
-  (e.g. `BATCH_N=5` in `network/compose/.env`, then recreate the batcher) so a handful
-  of demo writes reaches a batch boundary and anchors.
-- **Scope A — operator dashboard** (`src/dashboard.tsx`): `VariantSelector`,
-  `SweepConfigForm` (mirrors `benchmark/sweeps.yaml`), `RunControl` (live status),
-  `ThroughputChart` (per-channel + aggregate), `LatencyChart` (write + verification),
-  `StorageChart` (ledger/state growth), `RunHistory`, `RunCompare`.
+Routes: `/login` public; `/ingest`, `/cases[/:caseId]`,
+`/evidence/:evidenceId`, `/search` require a session; `/admin/users`,
+`/admin/cases`, `/admin/dashboard` require the admin role (server-enforced
+too). nginx's `try_files … /index.html` keeps deep links refresh-safe.
 
-## Public interface
+**Verification is per event** (receipts are keyed by eventId), so Verify
+targets on the evidence page come from write responses captured this session
+(`SessionTrail`). **Demo tip:** with the default `BATCH_N=100` a demo batch
+may never close, so Verify legitimately reports *not yet anchored* — bring
+the network up with a small batch (e.g. `BATCH_N=5`) to see green badges.
 
-The SPA consumes the gateway public API through `src/api.ts` (`GatewayClient`). Types mirror
-docs/CONTRACTS.md §5 (evidence/event) and §10/§11 (run manifest/checkpoints); all metric
-fields are optional and read defensively, since a *requested-but-not-executed* run has none.
+Views, downloads, and exports of an evidence item are logged **server-side**
+automatically (synchronous `AccessLog` under the signed-in username) — the
+trail on the evidence page grows as you use it; that is the feature.
 
 ## Inputs / outputs
 
-- **In:** operator actions; a bearer token (settings, default `dev-token`).
-- **Out:** REST calls to `/api/v1/*`. Run **execution is host-side** (`orchestration/sweep.py`)
-  — `RunControl` says so explicitly and only polls the results manifest.
+- **In:** user actions; a session from `POST /api/v1/auth/login`.
+- **Out:** REST calls to `/api/v1/*` through `src/api.ts` (`GatewayClient`).
+  Run **execution is host-side** — the dashboard only polls the manifest.
 
 ## Does NOT
 
 - Talk to Fabric or the off-chain services directly (only the gateway).
-- Upload evidence binaries for storage (create only sends metadata / an ni-URI hash).
+- Hold secrets beyond the opaque session token (no service token in the UI).
 - Run benchmarks itself.
 
 ## Failure modes
 
 - Gateway unreachable / non-2xx → inline error (`GatewayError` status + body).
+- 401 anywhere → session dropped, redirected to `/login`.
+- 403/404 on case/evidence pages → "no access" state (server-side scoping).
 - Verify on a non-anchoring variant → badge shows N/A.
 - Missing metric fields → charts render an empty-state note.
 
