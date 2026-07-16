@@ -6,13 +6,37 @@
 routing**. Used by **all four variants**; the frontend and Caliper's REST path talk only to
 this service, never to Fabric directly.
 
-Port **3000**. Node 20, Express. Auth: static bearer token (`GLEIPNIR_TOKEN`,
-default `dev-token`) — **non-production**, documented as such.
+Port **3000**. Node 20, Express.
+
+## Auth (M12): two kinds of principal
+
+- **Service token** — static bearer (`GLEIPNIR_TOKEN`, default `dev-token`),
+  **non-production**, unchanged contract: it authenticates every route after
+  `/healthz`, internal routes included (merkle-batcher, verification, Caliper's
+  REST connector, smoke scripts). Client-supplied `actor`/`identity.subject`
+  fields are honoured on this path (load-test realism).
+- **User session** — `POST /api/v1/auth/login` exchanges `{username,password}`
+  for an opaque token (in-memory, TTL `SESSION_TTL_SECONDS`; a gateway restart
+  logs everyone out). Roles: `admin` | `investigator`, enforced server-side.
+  Under a user session the audit **actor is always the authenticated username**;
+  client-supplied actors are ignored. Users live in `AUTH_DATA_DIR/users.json`
+  (scrypt password hashes); they are deactivated, never deleted, so audit-trail
+  actors keep resolving. First admin is seeded from `ADMIN_USERNAME`/
+  `ADMIN_PASSWORD` when the store is empty.
+
+Admin-only routes (user management, `POST /runs`) require an **admin session**
+— the service token is never sufficient there.
 
 ## Public interface (`/api/v1`, JSON)
 
 | Method | Path | Maps to |
 |---|---|---|
+| `POST` | `/auth/login` | unauthenticated: credentials → session token |
+| `POST` | `/auth/logout` | session: invalidate token |
+| `GET` | `/auth/me` | session: current user |
+| `GET`/`POST` | `/admin/users` | admin session: list / create users |
+| `PATCH` | `/admin/users/:id` | admin session: role/displayName/active |
+| `POST` | `/admin/users/:id/reset-password` | admin session |
 | `POST` | `/evidence` | `CreateEvidence` (or batcher enqueue) |
 | `POST` | `/evidence/:id/transfer` | `TransferCustody` (or enqueue) |
 | `POST` | `/evidence/:id/access` | `AccessLog` (or enqueue) |
@@ -20,7 +44,7 @@ default `dev-token`) — **non-production**, documented as such.
 | `GET` | `/evidence/:id` | `ReadEvidence` (evaluate, direct) |
 | `GET` | `/evidence/:id/audit` | `GetAuditTrail` (evaluate, direct) |
 | `GET` | `/evidence/:id/verify?eventId=` | proxy → verification service |
-| `POST`/`GET` | `/runs`, `/runs/:id` | run-request store (execution is host-side) |
+| `POST`/`GET` | `/runs`, `/runs/:id` | run-request store (execution is host-side); `POST` is admin-session-only |
 
 Internal (no `/api/v1` prefix, still bearer-authed): `POST /internal/anchor-root` and
 `GET /internal/anchor-root/:scopeId/:batchId` — the Anchoring variant's root sink on
@@ -45,7 +69,10 @@ Reads always evaluate directly, on `coc-main` or the `?caseId=` case channel.
 
 Env: `PORT=3000`, `GLEIPNIR_TOKEN`, `VARIANT`, `BATCHER_URL`, `VERIFICATION_URL`,
 `PEER_ENDPOINT`, `PEER_HOST_ALIAS`, `MSP_ID`, `CRYPTO_PATH`, `TLS_CERT_PATH`,
-`DEFAULT_CHANNEL=coc-main`, `CC_NAME=evidence`, `RESULTS_DIR=/results`.
+`DEFAULT_CHANNEL=coc-main`, `CC_NAME=evidence`, `RESULTS_DIR=/results`,
+`AUTH_DATA_DIR=/data/auth`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`,
+`SESSION_TTL_SECONDS=28800`. If `AUTH_DATA_DIR` is unavailable the gateway
+still starts with user login disabled (service token unaffected).
 
 ## Does NOT
 
@@ -57,8 +84,12 @@ Env: `PORT=3000`, `GLEIPNIR_TOKEN`, `VARIANT`, `BATCHER_URL`, `VERIFICATION_URL`
 
 ## Failure modes
 
-- `401` — missing/invalid bearer token.
-- `400` — parallel variant without a valid `caseId`.
+- `401` — missing/invalid bearer token, bad login credentials, expired session,
+  or a session whose user was deactivated.
+- `403` — role gate: non-admin (or service-token) caller on an admin route.
+- `400` — parallel variant without a valid `caseId`; invalid user fields.
+- `409` — duplicate username.
+- `503` — login attempted while the users store is unavailable.
 - `404` — read of an unknown key (mapped from the chaincode not-found error).
 - `502` — Fabric submit/evaluate error, batcher unreachable, or verification proxy error.
 

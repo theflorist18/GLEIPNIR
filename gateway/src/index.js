@@ -7,17 +7,44 @@ const { createApp } = require('./app');
 const { connectFabric } = require('./fabric');
 const { makeBatcherClient } = require('./batcherClient');
 const { makeRunsStore } = require('./runsStore');
+const { makeUsersStore } = require('./users');
+const { makeSessions } = require('./sessions');
+
+// User-session auth (M12) is additive: if the auth data dir is unavailable
+// (e.g. a container without the gateway-auth-data volume), the gateway still
+// starts and the service-token path works — only user login is disabled.
+function makeAuthStores(env) {
+  const authDataDir = env.AUTH_DATA_DIR || '/data/auth';
+  let users;
+  try {
+    users = makeUsersStore(authDataDir);
+  } catch (err) {
+    console.warn(`[gateway] auth store unavailable (${err.message}) — user login disabled; service token unaffected`);
+    return { users: undefined, sessions: undefined };
+  }
+  const sessions = makeSessions({ ttlSeconds: parseInt(env.SESSION_TTL_SECONDS, 10) || 28800 });
+  if (env.ADMIN_USERNAME && env.ADMIN_PASSWORD) {
+    const seeded = users.seedAdmin({ username: env.ADMIN_USERNAME, password: env.ADMIN_PASSWORD });
+    if (seeded) console.log(`[gateway] seeded first admin user '${seeded.username}'`);
+  } else if (users.list().length === 0) {
+    console.warn('[gateway] no users exist and ADMIN_USERNAME/ADMIN_PASSWORD are unset — user login impossible until seeded');
+  }
+  return { users, sessions };
+}
 
 async function main() {
   const port = parseInt(process.env.PORT, 10) || 3000;
   const { fabric, close } = await connectFabric(process.env);
   const batcher = makeBatcherClient(process.env.BATCHER_URL || 'http://merkle-batcher:4001');
   const runsStore = makeRunsStore(process.env.RESULTS_DIR || '/results');
+  const { users, sessions } = makeAuthStores(process.env);
 
   const app = createApp({
     fabric,
     batcher,
     runsStore,
+    users,
+    sessions,
     config: {
       variant: process.env.VARIANT || 'standard',
       token: process.env.GLEIPNIR_TOKEN || 'dev-token',
