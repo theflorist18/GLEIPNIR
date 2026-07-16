@@ -7,12 +7,18 @@
 
 const express = require('express');
 const crypto = require('node:crypto');
+const multer = require('multer');
+const { Readable } = require('node:stream');
 const { niUri } = require('./ni');
 const { routeWrite, routeRead, channelFor, RequestError } = require('./variantRouter');
 const { makeAuth, bearerOf } = require('./auth');
 
 const uuid = () => crypto.randomUUID();
 const nowIso = () => new Date().toISOString();
+
+// Same charset as evidence-store's blob guard (CONTRACTS §6); pre-validated
+// here so a bad id fails before any bytes are stored.
+const SAFE_EVIDENCE_ID = /^[A-Za-z0-9._:-]+$/;
 
 function isNotFound(err) {
   return /not[\s-]?found|does not exist|no such key/i.test(String((err && err.message) || ''));
@@ -53,12 +59,13 @@ function buildEvent(op, evidenceId, caseId, actor, detail) {
 }
 
 function createApp(deps) {
-  const { fabric, batcher, runsStore, users, sessions, config } = deps;
+  const { fabric, batcher, runsStore, users, sessions, caseRegistry, evidenceStore, config } = deps;
   const cfg = {
     variant: 'standard',
     token: 'dev-token',
     defaultChannel: 'coc-main',
     verificationUrl: 'http://verification:4004',
+    maxUploadBytes: 26214400, // 25 MiB
     ...config,
   };
   const routerDeps = { fabric, batcher, defaultChannel: cfg.defaultChannel };
@@ -134,18 +141,220 @@ function createApp(deps) {
     res.json(users.resetPassword(req.params.id, (req.body || {}).password));
   }));
 
+  // ---- evidence library (M13c): case proxying, search, per-evidence authz ----
+  // These need the case-registry / evidence-store clients. Deployments without
+  // them (benchmark-only harnesses) answer 503 on the library routes, and the
+  // per-evidence authz gate is off — i.e. exactly the pre-library behavior.
+  const requireLibrary = (req, res, next) => {
+    if (!caseRegistry || !evidenceStore) return res.status(503).json({ error: 'evidence library not configured' });
+    return next();
+  };
+
+  const proxy = (res, out) => res.status(out.status).json(out.body);
+  const isNonAdminUser = (req) => req.principal && req.principal.kind === 'user' && req.principal.role !== 'admin';
+
+  // Per-evidence access gate. Admins and the service token bypass (the service
+  // token is the benchmark/infra path; case scoping is a library concern).
+  // User identity in case-registry is the immutable username.
+  async function ensureEvidenceAccess(req, evidenceId, { write = false } = {}) {
+    if (!caseRegistry || !isNonAdminUser(req)) return;
+    const { status, body } = await caseRegistry.request(
+      'GET',
+      `/internal/authz?userId=${encodeURIComponent(req.principal.username)}&evidenceId=${encodeURIComponent(evidenceId)}`,
+    );
+    if (status !== 200 || !body) throw new RequestError(502, 'authz check failed');
+    if (!body.allowed) {
+      // Unknown-to-the-library evidence 404s so ids can't be probed.
+      throw new RequestError(body.reason === 'unknown-evidence' ? 404 : 403, 'access to this evidence is denied');
+    }
+    if (write && !['contributor', 'uploader'].includes(body.roleInCase)) {
+      throw new RequestError(403, 'a contributor role in the case is required to write');
+    }
+  }
+
+  // Synchronous auto-AccessLog (M13c): a user-session view/download/export
+  // succeeds ONLY if the on-chain log write succeeds — "no doubt of tampering"
+  // beats latency. NEVER fires for the service token: Caliper read workloads
+  // must not mutate the ledger.
+  async function logAccess(req, evidenceId, action, caseId) {
+    if (!req.principal || req.principal.kind !== 'user') return;
+    const actor = req.principal.username;
+    const event = buildEvent('ACCESS', evidenceId, caseId, actor, { action, auto: true });
+    await routeWrite({ variant: V, fn: 'AccessLog', ccArgs: [evidenceId, actor, action], event, caseId }, routerDeps);
+  }
+
+  const listCases = wrap(async (req, res) => {
+    const qs = new URLSearchParams();
+    if (req.query.status) qs.set('status', String(req.query.status));
+    if (req.query.q) qs.set('q', String(req.query.q));
+    if (isNonAdminUser(req)) qs.set('participant', req.principal.username);
+    proxy(res, await caseRegistry.request('GET', `/cases?${qs}`));
+  });
+  // /cases/search must be registered before /cases/:id.
+  app.get('/api/v1/cases/search', requireLibrary, listCases);
+  app.get('/api/v1/cases', requireLibrary, listCases);
+
+  app.post('/api/v1/cases', requireLibrary, requireAdmin, wrap(async (req, res) => {
+    const b = req.body || {};
+    proxy(res, await caseRegistry.request('POST', '/cases', {
+      name: b.name, description: b.description, status: b.status, createdBy: req.principal.username,
+    }));
+  }));
+
+  app.get('/api/v1/cases/:id', requireLibrary, wrap(async (req, res) => {
+    const out = await caseRegistry.request('GET', `/cases/${encodeURIComponent(req.params.id)}`);
+    if (out.status === 200 && isNonAdminUser(req)) {
+      const mine = (out.body.participants || []).some((p) => p.userId === req.principal.username);
+      if (!mine) return res.status(404).json({ error: 'case not found' }); // don't leak existence
+    }
+    proxy(res, out);
+  }));
+
+  app.patch('/api/v1/cases/:id', requireLibrary, requireAdmin, wrap(async (req, res) => {
+    const b = req.body || {};
+    proxy(res, await caseRegistry.request('PATCH', `/cases/${encodeURIComponent(req.params.id)}`, {
+      name: b.name, description: b.description, status: b.status,
+    }));
+  }));
+
+  app.post('/api/v1/cases/:id/participants', requireLibrary, requireAdmin, wrap(async (req, res) => {
+    const b = req.body || {};
+    if (users && b.userId && !users.getByUsername(b.userId)) {
+      return res.status(404).json({ error: 'no such user' });
+    }
+    proxy(res, await caseRegistry.request('POST', `/cases/${encodeURIComponent(req.params.id)}/participants`, {
+      userId: b.userId, roleInCase: b.roleInCase, addedBy: req.principal.username,
+    }));
+  }));
+
+  app.delete('/api/v1/cases/:id/participants/:userId', requireLibrary, requireAdmin, wrap(async (req, res) => {
+    proxy(res, await caseRegistry.request('DELETE', `/cases/${encodeURIComponent(req.params.id)}/participants/${encodeURIComponent(req.params.userId)}`));
+  }));
+
+  app.post('/api/v1/cases/:id/evidence', requireLibrary, requireAdmin, wrap(async (req, res) => {
+    proxy(res, await caseRegistry.request('POST', `/cases/${encodeURIComponent(req.params.id)}/evidence`, {
+      evidenceId: (req.body || {}).evidenceId,
+    }));
+  }));
+
+  app.delete('/api/v1/cases/:id/evidence/:evidenceId', requireLibrary, requireAdmin, wrap(async (req, res) => {
+    proxy(res, await caseRegistry.request('DELETE', `/cases/${encodeURIComponent(req.params.id)}/evidence/${encodeURIComponent(req.params.evidenceId)}`));
+  }));
+
+  // Must be registered before GET /api/v1/evidence/:id.
+  app.get('/api/v1/evidence/search', requireLibrary, wrap(async (req, res) => {
+    const qs = new URLSearchParams();
+    for (const k of ['caseId', 'q', 'uploadedBy', 'type', 'from', 'to']) {
+      if (req.query[k]) qs.set(k, String(req.query[k]));
+    }
+    if (isNonAdminUser(req)) qs.set('visibleToUserId', req.principal.username);
+    proxy(res, await caseRegistry.request('GET', `/evidence-index?${qs}`));
+  }));
+
   // ---- writes ----
-  app.post('/api/v1/evidence', wrap(async (req, res) => {
+  // Multipart ingest support (M13c). Engages ONLY for multipart/form-data —
+  // the JSON path below (payloadBase64 hash-then-discard) is what Caliper's
+  // REST connector and smoke-standard.sh use, and stays byte-identical.
+  const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: cfg.maxUploadBytes } });
+  const maybeMultipart = (req, res, next) => {
+    if (!req.is('multipart/form-data')) return next();
+    if (!evidenceStore || !caseRegistry) return res.status(503).json({ error: 'evidence library not configured' });
+    return upload.single('file')(req, res, (err) => {
+      if (err) {
+        const status = err.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
+        return res.status(status).json({ error: err.message });
+      }
+      return next();
+    });
+  };
+
+  // Ingesting directly into a case requires a contributor role there (admins
+  // and the service token bypass). Uploads without a case are always allowed —
+  // uncategorized evidence is visible only to its uploader and admins.
+  async function ensureCaseIngest(req, caseId) {
+    if (!isNonAdminUser(req)) return;
+    const { status, body } = await caseRegistry.request('GET', `/cases/${encodeURIComponent(caseId)}`);
+    if (status !== 200 || !body) throw new RequestError(404, 'case not found');
+    const me = (body.participants || []).find((p) => p.userId === req.principal.username);
+    if (!me) throw new RequestError(404, 'case not found'); // don't leak existence
+    if (me.roleInCase !== 'contributor') throw new RequestError(403, 'a contributor role in the case is required to ingest');
+  }
+
+  // Multipart ingest: store bytes off-chain -> commit the Codex-Entry head
+  // with the store's integrity proof -> register the read-model row. The
+  // library caseId NEVER reaches the chain (case linkage is off-chain only;
+  // the on-chain record is identical to a caseless create).
+  async function libraryIngest(req, res) {
+    const b = req.body || {};
+    const evidenceId = b.evidenceId || uuid();
+    if (!SAFE_EVIDENCE_ID.test(evidenceId) || evidenceId.endsWith('.meta.json')) {
+      throw new RequestError(400, 'invalid evidenceId');
+    }
+    const actor = actorFor(req, b.actor || '');
+    const caseId = b.caseId || null;
+    if (caseId) await ensureCaseIngest(req, caseId);
+
+    const stored = await evidenceStore.put(evidenceId, req.file.buffer, {
+      contentType: req.file.mimetype || 'application/octet-stream',
+      originalFilename: req.file.originalname || null,
+    });
+    if (stored.status === 409) throw new RequestError(409, 'evidence already exists');
+    if (stored.status !== 201) throw new RequestError(502, `evidence-store put failed (${stored.status})`);
+    const { integrityProof } = stored.body;
+
+    const identity = { subject: actor };
+    if (b.org) identity.org = b.org;
+    const head = buildHead({
+      version: b.version,
+      identity,
+      storage: {
+        protocol: 'gleipnir-evidence-store',
+        location: `evidence-store://${evidenceId}`,
+        integrity_proof: integrityProof,
+      },
+    }, evidenceId);
+    const event = buildEvent('CREATE', evidenceId, undefined, actor, { storage: head.storage });
+
+    let r;
+    try {
+      r = await routeWrite({ variant: V, fn: 'CreateEvidence', ccArgs: [evidenceId, JSON.stringify(head)], event, caseId: undefined }, routerDeps);
+    } catch (err) {
+      // The blob is orphaned if the chain write failed — best-effort cleanup.
+      await evidenceStore.del(evidenceId).then(() => {}, () => {});
+      throw err;
+    }
+
+    const indexed = await caseRegistry.request('POST', '/evidence-index', {
+      evidenceId,
+      caseId: caseId || undefined,
+      originalFilename: req.file.originalname || null,
+      mimeType: req.file.mimetype || null,
+      sizeBytes: req.file.size,
+      integrityProof,
+      uploadedBy: actor,
+    });
+    if (indexed.status !== 201) {
+      // The on-chain commit already happened (append-only ledger) — fail
+      // loudly rather than leave silently-invisible evidence.
+      throw new RequestError(502, `evidence committed on-chain but index registration failed (${indexed.status})`);
+    }
+    res.status(r.status).json({ ...r.body, integrityProof });
+  }
+
+  app.post('/api/v1/evidence', maybeMultipart, wrap(async (req, res) => {
+    if (req.file) return libraryIngest(req, res);
+    if (req.is('multipart/form-data')) throw new RequestError(400, "multipart ingest requires a 'file' part");
     const b = req.body || {};
     const evidenceId = b.evidenceId || uuid();
     const head = buildHead(b, evidenceId);
     const actor = actorFor(req, (b.identity && b.identity.subject) || b.actor || '');
     const event = buildEvent('CREATE', evidenceId, b.caseId, actor, { storage: head.storage });
     const r = await routeWrite({ variant: V, fn: 'CreateEvidence', ccArgs: [evidenceId, JSON.stringify(head)], event, caseId: b.caseId }, routerDeps);
-    res.status(r.status).json(r.body);
+    return res.status(r.status).json(r.body);
   }));
 
   app.post('/api/v1/evidence/:id/transfer', wrap(async (req, res) => {
+    await ensureEvidenceAccess(req, req.params.id, { write: true });
     const b = req.body || {};
     const { newCustodian = '', reason = '' } = b;
     const event = buildEvent('TRANSFER', req.params.id, b.caseId, actorFor(req, newCustodian), { newCustodian, reason });
@@ -154,6 +363,7 @@ function createApp(deps) {
   }));
 
   app.post('/api/v1/evidence/:id/access', wrap(async (req, res) => {
+    await ensureEvidenceAccess(req, req.params.id, { write: true });
     const b = req.body || {};
     const { action = '' } = b;
     const actor = actorFor(req, b.actor || '');
@@ -163,28 +373,75 @@ function createApp(deps) {
   }));
 
   app.delete('/api/v1/evidence/:id', wrap(async (req, res) => {
+    await ensureEvidenceAccess(req, req.params.id, { write: true });
     const b = req.body || {};
     const caseId = b.caseId || req.query.caseId;
     const reason = b.reason || req.query.reason || '';
     const event = buildEvent('REMOVE', req.params.id, caseId, actorFor(req, ''), { reason });
     const r = await routeWrite({ variant: V, fn: 'RemoveEvidence', ccArgs: [req.params.id, reason], event, caseId }, routerDeps);
+    // Best-effort cache sync: the ledger is authoritative; a failed PATCH here
+    // is a display glitch the library tolerates by design.
+    if (caseRegistry) {
+      await caseRegistry.request('PATCH', `/evidence-index/${encodeURIComponent(req.params.id)}`, { status: 'REMOVED' }).then(() => {}, () => {});
+    }
     res.status(r.status).json(r.body);
   }));
 
   // ---- reads (evaluate, always direct) ----
+  // Under a user session every evidence read is (a) authz-gated per case and
+  // (b) view/download/export auto-append a synchronous AccessLog event.
   app.get('/api/v1/evidence/:id', wrap(async (req, res) => {
+    await ensureEvidenceAccess(req, req.params.id);
     const out = await routeRead({ variant: V, fn: 'ReadEvidence', args: [req.params.id], caseId: req.query.caseId }, routerDeps);
+    await logAccess(req, req.params.id, 'view', req.query.caseId);
     res.type('application/json').send(out);
   }));
 
+  // Audit-trail reads are authz-gated but NOT auto-logged: the detail page
+  // fetches record + trail together, and logging trail reads would grow the
+  // trail on every render of the very page that displays it.
   app.get('/api/v1/evidence/:id/audit', wrap(async (req, res) => {
+    await ensureEvidenceAccess(req, req.params.id);
     const out = await routeRead({ variant: V, fn: 'GetAuditTrail', args: [req.params.id], caseId: req.query.caseId }, routerDeps);
     res.type('application/json').send(out);
+  }));
+
+  app.get('/api/v1/evidence/:id/download', requireLibrary, wrap(async (req, res) => {
+    await ensureEvidenceAccess(req, req.params.id);
+    const upstream = await evidenceStore.fetchBlob(req.params.id);
+    if (upstream.status === 404) throw new RequestError(404, 'no stored binary for this evidence');
+    if (!upstream.ok) throw new RequestError(502, `evidence-store read failed (${upstream.status})`);
+    // Log BEFORE streaming: if the log write fails the download must fail.
+    await logAccess(req, req.params.id, 'download', req.query.caseId);
+    for (const h of ['content-type', 'content-length', 'content-disposition']) {
+      const v = upstream.headers.get(h);
+      if (v) res.set(h, v);
+    }
+    Readable.fromWeb(upstream.body).pipe(res);
+  }));
+
+  app.get('/api/v1/evidence/:id/export', wrap(async (req, res) => {
+    await ensureEvidenceAccess(req, req.params.id);
+    const [record, audit] = await Promise.all([
+      routeRead({ variant: V, fn: 'ReadEvidence', args: [req.params.id], caseId: req.query.caseId }, routerDeps),
+      routeRead({ variant: V, fn: 'GetAuditTrail', args: [req.params.id], caseId: req.query.caseId }, routerDeps),
+    ]);
+    // Log after assembling: the exported trail reflects the pre-export state;
+    // the export event itself lands as the next trail entry.
+    await logAccess(req, req.params.id, 'export', req.query.caseId);
+    const parse = (s) => { try { return JSON.parse(s); } catch { return s; } };
+    res.json({
+      evidenceId: req.params.id,
+      exportedAt: nowIso(),
+      record: parse(record),
+      auditTrail: parse(audit),
+    });
   }));
 
   // Verification proxy. verifyEvent is keyed by eventId (?eventId=...), since a
   // single evidence has many events; :id in the path is accepted for symmetry.
   app.get('/api/v1/evidence/:id/verify', wrap(async (req, res) => {
+    await ensureEvidenceAccess(req, req.params.id);
     const eventId = req.query.eventId || req.params.id;
     const resp = await fetch(`${cfg.verificationUrl}/verify/${encodeURIComponent(eventId)}`);
     const body = await resp.json().catch(() => ({}));

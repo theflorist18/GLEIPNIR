@@ -9,6 +9,7 @@ const { makeBatcherClient } = require('./batcherClient');
 const { makeRunsStore } = require('./runsStore');
 const { makeUsersStore } = require('./users');
 const { makeSessions } = require('./sessions');
+const { makeCaseRegistryClient, makeEvidenceStoreClient } = require('./serviceClients');
 
 // User-session auth (M12) is additive: if the auth data dir is unavailable
 // (e.g. a container without the gateway-auth-data volume), the gateway still
@@ -38,6 +39,9 @@ async function main() {
   const batcher = makeBatcherClient(process.env.BATCHER_URL || 'http://merkle-batcher:4001');
   const runsStore = makeRunsStore(process.env.RESULTS_DIR || '/results');
   const { users, sessions } = makeAuthStores(process.env);
+  const internalToken = process.env.GLEIPNIR_INTERNAL_TOKEN || 'internal-dev-token';
+  const caseRegistry = makeCaseRegistryClient(process.env.CASE_REGISTRY_URL || 'http://case-registry:4005', internalToken);
+  const evidenceStore = makeEvidenceStoreClient(process.env.EVIDENCE_STORE_URL || 'http://evidence-store:4006', internalToken);
 
   const app = createApp({
     fabric,
@@ -45,11 +49,14 @@ async function main() {
     runsStore,
     users,
     sessions,
+    caseRegistry,
+    evidenceStore,
     config: {
       variant: process.env.VARIANT || 'standard',
       token: process.env.GLEIPNIR_TOKEN || 'dev-token',
       defaultChannel: process.env.DEFAULT_CHANNEL || 'coc-main',
       verificationUrl: process.env.VERIFICATION_URL || 'http://verification:4004',
+      maxUploadBytes: parseInt(process.env.MAX_UPLOAD_BYTES, 10) || 26214400,
     },
   });
 
