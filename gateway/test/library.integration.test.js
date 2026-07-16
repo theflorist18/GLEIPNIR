@@ -282,6 +282,35 @@ test('evidence search scoping and REMOVE status sync', SKIP, async (t) => {
   assert.equal(row.status, 'REMOVED');
 });
 
+test('M15: the auto-log is synchronous — a failed log write fails the view, and no event is half-recorded', SKIP, async (t) => {
+  const s = await bootStack(t);
+  await s.upload('ivy', Buffer.from('sync-proof'), { evidenceId: 'ev-sync' });
+  assert.equal(await s.auditLen('ivy', 'ev-sync'), 1);
+
+  // Arm a one-shot submit failure: reads evaluate (unaffected), so the next
+  // SUBMIT is exactly the auto AccessLog(view) — the view request must fail.
+  s.fabric.failNextSubmit.value = true;
+  const r = await fetch(`${s.url}/api/v1/evidence/ev-sync`, { headers: s.as('ivy') });
+  assert.equal(r.status, 502);
+  assert.equal(await s.auditLen('ivy', 'ev-sync'), 1); // trail did NOT grow
+
+  // ...and the same view succeeds (and logs) once the chain is healthy again.
+  assert.equal((await fetch(`${s.url}/api/v1/evidence/ev-sync`, { headers: s.as('ivy') })).status, 200);
+  assert.equal(await s.auditLen('ivy', 'ev-sync'), 2);
+});
+
+test('M15: audit-trail reads and searches are never auto-logged', SKIP, async (t) => {
+  const s = await bootStack(t);
+  await s.upload('ivy', Buffer.from('quiet'), { evidenceId: 'ev-quiet' });
+
+  const before = await s.auditLen('ivy', 'ev-quiet');
+  await s.auditLen('ivy', 'ev-quiet');
+  await s.auditLen('ivy', 'ev-quiet');
+  await fetch(`${s.url}/api/v1/evidence/search?q=ev-quiet`, { headers: s.as('ivy') });
+  await fetch(`${s.url}/api/v1/cases/search?q=anything`, { headers: s.as('ivy') });
+  assert.equal(await s.auditLen('ivy', 'ev-quiet'), before);
+});
+
 test('ingest directly into a case: contributor yes, viewer 403, non-participant 404', SKIP, async (t) => {
   const s = await bootStack(t);
   const c = await (await fetch(`${s.url}/api/v1/cases`, { method: 'POST', headers: s.asJson('root'), body: JSON.stringify({ name: 'ingest case' }) })).json();
