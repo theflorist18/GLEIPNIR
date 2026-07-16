@@ -1,0 +1,18 @@
+{
+  "name": "gleipnir-case-registry",
+  "version": "1.0.0",
+  "private": true,
+  "description": "GLEIPNIR off-chain case registry: Case entity + evidence search read-model (cache, never authoritative)",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.4.1",
+    "express": "^4.21.2"
+  }
+}
