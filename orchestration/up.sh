@@ -126,6 +126,7 @@ case "${VARIANT}" in
     create_channel coc-main AppChannel
     join_peer org1 coc-main
     join_peer org2 coc-main
+    wait_raft_leader org1 coc-main
     deploy_app_chaincode coc-main
     ;;
   parallel|parallel-anchored)
@@ -135,11 +136,13 @@ case "${VARIANT}" in
       create_channel "${ch}" AppChannel
       join_peer org1 "${ch}"
       join_peer org2 "${ch}"
+      wait_raft_leader org1 "${ch}"
       deploy_app_chaincode "${ch}"
     done
     if [ "${VARIANT}" = "parallel-anchored" ]; then
       create_channel anchor-main AnchorChannel
       join_peer anchor anchor-main
+      wait_raft_leader anchor anchor-main
       deploy_anchor_chaincode
     fi
     ;;

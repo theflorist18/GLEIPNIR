@@ -19,6 +19,7 @@ else
   create_channel "${CASE_ID}" AppChannel
   join_peer org1 "${CASE_ID}"
   join_peer org2 "${CASE_ID}"
+  wait_raft_leader org1 "${CASE_ID}"
 
   pkg_host="ccaas-evidence"
   pkgid="$(package_ccaas "${pkg_host}" "" | tail -1 | tr -d '\r')"

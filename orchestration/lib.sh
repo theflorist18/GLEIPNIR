@@ -131,6 +131,26 @@ set_env_var() {
   fi
 }
 
+# Wait until a freshly created channel's Raft cluster has elected a leader.
+# osnadmin join answers 201 while the election is still in flight, and an
+# immediate approveformyorg then dies with SERVICE_UNAVAILABLE "no Raft
+# leader" (F77 — intermittent since the first bring-ups, deterministic on a
+# loaded host). `peer channel fetch` is a read-only probe that succeeds
+# exactly when the orderer can serve the channel. args: <org> <channel>
+wait_raft_leader() {
+  local org="$1" channel="$2" tries=0
+  until cli "$(peer_env "${org}")
+peer channel fetch newest /tmp/${channel}-leader-probe.block -c ${channel} -o ${ORDERER0} --ordererTLSHostnameOverride orderer0.example.com --tls --cafile ${ORDERER0_CA}" >/dev/null 2>&1; do
+    tries=$((tries + 1))
+    if [ "${tries}" -gt 30 ]; then
+      echo "timeout waiting for a Raft leader on ${channel}" >&2
+      return 1
+    fi
+    sleep 2
+  done
+  echo "    ${channel} has a Raft leader (fetch probe ok)"
+}
+
 # Wait for a host-published operations /healthz to answer (peers/orderers).
 # Peers register a docker-daemon health check that can never pass here: ccaas
 # peers have no docker socket BY DESIGN, so after startup their healthz is a
