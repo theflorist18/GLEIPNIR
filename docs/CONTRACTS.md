@@ -295,7 +295,8 @@ Evidence-store: `PORT=4006`, `DATA_DIR=/data`, `GLEIPNIR_INTERNAL_TOKEN`,
   `gleipnir_peer0org1-ledger`; measurement tooling probes paths inside containers, so
   the prefix does not affect it.)
 - Node service images: `node:20.19-alpine` base — except case-registry, which is
-  `node:20.19-slim` (glibc for better-sqlite3 prebuilds; §12 item 7); engines
+  `node:20.19-slim` (better-sqlite3 v12 has no Node-20 prebuilt, so it compiles
+  from source against a glibc toolchain at image build; §12 item 7); engines
   field pinned.
 
 ## 9. Variant routing matrix (gateway `variantRouter`)
@@ -424,8 +425,10 @@ it is one GoLevelDB directory shared by all of a peer's channels).
    ids `CASE-<uuid>` — deliberately disjoint from the Parallel variants' channel
    routing key `caseId = case-NNN` (variantRouter `CASE_RE`), resolving the naming
    collision structurally: the two can never match, and the library caseId never
-   reaches the chain. Case-registry runs on `node:20.19-slim` (glibc, better-sqlite3
-   prebuilds) as a documented deviation from the alpine convention. User identity in
+   reaches the chain. Case-registry runs on `node:20.19-slim` as a documented
+   deviation from the alpine convention (better-sqlite3 v12 ships no Node-20
+   prebuilt binary, so it is compiled from source against slim's glibc toolchain
+   at image build). User identity in
    case payloads is the immutable username; users are deactivated, never deleted, so
    on-chain actors keep resolving. The evidence-store's blobs are immutable
    (exclusive-create), and the receipt store remains deliberately un-hardened — the

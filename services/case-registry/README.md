@@ -14,10 +14,11 @@ gateway, guarded by the shared `X-Gleipnir-Internal-Token` header (the gateway
 enforces *who* may ask; this service enforces *that only the gateway asks*).
 
 **Docker base deviation (deliberate):** `node:20.19-slim`, not the
-`node:20.19-alpine` every other service uses — better-sqlite3 ships prebuilt
-**glibc** binaries that Debian slim consumes directly; alpine (musl) would
-force a from-source node-gyp build behind the dev host's TLS-intercepting
-proxy. Same Node version pin, different libc.
+`node:20.19-alpine` every other service uses. better-sqlite3 v12 publishes
+**no prebuilt binary for Node 20 (ABI 115)** — only Node 22+ — so the native
+module is compiled from source at image build; Debian slim provides a glibc
+toolchain that node-gyp supports cleanly (installed and purged in one layer,
+so the runtime image stays lean). Same Node version pin, different libc.
 
 ## Public interface (REST/JSON, internal token required after `/healthz`)
 

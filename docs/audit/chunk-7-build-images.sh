@@ -22,8 +22,6 @@ mkdir -p "${WORK}/certs" "${WORK}/df"
 cp "${CA_BUNDLE}" "${WORK}/certs/gleipnir-ca-bundle.crt"
 
 gen_node() { # node:20.19 images (alpine or slim) — CA after first WORKDIR.
-  # NODE_EXTRA_CA_CERTS also covers better-sqlite3's prebuild-install download
-  # in the case-registry build (it runs under node/npm).
   awk '{print} !d && /^WORKDIR/ {print "COPY --from=certs gleipnir-ca-bundle.crt /etc/gleipnir-ca.crt"; print "ENV NODE_EXTRA_CA_CERTS=/etc/gleipnir-ca.crt"; d=1}' "$1"
 }
 gen_go() {   # golang:1.25.5 build stage — CA into the debian trust store

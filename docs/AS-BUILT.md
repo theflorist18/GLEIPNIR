@@ -91,7 +91,7 @@ on-chain or are Merkle-anchored.
 | Hyperledger Fabric CA | **1.5.19** | `.env` `CA_TAG` |
 | Hyperledger Caliper CLI | **0.6.0** (exact) | `benchmark/package.json` |
 | Caliper SUT binding | `fabric:fabric-gateway` → `@hyperledger/fabric-gateway ^1.5.0`, `@grpc/grpc-js ^1.10.3` | `benchmark/package.json` + lockfile (recorded in `benchmark/README.md`) |
-| Node.js (services runtime) | **20.19** | `node:20.19-alpine` in seven service Dockerfiles; `node:20.19-slim` for case-registry (glibc for better-sqlite3 prebuilds — CONTRACTS §12-7) |
+| Node.js (services runtime) | **20.19** | `node:20.19-alpine` in seven service Dockerfiles; `node:20.19-slim` for case-registry (better-sqlite3 v12 has no Node-20 prebuilt → from-source build on glibc — CONTRACTS §12-7) |
 | Gateway extras (M13c) | `multer ^2` (multipart ingest) | `gateway/package.json` |
 | Case-registry datastore | `better-sqlite3 ^12.4.1` | `services/case-registry/package.json` |
 | Go (chaincode) | **1.25.5** toolchain (`go 1.25` language) | `golang:1.25.5` in `chaincode/evidence/Dockerfile`; `go.mod` |
@@ -366,7 +366,8 @@ sequenceDiagram
   `X-Gleipnir-Internal-Token` (internal-only, via gateway).
 - **Datastore:** `better-sqlite3 ^12.4.1` at `DATA_DIR/case-registry.db`
   (volume `case-registry-data`); image `node:20.19-slim` — the documented
-  glibc deviation (CONTRACTS §12-7).
+  deviation (no Node-20 prebuilt in v12 → from-source build on glibc;
+  CONTRACTS §12-7).
 - **Does not:** authenticate end users, store blobs, touch Fabric.
   `evidence_index` is a cache — the ledger stays authoritative for
   status/custodian.
