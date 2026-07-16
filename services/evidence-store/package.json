@@ -1,0 +1,17 @@
+{
+  "name": "gleipnir-evidence-store",
+  "version": "1.0.0",
+  "private": true,
+  "description": "GLEIPNIR off-chain evidence blob store: immutable binaries + ni-URI integrity proofs (the ledger holds only the proof)",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}
