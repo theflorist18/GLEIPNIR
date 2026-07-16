@@ -145,9 +145,10 @@ case "${VARIANT}" in
     ;;
 esac
 
-# 4) off-chain services (gateway/frontend always; batcher/receipt/verification/anchor per profile)
+# 4) off-chain services (gateway/frontend/case-registry/evidence-store always;
+#    batcher/receipt/verification/anchor per profile)
 echo "== starting services =="
-compose "${PROFILE_ARGS[@]}" up -d gateway frontend
+compose "${PROFILE_ARGS[@]}" up -d gateway frontend case-registry evidence-store
 if [ "${VARIANT}" = "anchoring" ] || [ "${VARIANT}" = "parallel-anchored" ]; then
   compose "${PROFILE_ARGS[@]}" up -d merkle-batcher receipt-store verification
 fi

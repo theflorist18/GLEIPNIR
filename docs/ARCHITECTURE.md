@@ -80,7 +80,7 @@ gleipnir/
 │   ├── compose/
 │   │   ├── compose-net.yaml          # peers, orderers
 │   │   ├── compose-ca.yaml           # 2 CAs
-│   │   └── compose-services.yaml     # batcher, receipt-store, anchor-client, gateway, frontend
+│   │   └── compose-services.yaml     # batcher, receipt-store, anchor-client, case-registry, evidence-store, gateway, frontend
 │   └── README.md
 ├── chaincode/
 │   └── evidence/                     # Go 1.25.5 — the 4 ops + MVCC sub-key design
@@ -97,15 +97,19 @@ gleipnir/
 │   │   └── README.md
 │   └── verification/                 # audit-latency path: fetch → recompute branch → verify root
 │       └── README.md
+│   ├── case-registry/                # M13a: off-chain Case entity + evidence search read-model (SQLite)
+│   │   └── README.md
+│   ├── evidence-store/               # M13b: immutable off-chain evidence blobs + ni-URI proofs
+│   │   └── README.md
 ├── gateway/                          # Node 20 fabric-gateway backend-for-frontend (REST)
-│   ├── src/ (routes, connectors, variant-router)
+│   ├── src/ (routes, connectors, variant-router, auth/users/sessions, serviceClients)
 │   └── README.md
 ├── benchmark/                        # Caliper 0.6.0
 │   ├── networks/                     # per-variant, per-channel network configs
 │   ├── benchmarks/                   # round configs; sweep defs for N, K, channel-count
 │   ├── workload/                     # createEvidence.js, transferCustody.js, accessLog.js, verify.js
 │   └── README.md
-├── frontend/                         # Operator dashboard + CoC demo UI (one app, two scopes)
+├── frontend/                         # Evidence-library SPA (M14): auth/, components/, pages/{admin,investigator,shared}
 │   └── README.md
 ├── orchestration/                    # variant select / provision / teardown / metric checkpoint
 │   ├── up.sh  down.sh  provision-channel.sh  checkpoint.py  sweep.py
@@ -130,7 +134,9 @@ Organized as three Compose v2 files under `/network/compose`, brought up togethe
 | `merkle-batcher` | 1 | Anchoring + Parallel-Anchored only |
 | `receipt-store` | 1 | Anchoring + Parallel-Anchored only |
 | `anchor-client` | 1 | Parallel-Anchored only |
-| `gateway` (BFF) | 1 | Node 20; the only component holding fabric-gateway sessions |
+| `case-registry` | 1 | all variants (base profile); off-chain Case entity + evidence read-model; SQLite on `case-registry-data` volume; `node:20.19-slim` (glibc for better-sqlite3 — documented deviation) |
+| `evidence-store` | 1 | all variants (base profile); immutable evidence blobs on `evidence-blob-data` volume |
+| `gateway` (BFF) | 1 | Node 20; the only component holding fabric-gateway sessions; user auth store on `gateway-auth-data` volume |
 | `frontend` | 1 | static/SSR app, talks only to gateway |
 | Caliper | attaches | run as a host process or a `hyperledger/caliper` container on the compose network; binds SUT `fabric:2.5`, points at the same TLS/MSP material |
 
@@ -249,34 +255,56 @@ regress(runId)        # linear regression of payload bytes over checkpoints → 
 ```
 Metrics captured: offered load; throughput (per-channel + aggregate); write latency min/avg/max (submit-to-commit); verification latency (from §4.5); success rate + failure-mode breakdown; ledger size/channel; state DB size; byte-per-log via regression over checkpoints. **Storage compression is reported as reduction in log-PAYLOAD bytes vs Standard, not a clean 1/N of the whole ledger** (block headers, endorsements, and metadata do not compress with N). **Does NOT:** generate load. **Failure modes:** container path drift (mitigated by named volumes), clock skew, Caliper report absent on zero-success rounds.
 
+#### 4.8 Case registry (`/services/case-registry`, port 4005) — evidence library (M13a), all variants
+**Responsibility:** own the OFF-CHAIN Case entity (name/status/participant roster) and the evidence search read-model (`evidence_index`), plus the gateway's per-evidence authz pre-flight. Case-evidence linkage lives here and only here — no chaincode or Codex-Entry change. Case ids are `CASE-<uuid>`, deliberately disjoint from the Parallel variants' `case-NNN` channel key.
+
+Interface (REST, internal-only via gateway, `X-Gleipnir-Internal-Token`):
+```
+POST/GET/PATCH /cases[/:caseId]                      # CRUD + participant/evidence rosters
+POST/DELETE    /cases/:caseId/participants[/:userId] # grant/revoke (viewer|contributor)
+POST/DELETE    /cases/:caseId/evidence[/:evidenceId] # categorize (409 cross-case) / uncategorize
+POST/GET/PATCH /evidence-index[/:evidenceId]         # read-model rows; search with visibility scoping
+GET            /internal/authz?userId=&evidenceId=   # {allowed, caseId, roleInCase}
+```
+Datastore: better-sqlite3 at `DATA_DIR/case-registry.db` (volume `case-registry-data`); image `node:20.19-slim` — deliberate glibc deviation for prebuilt native binaries (CONTRACTS §12-7). **Does NOT:** authenticate end users (gateway's job), store blobs, or touch Fabric; `evidence_index` is a cache — the ledger stays authoritative for status/custodian. **Failure modes:** 401 (internal token), 400/404/409 per CRUD semantics; a stale cache row is a display glitch, never an integrity problem.
+
+#### 4.9 Evidence store (`/services/evidence-store`, port 4006) — evidence library (M13b), all variants
+**Responsibility:** persist evidence BINARIES off-chain (the invariant across all four variants: bytes never go on-chain) and compute the RFC 6920 ni-URI integrity proof the ledger records. Blobs are **immutable** — one `PUT` per id, enforced with an exclusive-create write.
+
+Interface (REST, internal-only via gateway, `X-Gleipnir-Internal-Token`):
+```
+PUT    /blobs/:evidenceId          # raw bytes → 201 {integrityProof,sizeBytes,storedAt}; 409 if exists; 413 over MAX_UPLOAD_BYTES
+GET    /blobs/:evidenceId[/meta]   # attachment stream / sidecar JSON
+GET    /blobs/:evidenceId/verify?expected=<ni-uri>   # recompute + compare
+DELETE /blobs/:evidenceId          # ingest-failure rollback ONLY
+```
+Datastore: filesystem only — `DATA_DIR/<id>` blob + `<id>.meta.json` sidecar (volume `evidence-blob-data`); `niUri()` copied byte-identically from `gateway/src/ni.js` (CONTRACTS §4 discipline). **Does NOT:** index/search (case-registry's job), mutate stored blobs, or write on-chain. **Failure modes:** 400 (unsafe id / empty body), 404, 409 (immutable), 413, filesystem errors.
+
 ---
 
 ### 5. Frontend specification
 
-**Recommended stack: plain React + Vite (TypeScript), served static behind Nginx in one small container.** Justification: the two scopes are a dashboard (charts + forms) and a CRUD/audit viewer — no SSR, SEO, or auth complexity that would justify Next.js or a heavier framework; Vite gives fast local builds and a trivial Docker image; React has first-class charting (Recharts/Chart.js) for the throughput/latency/storage views. A server-rendered stack would add a Node render server for no benefit in a localhost thesis demo. The frontend **talks only to the API gateway** (REST/JSON), never to Fabric.
+**Stack: plain React + Vite (TypeScript) + react-router v6, served static behind Nginx in one small container.** Vite gives fast local builds and a trivial Docker image; React has first-class charting (Recharts) for the throughput/latency/storage views; nginx's SPA fallback makes deep links refresh-safe. The frontend **talks only to the API gateway** (REST/JSON), never to Fabric.
 
-**Scope A — Operator dashboard**
+**M14 reframing:** the original two-scope toggle (dashboard / CoC demo) became a
+multi-page evidence-library app with real login. The old demo's components
+(`EvidenceCard`, `AuditTrail`, `MerkleBadge`, `SessionTrail`, the forms) live on
+inside the library pages; the operator dashboard is unchanged in content but is
+now an admin-gated route.
 
-| Page/Component | Does |
-|---|---|
-| `VariantSelector` | pick Standard / Anchoring / Parallel / Parallel-Anchored |
-| `SweepConfigForm` | set N ∈ {10,50,100,250}, K ∈ {5,10,25,50}, channels ∈ {1,2,5}, offered load, N-runs |
-| `RunControl` | start/stop; shows live run status |
-| `ThroughputChart` | per-channel + aggregate TPS |
-| `LatencyChart` | write latency min/avg/max + verification latency |
-| `StorageChart` | ledger + state size growth over checkpoints; byte-per-log slope |
-| `RunHistory` / `RunCompare` | list past runs; side-by-side variant comparison |
+| Area | Pages/Components | Does |
+|---|---|---|
+| `auth/` | `AuthContext`, `LoginPage`, `RequireAuth`, `RequireRole` | session token (localStorage), login/logout, route guards; 401 anywhere drops the session |
+| investigator | `IngestPage` | real file upload (multipart) → evidence-store bytes + on-chain ni-URI proof; optional case at ingest (contributor role) |
+| investigator | `MyCasesPage`, `CaseDetailPage` | participant-scoped case list; case metadata + participant roster + evidence roster (file/type/size/uploader/status) |
+| investigator | `EvidenceDetailPage` | `EvidenceCard` + `AuditTrail` + `MerkleBadge` + download/export + transfer/access forms; opening it demonstrates the server-side auto-`AccessLog(view)` |
+| investigator | `SearchPage` | evidence-index + case search, participant-scoped server-side |
+| admin | `UsersPage`, `CasesAdminPage` | user management (deactivate-not-delete); case creation, roster grants, categorize/uncategorize |
+| admin | `DashboardPage` | the operator dashboard: `VariantSelector`, `SweepConfigForm` (N ∈ {10,50,100,250}, K ∈ {5,10,25,50}, channels ∈ {1,2,5}, offered load, N-runs), `RunControl`, `ThroughputChart`, `LatencyChart`, `StorageChart`, `RunHistory`/`RunCompare` |
 
-**Scope B — CoC demo UI** (lockb0x Codex-Entry presentation idiom)
-
-| Page/Component | Does |
-|---|---|
-| `CreateEvidenceForm` | create evidence (off-chain binary pointer + metadata) |
-| `TransferCustodyForm` | reassign custodian |
-| `AccessLogForm` | log an access/action |
-| `EvidenceCard` | render one evidence record as a signed "Codex-style" card |
-| `AuditTrail` | per-evidence event timeline (from `GetAuditTrail`) |
-| `MerkleBadge` | verification status badge (Anchoring variants) — green/red from the verification service |
+Routes: `/login` public; `/ingest`, `/cases[/:caseId]`, `/evidence/:evidenceId`,
+`/search` require a session; `/admin/users`, `/admin/cases`, `/admin/dashboard`
+require the admin role (server-enforced too).
 
 Keep it simple and usable; no state-management library beyond React context.
 
@@ -286,18 +314,35 @@ Keep it simple and usable; no state-management library beyond React context.
 
 The BFF holds the only `@hyperledger/fabric-gateway` sessions and encapsulates variant routing.
 
-| Endpoint | Maps to | Variant routing |
+| Endpoint | Maps to | Variant routing / notes |
 |---|---|---|
-| `POST /evidence` | `CreateEvidence` | **Standard/Parallel:** `submitTransaction` direct. **Anchoring/Parallel-Anchored:** `batcher.enqueue`, root committed at boundary |
-| `POST /evidence/:id/transfer` | `TransferCustody` | same routing rule |
-| `POST /evidence/:id/access` | `AccessLog` | same routing rule |
-| `DELETE /evidence/:id` | `RemoveEvidence` | same routing rule |
-| `GET /evidence/:id` | `ReadEvidence` (evaluate) | direct |
-| `GET /evidence/:id/audit` | `GetAuditTrail` (evaluate) | direct |
+| `POST /evidence` | `CreateEvidence` | **Standard/Parallel:** `submitTransaction` direct. **Anchoring/Parallel-Anchored:** `batcher.enqueue`, root committed at boundary. **Multipart (M13c):** blob → evidence-store, head committed with the store's ni-URI proof, evidence-index row registered; the library caseId never reaches the chain |
+| `POST /evidence/:id/transfer` | `TransferCustody` | same routing rule; user sessions need a writing case role |
+| `POST /evidence/:id/access` | `AccessLog` | same routing rule; user sessions need a writing case role |
+| `DELETE /evidence/:id` | `RemoveEvidence` | same routing rule; best-effort evidence-index status sync |
+| `GET /evidence/:id` | `ReadEvidence` (evaluate) | direct; user sessions: authz-gated + synchronous auto-`AccessLog(view)` |
+| `GET /evidence/:id/download` | evidence-store stream | user sessions: authz-gated + auto-`AccessLog(download)` |
+| `GET /evidence/:id/export` | `{record, auditTrail}` bundle | user sessions: authz-gated + auto-`AccessLog(export)` |
+| `GET /evidence/:id/audit` | `GetAuditTrail` (evaluate) | direct; authz-gated, never auto-logged |
 | `GET /evidence/:id/verify` | verification service | Anchoring variants only |
-| `POST /runs` / `GET /runs/:id` | orchestration + metrics | all |
+| `GET /evidence/search`, `/cases/search` | case-registry search | participant-scoped unless admin |
+| `POST/GET/PATCH /cases[/:id]`, participants, categorize | case-registry proxy | create/update/roster/categorize admin-only |
+| `POST /auth/login\|logout`, `GET /auth/me`, `/admin/users*` | users/sessions stores (M12) | user management admin-only |
+| `POST /runs` / `GET /runs/:id` | orchestration + metrics | all; `POST` admin-session-only |
 
-**Variant selection changes routing, not contracts:** a single `variantRouter` reads the active variant and either calls `fabricGateway.submit()` (Standard/Parallel — with a `targetChannel` = per-case channel for Parallel) or `batcher.enqueue()` (Anchoring/Parallel-Anchored). Auth is minimal for local hosting: a static bearer token / dev CORS allowlist; documented as non-production.
+**Variant selection changes routing, not contracts:** a single `variantRouter` reads the active variant and either calls `fabricGateway.submit()` (Standard/Parallel — with a `targetChannel` = per-case channel for Parallel) or `batcher.enqueue()` (Anchoring/Parallel-Anchored).
+
+**Auth (M12 — the authorized reopening of the auth deferral):** two principals.
+The static `GLEIPNIR_TOKEN` service path is contract-unchanged (guards everything
+after `/healthz`, internal routes included; client-supplied actors honored —
+Caliper/batcher/verification/smoke all use it). User sessions come from
+`POST /auth/login` (opaque token, scrypt-hashed users in `AUTH_DATA_DIR`, roles
+`admin`|`investigator` enforced server-side, first admin seeded from
+`ADMIN_USERNAME`/`ADMIN_PASSWORD`). Under a user session the audit actor is always
+the authenticated username; per-evidence access is pre-flighted against
+case-registry `/internal/authz`; view/download/export auto-append `AccessLog`
+synchronously (never for the service token — benchmark reads must not write).
+Still non-production-grade by design (single host, no TLS, no password policy).
 
 ---
 
@@ -400,6 +445,11 @@ sequenceDiagram
 | 9 | Verification service | Tamper a receipt → `verifyEvent` returns `ok:false`; clean path returns `ok:true` + `latencyMs` |
 | 10 | Frontend scopes | Operator dashboard runs a sweep and charts it; CoC demo shows evidence card + Merkle badge |
 | 11 | Sweep automation | Full N/K/channel sweep with N-runs loop completes; manifest records config commit SHAs + du checkpoints |
+| 12 | Auth & roles (library) | Login issues a session token; an admin-only route 403s an investigator token; `smoke-standard.sh` passes **unmodified** on the service-token path |
+| 13 | Case registry & evidence store | Create case → grant participant → upload real bytes → assign to case → `GET /cases/:id` roster correct; non-participant denied |
+| 14 | Frontend rebuild | Login routes to role-appropriate nav; ingest → categorize → case detail → evidence detail → download works for an investigator; admin sees Users/Case-Admin/Dashboard |
+| 15 | Search & access-log completeness | Participant-scoped search correct; every view/download/export appends exactly one `AccessLog` event (synchronously) |
+| 16 | Docs & closeout | `orchestration/smoke-library.sh` passes against `up.sh --variant standard`; CLAUDE.md / ARCHITECTURE / CONTRACTS / AS-BUILT cross-consistent |
 
 ---
 

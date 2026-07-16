@@ -101,6 +101,12 @@ Two workload regimes, kept distinct in code and output labels:
   per-record event sub-key design `(evidenceId, monotonicCounter)` — a
   composite key per event, not writes to one shared record key. Do not
   substitute client-side retry loops; conflict avoidance is structural.
+- **Case-evidence linkage is off-chain only** (M12–M16 evidence library).
+  The library Case entity lives in case-registry (SQLite); its `CASE-<uuid>`
+  ids are deliberately disjoint from the Parallel variants' `case-NNN`
+  channel routing key, and the library caseId never reaches the chain. The
+  chaincode interface and the Codex-Entry schema were NOT touched by the
+  library work — keep it that way.
 
 ## Chaincode (Go)
 
@@ -163,19 +169,27 @@ Standard — never report it as a clean 1/N of total ledger size.
 - 10-channel Parallel sweep
 - IoT evidence ingestion
 - Chaincode-level smart-contract security auditing tooling
-- Any authentication/authorisation beyond the minimal local-dev setup
-  specified in `docs/ARCHITECTURE.md`
+- ~~Any authentication/authorisation beyond the minimal local-dev setup
+  specified in `docs/ARCHITECTURE.md`~~ — **reopened by the authors for the
+  M12–M16 evidence library** (real login + server-enforced admin/investigator
+  roles incl. per-case access lists; see `docs/ARCHITECTURE.md` §6 and
+  `docs/CONTRACTS.md` §6/§12-7). Still non-production-grade by design; the
+  static `GLEIPNIR_TOKEN` service path is contract-unchanged for the
+  benchmark machinery.
 
 If a task seems to require one of these, stop and ask.
 
 ## Frontend
 
-Two scopes, per `docs/ARCHITECTURE.md`: (a) operator dashboard — variant
-selection, sweep configuration, run start/stop, live status, metric charts,
-run history; (b) CoC demo UI — create evidence, transfer custody, log
-access, per-evidence audit trail with Merkle verification status. Simple
-and usable beats clever. The frontend talks **only** to the API gateway,
-never directly to Fabric.
+A multi-page evidence-library SPA (react-router v6; M14), per
+`docs/ARCHITECTURE.md` §5: login + role-aware navigation; investigator pages
+(ingest with real file upload, my-cases, case detail, evidence detail with
+audit trail + Merkle verification status + download/export, search); admin
+pages (users, case administration, and the operator dashboard — variant
+selection, sweep configuration, run requests, metric charts, run history —
+now admin-gated). The old single-page CoC demo is absorbed into these pages.
+Simple and usable beats clever. The frontend talks **only** to the API
+gateway, never directly to Fabric.
 
 ## When in doubt
 

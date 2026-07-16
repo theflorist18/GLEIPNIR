@@ -182,18 +182,56 @@ lands in the next batch and its receipt PUT overwrites the previous witness
 | receipt-store | **4002** | `PUT /receipts/:eventId`; `GET /receipts/:eventId` (404 if missing) |
 | anchor-client | **4003** | `POST /roots` `{caseId,batchId,merkleRoot,meta}` → `201 {txId}` (submit on `anchor-main`); `GET /roots/:caseId/:batchId` (evaluate on `anchor-main`) |
 | verification | **4004** | `GET /verify/:eventId` → `{ok,reason?,latencyMs,steps:{fetchMs,recomputeMs,compareRootMs}}`; `reason`: `root-mismatch` (200, tamper signal), `missing-receipt`/`missing-anchor-root` (404, not yet anchored), `malformed-receipt` (422 — the un-hardened witness stored junk) |
+| case-registry | **4005** | internal-only (via gateway; `X-Gleipnir-Internal-Token` after `/healthz`): `POST/GET/PATCH /cases[/:caseId]`, `POST/DELETE /cases/:caseId/participants[/:userId]`, `POST/DELETE /cases/:caseId/evidence[/:evidenceId]` (categorize; idempotent same-case, 409 cross-case), `POST/GET/PATCH /evidence-index[/:evidenceId]`, `GET /evidence-index?caseId=&q=&uploadedBy=&type=&from=&to=&visibleToUserId=`, `GET /internal/authz?userId=&evidenceId=` → `{allowed,caseId,roleInCase}` |
+| evidence-store | **4006** | internal-only (via gateway; `X-Gleipnir-Internal-Token` after `/healthz`): `PUT /blobs/:evidenceId` (raw body + `X-Content-Type`/`X-Original-Filename`) → `201 {integrityProof,sizeBytes,storedAt}`, `409` if exists (immutable), `413` over `MAX_UPLOAD_BYTES`; `GET /blobs/:evidenceId` (attachment stream); `GET /blobs/:evidenceId/meta`; `GET /blobs/:evidenceId/verify?expected=<ni-uri>`; `DELETE /blobs/:evidenceId` (ingest-rollback only) |
 | frontend (nginx) | **8081** | serves SPA; `GET /healthz`; proxies `/api/*` → `gateway:3000` |
 
-**Gateway public API** (prefix `/api/v1`, per ARCHITECTURE §6): `POST /evidence`,
+**Gateway public API** (prefix `/api/v1`, per ARCHITECTURE §6): `POST /evidence`
+(JSON body — or `multipart/form-data` for library ingest: blob → evidence-store,
+head committed with the store's proof, evidence-index row registered; the library
+`caseId` never reaches the chain),
 `POST /evidence/:id/transfer`, `POST /evidence/:id/access`, `DELETE /evidence/:id`,
-`GET /evidence/:id`, `GET /evidence/:id/audit`,
+`GET /evidence/:id`, `GET /evidence/:id/audit`, `GET /evidence/:id/download`,
+`GET /evidence/:id/export`,
 `GET /evidence/:id/verify?eventId=<eventId>` (the verify chain is keyed by **event**
 id — receipts are per event; without the query param the gateway falls back to the
 path id, which only matches when callers pass an eventId there),
-`POST /runs`, `GET /runs`, `GET /runs/:id`. Auth: static bearer token
-(`GLEIPNIR_TOKEN`, default `dev-token`) — documented as non-production. The token
-guards **everything after `/healthz`, internal routes included** — so the batcher and
-the verification service both authenticate to the gateway.
+`GET /evidence/search`, `POST/GET/PATCH /cases[/:id]`, `GET /cases/search`,
+`POST/DELETE /cases/:id/participants[/:userId]`,
+`POST/DELETE /cases/:id/evidence[/:evidenceId]`,
+`POST /auth/login|logout`, `GET /auth/me`, `GET/POST /admin/users`,
+`PATCH /admin/users/:id`, `POST /admin/users/:id/reset-password`,
+`POST /runs`, `GET /runs`, `GET /runs/:id`.
+
+**Auth (M12)** — two kinds of principal:
+- **Service token**: static bearer (`GLEIPNIR_TOKEN`, default `dev-token`),
+  documented as non-production. Contract unchanged: it guards **everything after
+  `/healthz`, internal routes included** — the batcher, the verification service,
+  Caliper's REST connector, and the smoke scripts all authenticate with it, and
+  client-supplied `actor`/`identity.subject` fields are honored on this path.
+- **User session**: opaque token from `POST /auth/login` (in-memory server-side,
+  TTL `SESSION_TTL_SECONDS`); roles `admin`|`investigator` enforced server-side.
+  Admin-only: user management, case create/update/roster/categorize, `POST /runs`
+  — the service token is **never** sufficient there. Under a user session the
+  audit actor is **always** the authenticated username; per-evidence reads/writes
+  are authz-gated via case-registry `/internal/authz` (admins bypass); and
+  view/download/export **synchronously** auto-append `AccessLog` events (never
+  for the service token — Caliper reads must not mutate the ledger).
+
+**Library wire shapes (M13, pinned):**
+- **User** `{id, username, displayName, role: admin|investigator, active,
+  createdAt, updatedAt}` — `passwordHash` never leaves the gateway's store; users
+  are deactivated, never deleted. User identity in case-registry payloads is the
+  immutable `username`.
+- **Case** `{id: CASE-<uuid>, name, description, status: OPEN|CLOSED|ARCHIVED,
+  createdBy, createdAt, updatedAt}` + detail `participants[{userId, roleInCase:
+  viewer|contributor, addedBy, addedAt}]` + `evidence[EvidenceIndex]`.
+- **EvidenceIndex** (read-model/cache — the ledger stays authoritative for
+  status/custodian) `{evidenceId, caseId|null, originalFilename, mimeType,
+  sizeBytes, integrityProof, uploadedBy, uploadedAt, status, lastSyncedAt}`.
+- Multipart ingest response: `{evidenceId, eventId, integrityProof, txId|batched}`.
+  Export bundle: `{evidenceId, exportedAt, record, auditTrail}` (trail as of the
+  export moment; the export's own ACCESS event lands after it).
 
 **Session ownership** (resolves the §3-table "only the gateway holds fabric-gateway
 sessions" vs the anchor-client's need to write `anchor-main`): the **gateway** holds the
@@ -211,7 +249,13 @@ Gateway: `PORT=3000`, `GLEIPNIR_TOKEN`, `BATCHER_URL=http://merkle-batcher:4001`
 `VERIFICATION_URL=http://verification:4004`, `PEER_ENDPOINT=peer0-org1:7051`,
 `PEER_HOST_ALIAS=peer0.org1.example.com`, `MSP_ID=Org1MSP`, `CRYPTO_PATH`
 (User1@org1 MSP dir), `TLS_CERT_PATH`, `DEFAULT_CHANNEL=coc-main`, `CC_NAME=evidence`,
-`RESULTS_DIR=/results` (runs-API store; compose binds `benchmark/results`).
+`RESULTS_DIR=/results` (runs-API store; compose binds `benchmark/results`);
+library (M12–M15): `AUTH_DATA_DIR=/data/auth` (users.json; volume
+`gateway-auth-data`), `ADMIN_USERNAME`/`ADMIN_PASSWORD` (first-boot admin seed,
+empty-store only), `SESSION_TTL_SECONDS=28800`, `GLEIPNIR_INTERNAL_TOKEN`
+(shared secret to case-registry/evidence-store),
+`CASE_REGISTRY_URL=http://case-registry:4005`,
+`EVIDENCE_STORE_URL=http://evidence-store:4006`, `MAX_UPLOAD_BYTES=26214400`.
 Batcher: `PORT=4001`, `BATCH_N=100`, `BATCH_K=25`, `BATCH_EPOCH` (optional; namespaces
 batchIds per batcher lifetime — sweep.py sets it per cell, empty ⇒ start-time default),
 `GLEIPNIR_TOKEN` (bearer for the gateway's authed `/internal/anchor-root`),
@@ -223,16 +267,19 @@ Anchor-client: `PORT=4003`, `PEER_ENDPOINT=peer0-anchor:11051`,
 `TLS_CERT_PATH`, `ANCHOR_CHANNEL=anchor-main`, `CC_NAME=evidence`.
 Verification: `PORT=4004`, `RECEIPT_STORE_URL`, `GATEWAY_URL`, `ANCHOR_CLIENT_URL`,
 `GLEIPNIR_TOKEN` (bearer for the gateway's authed root-read endpoint).
+Case-registry: `PORT=4005`, `DATA_DIR=/data`, `GLEIPNIR_INTERNAL_TOKEN`, `LOG_LEVEL`.
+Evidence-store: `PORT=4006`, `DATA_DIR=/data`, `GLEIPNIR_INTERNAL_TOKEN`,
+`MAX_UPLOAD_BYTES=26214400`, `LOG_LEVEL`.
 
 ## 8. Compose: project, profiles, volumes
 
 - Project name `gleipnir`, network `gleipnir-net`. Files per ARCHITECTURE §2:
   `compose-net.yaml` (orderers, peers, ccaas, cli/tools), `compose-ca.yaml` (4 CAs),
   `compose-services.yaml` (gateway, batcher, receipt-store, anchor-client, verification,
-  frontend).
+  case-registry, evidence-store, frontend).
 - Profiles: base (no profile) = orderers, peers org1/org2, ccaas, cli, gateway,
-  frontend, **plus the three always-on CAs** (ca-org1, ca-org2, ca-orderer — only
-  ca-anchor is behind a profile).
+  frontend, case-registry, evidence-store, **plus the three always-on CAs**
+  (ca-org1, ca-org2, ca-orderer — only ca-anchor is behind a profile).
   `anchoring` = + merkle-batcher, receipt-store, verification.
   `parallel-anchored` = + merkle-batcher, receipt-store, verification, anchor-client,
   peer0-anchor, ccaas-evidence-anchor, ca-anchor.
@@ -240,11 +287,16 @@ Verification: `PORT=4004`, `RECEIPT_STORE_URL`, `GATEWAY_URL`, `ANCHOR_CLIENT_UR
 - **Named volumes** (measurement design — never anonymous): `peer0org1-ledger`,
   `peer0org2-ledger`, `peer0anchor-ledger` → `/var/hyperledger/production`;
   `orderer0-ledger`, `orderer1-ledger`, `orderer2-ledger` →
-  `/var/hyperledger/production/orderer`; `receipt-data` → `/data`.
+  `/var/hyperledger/production/orderer`; `receipt-data` → `/data`;
+  library (M16): `gateway-auth-data` → `/data/auth` (gateway),
+  `case-registry-data` → `/data` (case-registry), `evidence-blob-data` → `/data`
+  (evidence-store).
   (Runtime `docker volume` names carry the compose project prefix, e.g.
   `gleipnir_peer0org1-ledger`; measurement tooling probes paths inside containers, so
   the prefix does not affect it.)
-- Node service images: `node:20.19-alpine` (or `-slim`) base; engines field pinned.
+- Node service images: `node:20.19-alpine` base — except case-registry, which is
+  `node:20.19-slim` (glibc for better-sqlite3 prebuilds; §12 item 7); engines
+  field pinned.
 
 ## 9. Variant routing matrix (gateway `variantRouter`)
 
@@ -323,6 +375,7 @@ orchestration/down.sh [--wipe]                       # teardown; --wipe removes 
 orchestration/provision-channel.sh <caseId>          # genesis → osnadmin join(201) → peer join → commit cc → emit benchmark/networks/<caseId>.yaml
 orchestration/teardown-channel.sh <caseId>
 orchestration/smoke-standard.sh                      # REST-path functional gate: create → transfer → access×2 → audit(==4) → remove → transfer-fails
+orchestration/smoke-library.sh                       # library gate (standard variant): login/roles → case+participant → multipart ingest → categorize → search → view/download/export auto-log asserts → authz negatives → trail==4
 orchestration/checkpoint.py <runId> [--label t0]     # du -sb probes via docker exec, appends checkpoints.jsonl
 orchestration/collect.py <runId> [--baseline <id>]   # parse caliper.log round table (after the last "All test results" marker) → manifest metrics + storage deltas
 orchestration/sweep.py --variant <v> [--regime steady|smoke]  # full N/K/channel × repetitions loop (+ RQ2 verify runs per anchoring cell)
@@ -363,6 +416,20 @@ it is one GoLevelDB directory shared by all of a peer's channels).
 6. **AccessLog never writes the head record** (else concurrent access-logging would
    conflict on the head). The head's "counter high-watermark" is realized as
    last-event-sortKey updated only by the serial ops (Create/Transfer/Remove).
+7. **Evidence library (M12–M16) — scope and the two "case" concepts.** The library
+   reopens CLAUDE.md's auth deferral (authorized by the authors: real login +
+   server-enforced roles) and targets **Standard and Anchoring only**; Parallel /
+   Parallel-Anchored keep the benchmark path unchanged. The library **Case** entity
+   is off-chain only (case-registry SQLite; no chaincode or Codex-Entry change) with
+   ids `CASE-<uuid>` — deliberately disjoint from the Parallel variants' channel
+   routing key `caseId = case-NNN` (variantRouter `CASE_RE`), resolving the naming
+   collision structurally: the two can never match, and the library caseId never
+   reaches the chain. Case-registry runs on `node:20.19-slim` (glibc, better-sqlite3
+   prebuilds) as a documented deviation from the alpine convention. User identity in
+   case payloads is the immutable username; users are deactivated, never deleted, so
+   on-chain actors keep resolving. The evidence-store's blobs are immutable
+   (exclusive-create), and the receipt store remains deliberately un-hardened — the
+   library adds no integrity guarantees the design is supposed to measure.
 
 Anything else that seems to require deviating from ARCHITECTURE.md or CLAUDE.md: STOP
 and ask the authors (per CLAUDE.md ground rule 2).

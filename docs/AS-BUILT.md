@@ -1,7 +1,9 @@
 # GLEIPNIR — As-Built Architecture
 
 **Status:** describes the system as implemented and live-verified at commit
-`8bb4c4e` (2026-07-10). This document is descriptive, not normative.
+`8bb4c4e` (2026-07-10), **updated 2026-07-16 for the M12–M16 evidence
+library** (gateway auth & roles, case-registry, evidence-store, multi-page
+frontend). This document is descriptive, not normative.
 
 | Document | Role |
 |---|---|
@@ -30,11 +32,13 @@ flowchart LR
 
     subgraph offchain["Off-chain services (Docker, gleipnir-net)"]
         FE["frontend :8081<br/>(nginx + React SPA)"]
-        GW["gateway :3000<br/>(BFF, fabric-gateway)"]
+        GW["gateway :3000<br/>(BFF, fabric-gateway,<br/>auth/users/sessions)"]
         MB["merkle-batcher :4001"]
         RS["receipt-store :4002"]
         VS["verification :4004"]
         AC["anchor-client :4003<br/>(fabric-gateway)"]
+        CR["case-registry :4005<br/>(SQLite: cases + evidence index)"]
+        ES["evidence-store :4006<br/>(immutable blobs + ni-URI)"]
     end
 
     subgraph fabric["Fabric 2.5.15 (Docker, gleipnir-net)"]
@@ -53,6 +57,8 @@ flowchart LR
     GW -->|"coc-main / case-NNN"| P1
     GW --> MB
     GW --> VS
+    GW -->|"X-Gleipnir-Internal-Token"| CR
+    GW -->|"X-Gleipnir-Internal-Token"| ES
     MB --> RS
     MB -->|"anchoring"| GW
     MB -->|"parallel-anchored"| AC
@@ -85,11 +91,13 @@ on-chain or are Merkle-anchored.
 | Hyperledger Fabric CA | **1.5.19** | `.env` `CA_TAG` |
 | Hyperledger Caliper CLI | **0.6.0** (exact) | `benchmark/package.json` |
 | Caliper SUT binding | `fabric:fabric-gateway` → `@hyperledger/fabric-gateway ^1.5.0`, `@grpc/grpc-js ^1.10.3` | `benchmark/package.json` + lockfile (recorded in `benchmark/README.md`) |
-| Node.js (services runtime) | **20.19** | `node:20.19-alpine` in all six service Dockerfiles |
+| Node.js (services runtime) | **20.19** | `node:20.19-alpine` in seven service Dockerfiles; `node:20.19-slim` for case-registry (glibc for better-sqlite3 prebuilds — CONTRACTS §12-7) |
+| Gateway extras (M13c) | `multer ^2` (multipart ingest) | `gateway/package.json` |
+| Case-registry datastore | `better-sqlite3 ^12.4.1` | `services/case-registry/package.json` |
 | Go (chaincode) | **1.25.5** toolchain (`go 1.25` language) | `golang:1.25.5` in `chaincode/evidence/Dockerfile`; `go.mod` |
 | Client SDK (gateway, anchor-client) | `@hyperledger/fabric-gateway` **1.11.0** (exact), `@grpc/grpc-js ^1.14.0` | respective `package.json` |
 | World state | **GoLevelDB** (CouchDB excluded by design) | `network/core.yaml` |
-| Frontend | React ^18.3.1, Vite ^5.4.11, TypeScript ~5.6.3, recharts ^2.13.3 | `frontend/package.json` |
+| Frontend | React ^18.3.1, react-router-dom ^6, Vite ^5.4.11, TypeScript ~5.6.3, recharts ^2.13.3 | `frontend/package.json` |
 | Orchestration | Python 3.10+, PyYAML ≥6.0 | `orchestration/requirements.txt` |
 
 Two `@hyperledger/fabric-gateway` versions coexist deliberately: the
@@ -106,8 +114,13 @@ per CONTRACTS §8):
 | Container | standard | anchoring | parallel | parallel-anchored |
 |---|:-:|:-:|:-:|:-:|
 | orderers ×3, peer0-org1/org2, ccaas-evidence, cli, gateway, frontend, ca-org1/org2/orderer | ✔ | ✔ | ✔ | ✔ |
+| case-registry, evidence-store (evidence library, M13) | ✔ | ✔ | ✔ | ✔ |
 | merkle-batcher, receipt-store, verification | | ✔ | | ✔ |
 | peer0-anchor, ca-anchor, ccaas-evidence-anchor, anchor-client | | | | ✔ |
+
+The library **UI flows** target Standard + Anchoring only (CONTRACTS §12-7);
+the two library containers run in the base profile everywhere so the compose
+topology stays variant-invariant.
 
 Channels: `coc-main` (standard, anchoring), `case-001…case-00N` (parallel
 variants, one per case), `anchor-main` (the **anchor channel**,
@@ -244,29 +257,43 @@ sequenceDiagram
 
 - **Responsibility:** holds the only fabric-gateway sessions to the
   application channels; computes evidence `integrity_proof` ni-URIs;
-  encapsulates all variant routing (CONTRACTS §9). The frontend and the
+  encapsulates all variant routing (CONTRACTS §9); and (M12) authenticates
+  two kinds of principal — the unchanged static `GLEIPNIR_TOKEN` service
+  path, and user sessions with server-enforced roles. The frontend and the
   Caliper REST connector talk only to this service.
-- **Routes** (`src/app.js`; bearer `GLEIPNIR_TOKEN` except `/healthz`):
+- **Routes** (`src/app.js`; auth per CONTRACTS §6 — service token or session,
+  except `/healthz` and `/auth/login`):
 
 | Route | Behavior |
 |---|---|
-| `POST /api/v1/evidence` | `CreateEvidence` submit, or batcher enqueue (anchoring variants) |
-| `POST /api/v1/evidence/:id/transfer` | `TransferCustody` or enqueue |
-| `POST /api/v1/evidence/:id/access` | `AccessLog` or enqueue |
-| `DELETE /api/v1/evidence/:id` | `RemoveEvidence` or enqueue |
-| `GET /api/v1/evidence/:id` | `ReadEvidence` (evaluate) |
-| `GET /api/v1/evidence/:id/audit` | `GetAuditTrail` (evaluate) |
+| `POST /api/v1/auth/login`, `POST /auth/logout`, `GET /auth/me` | session lifecycle (M12); users in `AUTH_DATA_DIR/users.json`, scrypt hashes |
+| `GET/POST /api/v1/admin/users`, `PATCH /admin/users/:id`, `POST …/reset-password` | user management — admin session only |
+| `POST /api/v1/evidence` | `CreateEvidence` submit, or batcher enqueue (anchoring variants); multipart (M13c) → evidence-store blob + head with store proof + evidence-index row (library caseId never on-chain) |
+| `POST /api/v1/evidence/:id/transfer` | `TransferCustody` or enqueue; user sessions: case-role gated |
+| `POST /api/v1/evidence/:id/access` | `AccessLog` or enqueue; user sessions: case-role gated |
+| `DELETE /api/v1/evidence/:id` | `RemoveEvidence` or enqueue; best-effort index status sync |
+| `GET /api/v1/evidence/:id` | `ReadEvidence` (evaluate); user sessions: authz + synchronous auto-`AccessLog(view)` |
+| `GET /api/v1/evidence/:id/download` | stream from evidence-store; auto-`AccessLog(download)` |
+| `GET /api/v1/evidence/:id/export` | `{record, auditTrail}` bundle; auto-`AccessLog(export)` |
+| `GET /api/v1/evidence/:id/audit` | `GetAuditTrail` (evaluate); authz-gated, never auto-logged |
 | `GET /api/v1/evidence/:id/verify?eventId=` | proxy → verification `/verify/:eventId` |
-| `POST/GET /api/v1/runs`, `GET /api/v1/runs/:id` | run-request store (dashboard) |
+| `GET /api/v1/evidence/search`, `GET /api/v1/cases/search` | case-registry search, participant-scoped unless admin |
+| `POST/GET/PATCH /api/v1/cases[/:id]` + participants + evidence | case-registry proxy; management admin-only |
+| `POST/GET /api/v1/runs`, `GET /api/v1/runs/:id` | run-request store (dashboard); `POST` admin-session-only |
 | `POST /internal/anchor-root` | submit `CommitAnchorRoot` on `coc-main` (anchoring) |
 | `GET /internal/anchor-root/:scopeId/:batchId` | evaluate `ReadAnchorRoot` on `coc-main` |
 | `GET /healthz` | `{ok:true, variant}` (unauthenticated) |
 
 - **Dependencies:** `@grpc/grpc-js ^1.14.0`, `@hyperledger/fabric-gateway
-  1.11.0`, `express ^4.21.2`.
-- **Does not:** store binaries (`payloadBase64` is hashed then discarded),
-  build or verify Merkle trees, write the anchor channel, or execute
-  benchmark runs (`POST /runs` records a request; execution is host-side).
+  1.11.0`, `express ^4.21.2`, `multer ^2` (M13c).
+- **Actor attribution (M12):** under a user session the audit actor is always
+  the authenticated username; the service-token path keeps client-supplied
+  actors (Caliper realism). Auto-AccessLog never fires for the service token.
+- **Does not:** persist binaries itself (multipart bytes go to
+  evidence-store; the JSON path's `payloadBase64` is hashed then discarded,
+  unchanged), build or verify Merkle trees, write the anchor channel, write
+  the library caseId on-chain, or execute benchmark runs (`POST /runs`
+  records a request; execution is host-side).
 
 ### 4.3 `services/merkle-batcher` — port 4001
 
@@ -326,20 +353,53 @@ sequenceDiagram
 - **Does not:** build Merkle trees, touch application channels, store
   receipts.
 
-### 4.7 `frontend/` — SPA behind nginx, port 8081
+### 4.7 `services/case-registry` — port 4005 (evidence library, M13a)
 
-- **Responsibility:** two UI scopes in one React 18 + Vite + TypeScript app:
-  **(a)** operator dashboard — variant selector, sweep configuration, run
-  start/stop + history, throughput/latency/storage charts (recharts);
-  **(b)** CoC demo — create evidence, transfer custody, log access,
-  per-evidence audit trail with per-event Merkle verification badge
-  (VERIFIED / MISMATCH / not-yet-anchored / N-A).
-- **Network path:** a single `GatewayClient` (`src/api.ts`) with base
-  `/api/v1`; nginx proxies `location /api/` to `http://gateway:3000`. The
+- **Responsibility:** the OFF-CHAIN case layer — Case entity (name/status/
+  participant roster) + the evidence search read-model (`evidence_index`) +
+  the gateway's per-evidence authz pre-flight (`GET /internal/authz`).
+  Case ids `CASE-<uuid>` are structurally disjoint from the Parallel channel
+  key `case-NNN`; the library caseId never reaches the chain.
+- **Routes:** cases CRUD + participants + categorize/uncategorize;
+  evidence-index register/read/sync/search (`visibleToUserId` scoping =
+  participant cases + own uncategorized uploads); all behind
+  `X-Gleipnir-Internal-Token` (internal-only, via gateway).
+- **Datastore:** `better-sqlite3 ^12.4.1` at `DATA_DIR/case-registry.db`
+  (volume `case-registry-data`); image `node:20.19-slim` — the documented
+  glibc deviation (CONTRACTS §12-7).
+- **Does not:** authenticate end users, store blobs, touch Fabric.
+  `evidence_index` is a cache — the ledger stays authoritative for
+  status/custodian.
+
+### 4.8 `services/evidence-store` — port 4006 (evidence library, M13b)
+
+- **Responsibility:** persist evidence BINARIES off-chain (the all-variant
+  invariant) and compute the RFC 6920 ni-URI proof the ledger records;
+  `niUri()` copied byte-identically from `gateway/src/ni.js`.
+- **Routes:** `PUT/GET/DELETE /blobs/:evidenceId`, `GET …/meta`,
+  `GET …/verify?expected=`; blobs are **immutable** (exclusive-create; second
+  PUT → 409); `DELETE` exists solely for the gateway's ingest-failure
+  rollback. Internal-only via `X-Gleipnir-Internal-Token`.
+- **Datastore:** filesystem — `DATA_DIR/<id>` blob + `<id>.meta.json` sidecar
+  (volume `evidence-blob-data`). Dependencies: `express ^4.21.2` only.
+- **Does not:** index or search (case-registry's job), mutate stored bytes,
+  write on-chain.
+
+### 4.9 `frontend/` — SPA behind nginx, port 8081
+
+- **Responsibility (M14):** the multi-page evidence-library app — login +
+  role-aware nav (`auth/`), investigator pages (ingest with real file upload,
+  my-cases, case detail, evidence detail with audit trail + per-event Merkle
+  badge + download/export, search), admin pages (users, case admin, and the
+  operator dashboard: variant selector, sweep configuration, run
+  requests/history, throughput/latency/storage charts — recharts).
+- **Network path:** a single `GatewayClient` (`src/api.ts`, owned by
+  `AuthContext`) with base `/api/v1`; nginx proxies `location /api/` to
+  `http://gateway:3000` and `try_files` keeps deep links refresh-safe. The
   frontend never contacts Fabric or the off-chain services directly.
 - **Runtime dependencies:** `react ^18.3.1`, `react-dom ^18.3.1`,
-  `recharts ^2.13.3`; built with `vite ^5.4.11` / `typescript ~5.6.3` into a
-  static bundle served by `nginx:alpine`.
+  `react-router-dom ^6`, `recharts ^2.13.3`; built with `vite ^5.4.11` /
+  `typescript ~5.6.3` into a static bundle served by `nginx:alpine`.
 
 ## 5. Fabric network topology
 
@@ -509,13 +569,15 @@ These are experimental controls; each was audited as an invariant:
 Gleipnir/
 ├── CLAUDE.md                 # build rulebook (invariants, pins, bans)
 ├── chaincode/evidence/       # Go ccaas contract + Dockerfile
-├── gateway/                  # BFF service (Node 20, express, fabric-gateway)
+├── gateway/                  # BFF service (Node 20, express, fabric-gateway, auth/users/sessions)
 ├── services/
 │   ├── merkle-batcher/       # batching + Merkle tree construction
 │   ├── receipt-store/        # off-chain witness store (deliberately un-hardened)
 │   ├── verification/         # RQ2 timed verification path
-│   └── anchor-client/        # sole writer of the anchor channel
-├── frontend/                 # React SPA (dashboard + CoC demo) behind nginx
+│   ├── anchor-client/        # sole writer of the anchor channel
+│   ├── case-registry/        # M13a: off-chain Case entity + evidence read-model (SQLite, node:20.19-slim)
+│   └── evidence-store/       # M13b: immutable evidence blobs + ni-URI proofs
+├── frontend/                 # React SPA (evidence library + admin dashboard) behind nginx
 ├── network/
 │   ├── compose/              # compose-net/-ca/-services.yaml + .env (pins)
 │   ├── configtx/             # AppChannel + AnchorChannel profiles

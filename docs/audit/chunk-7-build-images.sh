@@ -21,7 +21,9 @@ trap 'rm -rf "${WORK}"' EXIT
 mkdir -p "${WORK}/certs" "${WORK}/df"
 cp "${CA_BUNDLE}" "${WORK}/certs/gleipnir-ca-bundle.crt"
 
-gen_node() { # node:20.19-alpine images — CA after first WORKDIR
+gen_node() { # node:20.19 images (alpine or slim) — CA after first WORKDIR.
+  # NODE_EXTRA_CA_CERTS also covers better-sqlite3's prebuild-install download
+  # in the case-registry build (it runs under node/npm).
   awk '{print} !d && /^WORKDIR/ {print "COPY --from=certs gleipnir-ca-bundle.crt /etc/gleipnir-ca.crt"; print "ENV NODE_EXTRA_CA_CERTS=/etc/gleipnir-ca.crt"; d=1}' "$1"
 }
 gen_go() {   # golang:1.25.5 build stage — CA into the debian trust store
@@ -34,6 +36,8 @@ gen_node "${REPO}/services/merkle-batcher/Dockerfile" > "${WORK}/df/merkle-batch
 gen_node "${REPO}/services/receipt-store/Dockerfile"  > "${WORK}/df/receipt-store.Dockerfile"
 gen_node "${REPO}/services/verification/Dockerfile"   > "${WORK}/df/verification.Dockerfile"
 gen_node "${REPO}/services/anchor-client/Dockerfile"  > "${WORK}/df/anchor-client.Dockerfile"
+gen_node "${REPO}/services/case-registry/Dockerfile"  > "${WORK}/df/case-registry.Dockerfile"
+gen_node "${REPO}/services/evidence-store/Dockerfile" > "${WORK}/df/evidence-store.Dockerfile"
 gen_go   "${REPO}/chaincode/evidence/Dockerfile"      > "${WORK}/df/ccaas-evidence.Dockerfile"
 
 build() { # $1 tag, $2 dockerfile, $3 context
@@ -50,4 +54,6 @@ build gleipnir-merkle-batcher "${WORK}/df/merkle-batcher.Dockerfile" "${REPO}/se
 build gleipnir-receipt-store  "${WORK}/df/receipt-store.Dockerfile"  "${REPO}/services/receipt-store"
 build gleipnir-verification   "${WORK}/df/verification.Dockerfile"   "${REPO}/services/verification"
 build gleipnir-anchor-client  "${WORK}/df/anchor-client.Dockerfile"  "${REPO}/services/anchor-client"
+build gleipnir-case-registry  "${WORK}/df/case-registry.Dockerfile"  "${REPO}/services/case-registry"
+build gleipnir-evidence-store "${WORK}/df/evidence-store.Dockerfile" "${REPO}/services/evidence-store"
 echo "ALL-IMAGES-BUILT"
