@@ -161,3 +161,49 @@ a:hover { text-decoration: underline; }
 .plain-list { list-style: none; margin: 0 0 10px; padding: 0; }
 .plain-list li { display: flex; gap: 10px; align-items: center; padding: 5px 0; border-bottom: 1px solid var(--line); }
 .plain-list li > :first-child { flex: 1; }
+
+/* ---- M21 UI kit: tabs, stepper, modal, timeline, badge tones ---- */
+.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin-bottom: 12px; }
+.tab { background: transparent; color: var(--muted); border: none; border-bottom: 2px solid transparent; border-radius: 0; padding: 8px 14px; cursor: pointer; font-size: 13px; }
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--text); border-bottom-color: var(--accent); }
+
+.stepper { list-style: none; display: flex; margin: 0 0 16px; padding: 0; }
+.step { display: flex; align-items: center; gap: 8px; flex: 1; color: var(--muted); font-size: 12px; }
+.step + .step::before { content: ''; flex: 1; height: 1px; background: var(--line); margin: 0 8px; }
+.step-dot { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); flex: none; }
+.step.active { color: var(--text); }
+.step.active .step-dot { border-color: var(--accent); color: var(--accent); }
+.step.done .step-dot { border-color: var(--ok); color: var(--ok); }
+.step-label { white-space: nowrap; }
+
+.modal-overlay { position: fixed; inset: 0; background: rgba(4, 8, 12, 0.65); display: flex; align-items: flex-start; justify-content: center; padding: 10vh 16px 16px; z-index: 40; }
+.modal { width: 100%; max-width: 460px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5); }
+.modal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.modal-head h3 { margin: 0; }
+
+.timeline { list-style: none; margin: 0; padding: 0; }
+.tl-item { display: flex; gap: 12px; position: relative; padding: 0 0 14px 0; }
+.tl-item:not(:last-child)::before { content: ''; position: absolute; left: 11px; top: 24px; bottom: 0; width: 1px; background: var(--line); }
+.tl-dot { display: inline-flex; align-items: center; justify-content: center; width: 23px; height: 23px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); font-size: 11px; flex: none; }
+.tl-content { min-width: 0; flex: 1; }
+.tl-row { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.tone-accent { color: var(--accent); border-color: var(--accent); }
+.tone-ok { color: var(--ok); border-color: var(--ok); }
+.tone-warn { color: #c9a227; border-color: #c9a227; }
+.tone-danger { color: var(--bad); border-color: var(--bad); }
+.tone-muted { color: var(--muted); border-color: var(--line); }
+.badge.tone-accent { background: rgba(79, 134, 198, 0.15); border: 1px solid var(--accent); }
+.badge.tone-ok { background: rgba(76, 175, 80, 0.15); border: 1px solid var(--ok); }
+.badge.tone-warn { background: rgba(201, 162, 39, 0.15); border: 1px solid #c9a227; }
+.badge.tone-danger { background: rgba(224, 93, 68, 0.15); border: 1px solid var(--bad); }
+.badge.tone-muted { border: 1px solid var(--line); }
+
+/* Print reset (M21, used by the M24 CoC report): light page, hide chrome. */
+@media print {
+  :root { --bg: #ffffff; --panel: #ffffff; --card: #ffffff; --line: #999; --text: #111; --muted: #444; }
+  body { background: #fff; color: #111; }
+  .no-print, .topbar, .sidebar, .foot, button { display: none !important; }
+  .card { border-color: #999; break-inside: avoid; }
+}
+.kv-line { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }

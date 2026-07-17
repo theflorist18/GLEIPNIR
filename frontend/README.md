@@ -15,7 +15,14 @@ only).
   owner, 401 → drop session), `LoginPage`, `RequireAuth`, `RequireRole`.
 - `src/components/` — `EvidenceCard`, `AuditTrail`, `MerkleBadge`,
   `SessionTrail` (promoted verbatim from the old `demo.tsx`),
+  `AuditTrailTimeline` (M21: the CoC trail as a vertical timeline),
   `Layout/TopBar` + `Layout/Sidebar` (role-aware nav).
+- `src/components/ui/` — the M21 in-repo primitive kit: `Tabs`, `Stepper`,
+  `Modal`, `Timeline`, `Badge`. Deliberately NO component library — styled on
+  the existing `styles.css` tokens, covered by vitest + Testing Library
+  (`npm test`, jsdom).
+- `src/roles.ts` — display labels for the 3-tier roles and case roles (M18);
+  pages never hardcode role strings.
 - `src/pages/investigator/` — `IngestPage` (real file upload → multipart
   `POST /evidence`; bytes go to the evidence-store, the ledger records the
   ni-URI proof), `MyCasesPage`, `CaseDetailPage` (metadata + evidence roster),
