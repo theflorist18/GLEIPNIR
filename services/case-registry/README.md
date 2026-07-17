@@ -28,7 +28,7 @@ so the runtime image stays lean). Same Node version pin, different libc.
 | `GET` | `/cases?participant=&status=&q=` | list; `participant` scopes to that user's cases |
 | `GET` | `/cases/:caseId` | case + `participants[]` + `evidence[]` roster; `404` |
 | `PATCH` | `/cases/:caseId` | update name/description/status (`OPEN\|CLOSED\|ARCHIVED`) |
-| `POST` | `/cases/:caseId/participants` | grant `{userId, roleInCase: viewer\|contributor}`; `409` dup |
+| `POST` | `/cases/:caseId/participants` | grant `{userId, roleInCase: viewer\|contributor\|lead}` (M18); `409` dup |
 | `DELETE` | `/cases/:caseId/participants/:userId` | revoke; `404` |
 | `POST` | `/cases/:caseId/evidence` | categorize `{evidenceId}`; idempotent same-case; `409` cross-case |
 | `DELETE` | `/cases/:caseId/evidence/:evidenceId` | uncategorize (`case_id -> NULL`) |

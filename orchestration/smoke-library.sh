@@ -122,4 +122,31 @@ TRAIL="$(curl -fsS "${AUTH_IVY[@]}" "${GATEWAY}/api/v1/evidence/${EV}/audit")"
 [ "$(echo "${TRAIL}" | jq '[.[] | select(.op=="CREATE")] | length')" = "1" ] || fail "expected exactly 1 CREATE"
 [ "$(echo "${TRAIL}" | jq '[.[] | select(.op=="ACCESS")] | length')" = "3" ] || fail "expected exactly 3 ACCESS"
 
-echo "[smoke-library] PASS — login/roles, case scoping, multipart ingest, search, and the synchronous auto-AccessLog all behave correctly"
+echo "[smoke-library] 12) M18: lead creates + owns a case; investigator cannot create"
+LENA="lena-${TS}"
+curl -fsS "${AUTH_ADMIN[@]}" -X POST "${GATEWAY}/api/v1/admin/users" \
+  -d "{\"username\":\"${LENA}\",\"password\":\"lena-pw\",\"role\":\"lead\"}" >/dev/null
+LENA_TOKEN="$(login "${LENA}" "lena-pw")"; [ -n "${LENA_TOKEN}" ] || fail "lead login"
+AUTH_LENA=(-H "authorization: Bearer ${LENA_TOKEN}" -H "content-type: application/json")
+LEAD_CASE_ID="$(curl -fsS "${AUTH_LENA[@]}" -X POST "${GATEWAY}/api/v1/cases" \
+  -d "{\"name\":\"lead-case-${TS}\"}" | jq -r '.id')"
+case "${LEAD_CASE_ID}" in CASE-*) ;; *) fail "lead case create: '${LEAD_CASE_ID}'" ;; esac
+MY_ROLE="$(curl -fsS "${AUTH_LENA[@]}" "${GATEWAY}/api/v1/cases/${LEAD_CASE_ID}" \
+  | jq -r --arg u "${LENA}" '.participants[] | select(.userId == $u) | .roleInCase')"
+[ "${MY_ROLE}" = "lead" ] || fail "lead creator roleInCase '${MY_ROLE}' != lead"
+[ "$(code_of "${IVY_TOKEN}" POST "${GATEWAY}/api/v1/cases" '{"name":"nope"}')" = "403" ] \
+  || fail "investigator case create not 403"
+
+echo "[smoke-library] 13) M18: lead manages their roster; only their own"
+curl -fsS "${AUTH_LENA[@]}" -X POST "${GATEWAY}/api/v1/cases/${LEAD_CASE_ID}/participants" \
+  -d "{\"userId\":\"${IVY}\",\"roleInCase\":\"contributor\"}" >/dev/null
+[ "$(code_of "${LENA_TOKEN}" POST "${GATEWAY}/api/v1/cases/${CASE_ID}/participants" \
+  "{\"userId\":\"${MALLORY}\"}")" = "404" ] || fail "lead touching a foreign roster not 404"
+
+echo "[smoke-library] 14) M18: admin reads metadata/trails but not blob content off-case"
+[ "$(code_of "${ADMIN_TOKEN}" GET "${GATEWAY}/api/v1/evidence/${EV}")" = "200" ] || fail "admin view not 200"
+[ "$(code_of "${ADMIN_TOKEN}" GET "${GATEWAY}/api/v1/evidence/${EV}/audit")" = "200" ] || fail "admin audit not 200"
+[ "$(code_of "${ADMIN_TOKEN}" GET "${GATEWAY}/api/v1/evidence/${EV}/download")" = "403" ] \
+  || fail "admin download of a non-participant case not 403"
+
+echo "[smoke-library] PASS — login/3-tier roles, case scoping, lead-owned cases, multipart ingest, search, the admin content restriction, and the synchronous auto-AccessLog all behave correctly"

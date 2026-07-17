@@ -46,9 +46,9 @@ export function App() {
         <Route path="/cases/:caseId" element={<CaseDetailPage />} />
         <Route path="/evidence/:evidenceId" element={<EvidenceDetailPage />} />
         <Route path="/search" element={<SearchPage />} />
-        <Route path="/admin/users" element={<RequireRole role="admin"><UsersPage /></RequireRole>} />
-        <Route path="/admin/cases" element={<RequireRole role="admin"><CasesAdminPage /></RequireRole>} />
-        <Route path="/admin/dashboard" element={<RequireRole role="admin"><DashboardPage /></RequireRole>} />
+        <Route path="/admin/users" element={<RequireRole roles={['admin']}><UsersPage /></RequireRole>} />
+        <Route path="/admin/cases" element={<RequireRole roles={['admin']}><CasesAdminPage /></RequireRole>} />
+        <Route path="/admin/dashboard" element={<RequireRole roles={['admin']}><DashboardPage /></RequireRole>} />
         <Route path="/unauthorized" element={<UnauthorizedPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Route>

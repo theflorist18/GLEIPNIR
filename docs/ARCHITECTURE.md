@@ -337,7 +337,9 @@ The static `GLEIPNIR_TOKEN` service path is contract-unchanged (guards everythin
 after `/healthz`, internal routes included; client-supplied actors honored —
 Caliper/batcher/verification/smoke all use it). User sessions come from
 `POST /auth/login` (opaque token, scrypt-hashed users in `AUTH_DATA_DIR`, roles
-`admin`|`investigator` enforced server-side, first admin seeded from
+`admin`|`lead`|`investigator` enforced server-side since M18 — leads create and
+manage their own cases, admins lose blob-content access off their cases
+(CONTRACTS §12-8) — first admin seeded from
 `ADMIN_USERNAME`/`ADMIN_PASSWORD`). Under a user session the audit actor is always
 the authenticated username; per-evidence access is pre-flighted against
 case-registry `/internal/authz`; view/download/export auto-append `AccessLog`
@@ -451,6 +453,7 @@ sequenceDiagram
 | 15 | Search & access-log completeness | Participant-scoped search correct; every view/download/export appends exactly one `AccessLog` event (synchronously) |
 | 16 | Docs & closeout | `orchestration/smoke-library.sh` passes against `up.sh --variant standard`; CLAUDE.md / ARCHITECTURE / CONTRACTS / AS-BUILT cross-consistent |
 | 17 | User `name` rename (library) | `displayName` → `name` across store/API/SPA (CONTRACTS §12-8); a pre-M17 `users.json` upgrades in place on boot and login still works; gateway tests + `smoke-library.sh` pass |
+| 18 | 3-tier RBAC (library) | `lead` role lands (user + case level, CONTRACTS §12-8): a lead creates a case and manages its roster; an investigator cannot create; a pre-M18 `case-registry.db` rebuilds its CHECK in place; admin `GET .../download` off-case → 403 while view/audit/export stay 200; `smoke-library.sh` steps 12–14 pass |
 
 ---
 

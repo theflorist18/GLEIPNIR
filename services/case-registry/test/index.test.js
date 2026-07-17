@@ -223,3 +223,66 @@ test('data persists across reopen from the same dataDir', async (t) => {
   assert.equal((await json(await call(url, 'GET', '/cases'))).length, 1);
   assert.equal((await json(await call(url, 'GET', '/evidence-index/ev-durable'))).evidenceId, 'ev-durable');
 });
+
+test('M18: pre-M18 case_participants table (two-role CHECK) is rebuilt in place, keeping rows', async (t) => {
+  const Database = require('better-sqlite3');
+  const dir = tmpDataDir();
+
+  // Hand-create a database with the M13-era DDL (no 'lead' in the CHECK).
+  {
+    const db = new Database(path.join(dir, 'case-registry.db'));
+    db.exec(`
+      CREATE TABLE cases (
+        id          TEXT PRIMARY KEY,
+        name        TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        status      TEXT NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN','CLOSED','ARCHIVED')),
+        created_by  TEXT NOT NULL,
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+      );
+      CREATE TABLE case_participants (
+        case_id      TEXT NOT NULL REFERENCES cases(id),
+        user_id      TEXT NOT NULL,
+        role_in_case TEXT NOT NULL DEFAULT 'viewer' CHECK (role_in_case IN ('viewer','contributor')),
+        added_by     TEXT NOT NULL,
+        added_at     TEXT NOT NULL,
+        PRIMARY KEY (case_id, user_id)
+      );
+      CREATE INDEX idx_participants_user ON case_participants(user_id);
+      INSERT INTO cases VALUES ('CASE-legacy', 'old case', '', 'OPEN', 'root', '2026-07-01T00:00:00Z', '2026-07-01T00:00:00Z');
+      INSERT INTO case_participants VALUES ('CASE-legacy', 'ivy', 'viewer', 'root', '2026-07-01T00:00:00Z');
+    `);
+    db.close();
+  }
+
+  const url = await start(t, dir);
+  // Legacy row survived the rebuild...
+  const detail = await json(await call(url, 'GET', '/cases/CASE-legacy'));
+  assert.deepEqual(detail.participants.map((p) => [p.userId, p.roleInCase]), [['ivy', 'viewer']]);
+  // ...and the rebuilt CHECK admits 'lead'.
+  const granted = await call(url, 'POST', '/cases/CASE-legacy/participants', { userId: 'lena', roleInCase: 'lead', addedBy: 'root' });
+  assert.equal(granted.status, 201);
+
+  // Idempotence: a second boot from the same dir must not touch the table.
+  const url2 = await start(t, dir);
+  const again = await json(await call(url2, 'GET', '/cases/CASE-legacy'));
+  assert.equal(again.participants.length, 2);
+});
+
+test('M18: participant-scoped case listings carry myRoleInCase; unscoped listings do not', async (t) => {
+  const url = await start(t);
+  const c = await makeCase(url);
+  await call(url, 'POST', `/cases/${c.id}/participants`, { userId: 'lena', roleInCase: 'lead', addedBy: 'root' });
+
+  const scoped = await json(await call(url, 'GET', '/cases?participant=lena'));
+  assert.equal(scoped.length, 1);
+  assert.equal(scoped[0].myRoleInCase, 'lead');
+
+  const unscoped = await json(await call(url, 'GET', '/cases'));
+  assert.equal(unscoped[0].myRoleInCase, undefined);
+
+  // roleInCase validation now includes lead; junk is still rejected.
+  const bad = await call(url, 'POST', `/cases/${c.id}/participants`, { userId: 'x', roleInCase: 'boss' });
+  assert.equal(bad.status, 400);
+});

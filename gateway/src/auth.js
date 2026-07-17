@@ -45,10 +45,11 @@ function makeAuth({ token, sessions, users }) {
     return res.status(403).json({ error: 'user session required' });
   }
 
-  function requireRole(role) {
+  function requireRole(...roles) {
     return (req, res, next) => {
-      if (req.principal && req.principal.kind === 'user' && req.principal.role === role) return next();
-      return res.status(403).json({ error: `${role} role required` });
+      if (req.principal && req.principal.kind === 'user' && roles.includes(req.principal.role)) return next();
+      const label = roles.length === 1 ? `${roles[0]} role required` : `one of [${roles.join(', ')}] roles required`;
+      return res.status(403).json({ error: label });
     };
   }
 

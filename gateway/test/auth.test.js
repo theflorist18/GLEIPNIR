@@ -310,6 +310,33 @@ test('users store persists across reopen from the same dir', async () => {
   assert.equal(b.seedAdmin({ username: 'other', password: 'x' }), null);
 });
 
+test('M18: lead is a valid user role, but admin routes stay admin-only', async (t) => {
+  const { deps } = fakeDeps();
+  const { server, url } = await listen(createApp(deps));
+  t.after(() => server.close());
+
+  const admin = (await login(url, 'root', 'root-pw')).body.token;
+  const created = await fetch(`${url}/api/v1/admin/users`, {
+    method: 'POST', headers: asUser(admin), body: JSON.stringify({ username: 'lena', password: 'pw', role: 'lead' }),
+  });
+  assert.equal(created.status, 201);
+  assert.equal((await created.json()).role, 'lead');
+
+  // Leads sign in like anyone else but are NOT admins: user management 403s.
+  const lena = (await login(url, 'lena', 'pw')).body.token;
+  const denied = await fetch(`${url}/api/v1/admin/users`, {
+    method: 'POST', headers: asUser(lena), body: JSON.stringify({ username: 'x', password: 'x' }),
+  });
+  assert.equal(denied.status, 403);
+  assert.equal((await fetch(`${url}/api/v1/runs`, { method: 'POST', headers: asUser(lena), body: JSON.stringify({ variant: 'standard' }) })).status, 403);
+
+  // Unknown roles are still rejected.
+  const junk = await fetch(`${url}/api/v1/admin/users`, {
+    method: 'POST', headers: asUser(admin), body: JSON.stringify({ username: 'y', password: 'y', role: 'boss' }),
+  });
+  assert.equal(junk.status, 400);
+});
+
 test('M17 upgrade: a pre-rename users.json (displayName) is migrated to name in place, once', async () => {
   const dir = tmpAuthDir();
   const legacy = [{

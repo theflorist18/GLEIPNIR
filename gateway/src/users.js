@@ -13,7 +13,9 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 
 const USERNAME_RE = /^[A-Za-z0-9._-]{1,64}$/;
-const ROLES = ['admin', 'investigator'];
+// M18 (CONTRACTS §12-8): 3-tier RBAC. 'lead' sits between admin and
+// investigator — leads may create cases and manage the cases they lead.
+const ROLES = ['admin', 'lead', 'investigator'];
 
 class UserError extends Error {
   constructor(status, message) {

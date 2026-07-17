@@ -210,27 +210,38 @@ path id, which only matches when callers pass an eventId there),
   Caliper's REST connector, and the smoke scripts all authenticate with it, and
   client-supplied `actor`/`identity.subject` fields are honored on this path.
 - **User session**: opaque token from `POST /auth/login` (in-memory server-side,
-  TTL `SESSION_TTL_SECONDS`); roles `admin`|`investigator` enforced server-side.
+  TTL `SESSION_TTL_SECONDS`); roles `admin`|`lead`|`investigator` enforced
+  server-side (3-tier since M18, §12-8; UI labels "System Administrator" /
+  "Lead Investigator" / "Investigator").
   Login is brute-force-throttled per (IP, username) — `LOGIN_MAX_ATTEMPTS`(5)/
   `LOGIN_WINDOW_SECONDS`(60) → `429` + `Retry-After` — and unknown usernames do
   full scrypt work against a dummy hash (no timing-based account enumeration).
-  Admin-only: user management, case create/update/roster/categorize, `POST /runs`
-  — the service token is **never** sufficient there. Under a user session the
-  audit actor is **always** the authenticated username; per-evidence reads/writes
-  are authz-gated via case-registry `/internal/authz` (admins bypass); and
-  view/download/export **synchronously** auto-append `AccessLog` events (never
-  for the service token — Caliper reads must not mutate the ledger).
+  Admin-only: user management and `POST /runs` — the service token is **never**
+  sufficient there. Case create is admin-or-lead (a lead creator lands on the
+  roster as case `lead`; an admin may designate one via `leadUserId`); case
+  update/roster/categorize is admin-or-that-case's-lead; all case management is
+  session-only (the service token remains insufficient). Under a user session
+  the audit actor is **always** the authenticated username; per-evidence
+  reads/writes are authz-gated via case-registry `/internal/authz` (admins
+  bypass for metadata/trails but NOT for blob content — `GET
+  /evidence/:id/download` requires case participation even for admins, §12-8);
+  and view/download/export **synchronously** auto-append `AccessLog` events
+  (never for the service token — Caliper reads must not mutate the ledger).
 
 **Library wire shapes (M13, pinned):**
-- **User** `{id, username, name, role: admin|investigator, active,
+- **User** `{id, username, name, role: admin|lead|investigator, active,
   createdAt, updatedAt}` — `name` was `displayName` until the M17 rename
   (§12-8; pre-M17 `users.json` records are upgraded in place on load);
   `passwordHash` never leaves the gateway's store; users are deactivated,
   never deleted. User identity in case-registry payloads is the immutable
   `username`.
 - **Case** `{id: CASE-<uuid>, name, description, status: OPEN|CLOSED|ARCHIVED,
-  createdBy, createdAt, updatedAt}` + detail `participants[{userId, roleInCase:
-  viewer|contributor, addedBy, addedAt}]` + `evidence[EvidenceIndex]`.
+  createdBy, createdAt, updatedAt, myRoleInCase?}` (`myRoleInCase` = the
+  caller's own case role, present only on participant-scoped listings, M18)
+  + detail `participants[{userId, roleInCase: viewer|contributor|lead,
+  addedBy, addedAt}]` + `evidence[EvidenceIndex]`. The case-`lead` role is
+  grantable only to users whose global role is `lead`; a case that has a lead
+  keeps at least one (removing the last lead is 409 for leads, admin-only).
 - **EvidenceIndex** (read-model/cache — the ledger stays authoritative for
   status/custodian) `{evidenceId, caseId|null, originalFilename, mimeType,
   sizeBytes, integrityProof, uploadedBy, uploadedAt, status, lastSyncedAt}`.
@@ -443,9 +454,24 @@ it is one GoLevelDB directory shared by all of a peer's channels).
    The pinned User wire field `displayName` is renamed to **`name`** across the
    store, API payloads, and SPA; `users.json` is upgraded in place on load
    (idempotent — legacy records are mapped once and persisted; `passwordHash`
-   handling is unchanged). Nothing here touches the chaincode, the Codex-Entry
-   head, or the benchmark path. *(The M18 role-model extension will be recorded
-   in this entry when it lands.)*
+   handling is unchanged). The user role set is extended to **`admin` | `lead` |
+   `investigator`** (UI labels "System Administrator" / "Lead Investigator" /
+   "Investigator") and the per-case role set to **`viewer` | `contributor` |
+   `lead`** — a guarded, transactional table rebuild, since SQLite cannot alter
+   a CHECK constraint on the live `case-registry-data` volume. Case creation
+   opens from admin-only to **admin-or-lead**: a lead who creates a case is
+   auto-added to its roster as case `lead` and manages participants and
+   evidence assignment **only on cases where they hold that role**; admins may
+   designate a case lead at creation (`leadUserId`, which must reference an
+   active global-`lead` user), and the case-`lead` role is grantable only to
+   global-`lead` users. One deliberate narrowing of the M13c admin bypass:
+   **admins may read metadata, audit trails, and exports of everything, but may
+   not fetch evidence blob content (`GET /evidence/:id/download`) unless they
+   participate in the evidence's case.** The service token's contract is
+   untouched: it still bypasses all library authz, client-supplied actors are
+   still honored on that path, the auto-AccessLog still never fires for it, and
+   it remains insufficient for user/case management. Nothing here touches the
+   chaincode, the Codex-Entry head, or the benchmark path.
 
 Anything else that seems to require deviating from ARCHITECTURE.md or CLAUDE.md: STOP
 and ask the authors (per CLAUDE.md ground rule 2).

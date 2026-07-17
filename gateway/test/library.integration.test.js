@@ -63,8 +63,8 @@ function fakeFabric() {
   };
 }
 
-// Boots registry + store + gateway; seeds admin 'root' and investigators
-// 'ivy' and 'mallory'. Returns tokens and helpers.
+// Boots registry + store + gateway; seeds admin 'root', lead 'lena', and
+// investigators 'ivy' and 'mallory'. Returns tokens and helpers.
 async function bootStack(t) {
   const registryApp = createRegistry({ dataDir: tmp('gleipnir-lib-reg-'), internalToken: INTERNAL });
   const storeApp = createStore({ dataDir: tmp('gleipnir-lib-blob-'), internalToken: INTERNAL });
@@ -74,6 +74,7 @@ async function bootStack(t) {
   const users = makeUsersStore(tmp('gleipnir-lib-auth-'));
   const sessions = makeSessions({ ttlSeconds: 3600 });
   users.seedAdmin({ username: 'root', password: 'pw' });
+  users.create({ username: 'lena', password: 'pw', role: 'lead' });
   users.create({ username: 'ivy', password: 'pw' });
   users.create({ username: 'mallory', password: 'pw' });
 
@@ -102,7 +103,7 @@ async function bootStack(t) {
     });
     return (await r.json()).token;
   };
-  const tokens = { root: await login('root'), ivy: await login('ivy'), mallory: await login('mallory'), service: 'service-token' };
+  const tokens = { root: await login('root'), lena: await login('lena'), ivy: await login('ivy'), mallory: await login('mallory'), service: 'service-token' };
 
   const as = (who) => ({ authorization: `Bearer ${tokens[who]}` });
   const asJson = (who) => ({ ...as(who), 'content-type': 'application/json' });
@@ -325,4 +326,71 @@ test('ingest directly into a case: contributor yes, viewer 403, non-participant 
   assert.equal((await s.upload('mallory', Buffer.from('nope'), { caseId: c.id })).status, 403);
   const c2 = await (await fetch(`${s.url}/api/v1/cases`, { method: 'POST', headers: s.asJson('root'), body: JSON.stringify({ name: 'other' }) })).json();
   assert.equal((await s.upload('ivy', Buffer.from('nope'), { caseId: c2.id })).status, 404);
+});
+
+test('M18: leads create and own cases; investigators cannot; lead manages only their own roster', SKIP, async (t) => {
+  const s = await bootStack(t);
+
+  // A lead creates a case and lands on its roster as case lead.
+  const created = await fetch(`${s.url}/api/v1/cases`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ name: 'Op Lead' }) });
+  assert.equal(created.status, 201);
+  const c = await created.json();
+  assert.equal(c.createdBy, 'lena');
+  const detail = await (await fetch(`${s.url}/api/v1/cases/${c.id}`, { headers: s.as('lena') })).json();
+  assert.deepEqual(detail.participants.map((p) => [p.userId, p.roleInCase]), [['lena', 'lead']]);
+
+  // The listing carries the caller's own case role.
+  const mine = await (await fetch(`${s.url}/api/v1/cases`, { headers: s.as('lena') })).json();
+  assert.equal(mine[0].myRoleInCase, 'lead');
+
+  // Lead manages their own roster; granting case-lead to a non-lead user is refused.
+  assert.equal((await fetch(`${s.url}/api/v1/cases/${c.id}/participants`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ userId: 'ivy', roleInCase: 'contributor' }) })).status, 201);
+  assert.equal((await fetch(`${s.url}/api/v1/cases/${c.id}/participants`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ userId: 'mallory', roleInCase: 'lead' }) })).status, 400);
+
+  // A lead ingests directly into their case (case-lead implies write).
+  assert.equal((await s.upload('lena', Buffer.from('by the lead'), { evidenceId: 'ev-lead', caseId: c.id })).status, 201);
+
+  // Removing the last case lead is refused for the lead; an admin may.
+  assert.equal((await fetch(`${s.url}/api/v1/cases/${c.id}/participants/lena`, { method: 'DELETE', headers: s.as('lena') })).status, 409);
+  assert.equal((await fetch(`${s.url}/api/v1/cases/${c.id}/participants/lena`, { method: 'DELETE', headers: s.as('root') })).status, 204);
+
+  // Cases the lead does not lead are unmanageable: a foreign case 404s
+  // (non-participant) and a case where they are a mere contributor 403s.
+  const other = await (await fetch(`${s.url}/api/v1/cases`, { method: 'POST', headers: s.asJson('root'), body: JSON.stringify({ name: 'not yours' }) })).json();
+  assert.equal((await fetch(`${s.url}/api/v1/cases/${other.id}/participants`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ userId: 'ivy' }) })).status, 404);
+  await fetch(`${s.url}/api/v1/cases/${other.id}/participants`, { method: 'POST', headers: s.asJson('root'), body: JSON.stringify({ userId: 'lena', roleInCase: 'contributor' }) });
+  assert.equal((await fetch(`${s.url}/api/v1/cases/${other.id}/participants`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ userId: 'ivy' }) })).status, 403);
+
+  // Investigators still cannot create cases; the service token never could.
+  assert.equal((await fetch(`${s.url}/api/v1/cases`, { method: 'POST', headers: s.asJson('ivy'), body: JSON.stringify({ name: 'x' }) })).status, 403);
+  assert.equal((await fetch(`${s.url}/api/v1/cases`, { method: 'POST', headers: s.asJson('service'), body: JSON.stringify({ name: 'x' }) })).status, 403);
+
+  // Admin creation with a designated lead; a non-lead designee is a 400.
+  const handed = await (await fetch(`${s.url}/api/v1/cases`, { method: 'POST', headers: s.asJson('root'), body: JSON.stringify({ name: 'handed over', leadUserId: 'lena' }) })).json();
+  const handedDetail = await (await fetch(`${s.url}/api/v1/cases/${handed.id}`, { headers: s.as('lena') })).json();
+  assert.deepEqual(handedDetail.participants.map((p) => [p.userId, p.roleInCase]), [['lena', 'lead']]);
+  assert.equal((await fetch(`${s.url}/api/v1/cases`, { method: 'POST', headers: s.asJson('root'), body: JSON.stringify({ name: 'bad hand', leadUserId: 'ivy' }) })).status, 400);
+});
+
+test('M18: admins read metadata and trails everywhere but blob content only as a participant', SKIP, async (t) => {
+  const s = await bootStack(t);
+
+  // Build a case root does NOT participate in, with one exhibit.
+  const c = await (await fetch(`${s.url}/api/v1/cases`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ name: 'sealed' }) })).json();
+  await fetch(`${s.url}/api/v1/cases/${c.id}/participants`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ userId: 'ivy', roleInCase: 'contributor' }) });
+  await s.upload('ivy', Buffer.from('sealed bytes'), { evidenceId: 'ev-sealed', caseId: c.id });
+
+  // Admin: metadata, audit, export all pass; blob content is refused.
+  assert.equal((await fetch(`${s.url}/api/v1/evidence/ev-sealed`, { headers: s.as('root') })).status, 200);
+  assert.equal((await fetch(`${s.url}/api/v1/evidence/ev-sealed/audit`, { headers: s.as('root') })).status, 200);
+  assert.equal((await fetch(`${s.url}/api/v1/evidence/ev-sealed/export`, { headers: s.as('root') })).status, 200);
+  assert.equal((await fetch(`${s.url}/api/v1/evidence/ev-sealed/download`, { headers: s.as('root') })).status, 403);
+
+  // Participants and the service token still download fine.
+  assert.equal((await fetch(`${s.url}/api/v1/evidence/ev-sealed/download`, { headers: s.as('ivy') })).status, 200);
+  assert.equal((await fetch(`${s.url}/api/v1/evidence/ev-sealed/download`, { headers: s.as('service') })).status, 200);
+
+  // Once the admin joins the case (any role), content opens up.
+  await fetch(`${s.url}/api/v1/cases/${c.id}/participants`, { method: 'POST', headers: s.asJson('root'), body: JSON.stringify({ userId: 'root', roleInCase: 'viewer' }) });
+  assert.equal((await fetch(`${s.url}/api/v1/evidence/ev-sealed/download`, { headers: s.as('root') })).status, 200);
 });

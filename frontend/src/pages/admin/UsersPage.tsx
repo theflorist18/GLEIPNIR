@@ -58,6 +58,7 @@ export function UsersPage() {
           <label>role
             <select value={role} onChange={(e) => setRole(e.target.value as Role)}>
               <option value="investigator">investigator</option>
+              <option value="lead">lead</option>
               <option value="admin">admin</option>
             </select>
           </label>
@@ -68,12 +69,15 @@ export function UsersPage() {
           <div className="card form">
             <h3>Edit: {selected.username}</h3>
             <div className="btn-row">
-              <button
-                onClick={() => patch(selected, { role: selected.role === 'admin' ? 'investigator' : 'admin' })}
-                disabled={selected.username === me?.username}
-              >
-                Make {selected.role === 'admin' ? 'investigator' : 'admin'}
-              </button>
+              {(['admin', 'lead', 'investigator'] as Role[]).filter((r) => r !== selected.role).map((r) => (
+                <button
+                  key={r}
+                  onClick={() => patch(selected, { role: r })}
+                  disabled={selected.username === me?.username}
+                >
+                  Make {r}
+                </button>
+              ))}
               <button
                 onClick={() => patch(selected, { active: !selected.active })}
                 disabled={selected.username === me?.username}

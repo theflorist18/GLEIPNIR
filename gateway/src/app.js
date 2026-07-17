@@ -129,6 +129,7 @@ function createApp(deps) {
   // session (docs/CONTRACTS.md §6).
   app.use(auth.authenticate);
   const requireAdmin = auth.requireRole('admin');
+  const requireAdminOrLead = auth.requireRole('admin', 'lead');
 
   const wrap = (fn) => (req, res) => fn(req, res).catch((err) => {
     // Any error carrying an HTTP status (RequestError, UserError, upstream
@@ -186,11 +187,16 @@ function createApp(deps) {
   const proxy = (res, out) => res.status(out.status).json(out.body);
   const isNonAdminUser = (req) => req.principal && req.principal.kind === 'user' && req.principal.role !== 'admin';
 
-  // Per-evidence access gate. Admins and the service token bypass (the service
-  // token is the benchmark/infra path; case scoping is a library concern).
-  // User identity in case-registry is the immutable username.
-  async function ensureEvidenceAccess(req, evidenceId, { write = false } = {}) {
-    if (!caseRegistry || !isNonAdminUser(req)) return;
+  // Per-evidence access gate. The service token always bypasses (the
+  // benchmark/infra path; case scoping is a library concern). Admins bypass
+  // for metadata and trails, but NOT for blob content ({content:true}, M18 —
+  // CONTRACTS §12-8): downloading evidence bytes requires being a participant
+  // of the evidence's case, even for admins. User identity in case-registry
+  // is the immutable username.
+  async function ensureEvidenceAccess(req, evidenceId, { write = false, content = false } = {}) {
+    if (!caseRegistry) return;
+    if (!req.principal || req.principal.kind !== 'user') return;
+    if (req.principal.role === 'admin' && !content) return;
     const { status, body } = await caseRegistry.request(
       'GET',
       `/internal/authz?userId=${encodeURIComponent(req.principal.username)}&evidenceId=${encodeURIComponent(evidenceId)}`,
@@ -200,9 +206,25 @@ function createApp(deps) {
       // Unknown-to-the-library evidence 404s so ids can't be probed.
       throw new RequestError(body.reason === 'unknown-evidence' ? 404 : 403, 'access to this evidence is denied');
     }
-    if (write && !['contributor', 'uploader'].includes(body.roleInCase)) {
+    if (write && !['contributor', 'lead', 'uploader'].includes(body.roleInCase)) {
       throw new RequestError(403, 'a contributor role in the case is required to write');
     }
+  }
+
+  // Case-management gate (M18): sessions only — the service token was never
+  // sufficient for case management (CONTRACTS §6) and stays that way. Admins
+  // manage any case; a lead manages only cases where they hold the case-lead
+  // role. Non-participants get 404 so case ids can't be probed. Returns the
+  // case detail for lead callers (admins return null — no fetch needed).
+  async function ensureCaseLead(req, caseId) {
+    if (!req.principal || req.principal.kind !== 'user') throw new RequestError(403, 'user session required');
+    if (req.principal.role === 'admin') return null;
+    const out = await caseRegistry.request('GET', `/cases/${encodeURIComponent(caseId)}`);
+    if (out.status !== 200 || !out.body) throw new RequestError(404, 'case not found');
+    const me = (out.body.participants || []).find((p) => p.userId === req.principal.username);
+    if (!me) throw new RequestError(404, 'case not found'); // don't leak existence
+    if (me.roleInCase !== 'lead') throw new RequestError(403, 'the case lead role is required');
+    return out.body;
   }
 
   // Synchronous auto-AccessLog (M13c): a user-session view/download/export
@@ -227,11 +249,31 @@ function createApp(deps) {
   app.get('/api/v1/cases/search', requireLibrary, listCases);
   app.get('/api/v1/cases', requireLibrary, listCases);
 
-  app.post('/api/v1/cases', requireLibrary, requireAdmin, wrap(async (req, res) => {
+  // Case creation is admin-or-lead (M18). A lead who creates a case owns it:
+  // they land on the roster as case 'lead'. Admins may hand the case to a
+  // lead at creation via leadUserId (must reference an active 'lead' user).
+  app.post('/api/v1/cases', requireLibrary, requireAdminOrLead, wrap(async (req, res) => {
     const b = req.body || {};
-    proxy(res, await caseRegistry.request('POST', '/cases', {
+    let leadUserId = null;
+    if (req.principal.role === 'lead') {
+      leadUserId = req.principal.username;
+    } else if (b.leadUserId !== undefined && b.leadUserId !== null) {
+      const target = users && users.getByUsername(b.leadUserId);
+      if (!target || !target.active || target.role !== 'lead') {
+        return res.status(400).json({ error: 'leadUserId must reference an active user with the lead role' });
+      }
+      leadUserId = b.leadUserId;
+    }
+    const out = await caseRegistry.request('POST', '/cases', {
       name: b.name, description: b.description, status: b.status, createdBy: req.principal.username,
-    }));
+    });
+    if (out.status === 201 && leadUserId) {
+      const granted = await caseRegistry.request('POST', `/cases/${encodeURIComponent(out.body.id)}/participants`, {
+        userId: leadUserId, roleInCase: 'lead', addedBy: req.principal.username,
+      });
+      if (granted.status !== 201) throw new RequestError(502, `case created but lead grant failed (${granted.status})`);
+    }
+    proxy(res, out);
   }));
 
   app.get('/api/v1/cases/:id', requireLibrary, wrap(async (req, res) => {
@@ -243,34 +285,54 @@ function createApp(deps) {
     proxy(res, out);
   }));
 
-  app.patch('/api/v1/cases/:id', requireLibrary, requireAdmin, wrap(async (req, res) => {
+  app.patch('/api/v1/cases/:id', requireLibrary, wrap(async (req, res) => {
+    await ensureCaseLead(req, req.params.id);
     const b = req.body || {};
     proxy(res, await caseRegistry.request('PATCH', `/cases/${encodeURIComponent(req.params.id)}`, {
       name: b.name, description: b.description, status: b.status,
     }));
   }));
 
-  app.post('/api/v1/cases/:id/participants', requireLibrary, requireAdmin, wrap(async (req, res) => {
+  app.post('/api/v1/cases/:id/participants', requireLibrary, wrap(async (req, res) => {
+    await ensureCaseLead(req, req.params.id);
     const b = req.body || {};
     if (users && b.userId && !users.getByUsername(b.userId)) {
       return res.status(404).json({ error: 'no such user' });
+    }
+    // The case-lead role is reserved for users whose global role is 'lead'.
+    if (b.roleInCase === 'lead' && users) {
+      const target = users.getByUsername(b.userId);
+      if (!target || target.role !== 'lead') {
+        return res.status(400).json({ error: 'the case lead must be a user with the lead role' });
+      }
     }
     proxy(res, await caseRegistry.request('POST', `/cases/${encodeURIComponent(req.params.id)}/participants`, {
       userId: b.userId, roleInCase: b.roleInCase, addedBy: req.principal.username,
     }));
   }));
 
-  app.delete('/api/v1/cases/:id/participants/:userId', requireLibrary, requireAdmin, wrap(async (req, res) => {
+  app.delete('/api/v1/cases/:id/participants/:userId', requireLibrary, wrap(async (req, res) => {
+    const detail = await ensureCaseLead(req, req.params.id);
+    // A case must keep at least one lead once it has one; only an admin may
+    // remove the last (detail is non-null exactly for lead callers).
+    if (detail) {
+      const leads = (detail.participants || []).filter((p) => p.roleInCase === 'lead');
+      if (leads.length === 1 && leads[0].userId === req.params.userId) {
+        return res.status(409).json({ error: 'cannot remove the last case lead' });
+      }
+    }
     proxy(res, await caseRegistry.request('DELETE', `/cases/${encodeURIComponent(req.params.id)}/participants/${encodeURIComponent(req.params.userId)}`));
   }));
 
-  app.post('/api/v1/cases/:id/evidence', requireLibrary, requireAdmin, wrap(async (req, res) => {
+  app.post('/api/v1/cases/:id/evidence', requireLibrary, wrap(async (req, res) => {
+    await ensureCaseLead(req, req.params.id);
     proxy(res, await caseRegistry.request('POST', `/cases/${encodeURIComponent(req.params.id)}/evidence`, {
       evidenceId: (req.body || {}).evidenceId,
     }));
   }));
 
-  app.delete('/api/v1/cases/:id/evidence/:evidenceId', requireLibrary, requireAdmin, wrap(async (req, res) => {
+  app.delete('/api/v1/cases/:id/evidence/:evidenceId', requireLibrary, wrap(async (req, res) => {
+    await ensureCaseLead(req, req.params.id);
     proxy(res, await caseRegistry.request('DELETE', `/cases/${encodeURIComponent(req.params.id)}/evidence/${encodeURIComponent(req.params.evidenceId)}`));
   }));
 
@@ -310,7 +372,7 @@ function createApp(deps) {
     if (status !== 200 || !body) throw new RequestError(404, 'case not found');
     const me = (body.participants || []).find((p) => p.userId === req.principal.username);
     if (!me) throw new RequestError(404, 'case not found'); // don't leak existence
-    if (me.roleInCase !== 'contributor') throw new RequestError(403, 'a contributor role in the case is required to ingest');
+    if (!['contributor', 'lead'].includes(me.roleInCase)) throw new RequestError(403, 'a contributor role in the case is required to ingest');
   }
 
   // Multipart ingest: store bytes off-chain -> commit the Codex-Entry head
@@ -439,8 +501,11 @@ function createApp(deps) {
     res.type('application/json').send(out);
   }));
 
+  // Blob CONTENT is participant-only (M18): unlike view/audit/export, the
+  // admin bypass does not apply here — {content:true} sends admins through
+  // the same case-participation check as everyone else.
   app.get('/api/v1/evidence/:id/download', requireLibrary, wrap(async (req, res) => {
-    await ensureEvidenceAccess(req, req.params.id);
+    await ensureEvidenceAccess(req, req.params.id, { content: true });
     const upstream = await evidenceStore.fetchBlob(req.params.id);
     if (upstream.status === 404) throw new RequestError(404, 'no stored binary for this evidence');
     if (!upstream.ok) throw new RequestError(502, `evidence-store read failed (${upstream.status})`);

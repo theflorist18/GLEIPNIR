@@ -27,7 +27,9 @@ const Database = require('better-sqlite3');
 // applied to ids that reach SQL params or URLs.
 const SAFE_ID = /^[A-Za-z0-9._:-]+$/;
 const CASE_STATUSES = ['OPEN', 'CLOSED', 'ARCHIVED'];
-const CASE_ROLES = ['viewer', 'contributor'];
+// M18 (CONTRACTS §12-8): 'lead' joined the per-case ladder — leads manage the
+// roster/config of cases where they hold this role (enforced by the gateway).
+const CASE_ROLES = ['viewer', 'contributor', 'lead'];
 
 function loadConfig() {
   return {
@@ -56,7 +58,7 @@ function openDb(dataDir) {
     CREATE TABLE IF NOT EXISTS case_participants (
       case_id      TEXT NOT NULL REFERENCES cases(id),
       user_id      TEXT NOT NULL,
-      role_in_case TEXT NOT NULL DEFAULT 'viewer' CHECK (role_in_case IN ('viewer','contributor')),
+      role_in_case TEXT NOT NULL DEFAULT 'viewer' CHECK (role_in_case IN ('viewer','contributor','lead')),
       added_by     TEXT NOT NULL,
       added_at     TEXT NOT NULL,
       PRIMARY KEY (case_id, user_id)
@@ -76,13 +78,38 @@ function openDb(dataDir) {
     CREATE INDEX IF NOT EXISTS idx_evidence_case ON evidence_index(case_id);
     CREATE INDEX IF NOT EXISTS idx_participants_user ON case_participants(user_id);
   `);
+  // M18: role_in_case gained 'lead'. SQLite cannot ALTER a CHECK constraint,
+  // so a pre-M18 table (its stored DDL lacks 'lead') is rebuilt in place —
+  // transactional, and idempotent because the second boot sees 'lead' in
+  // sqlite_master. Fresh databases take the CREATE above and skip this.
+  const cp = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='case_participants'").get();
+  if (cp && !cp.sql.includes("'lead'")) {
+    db.exec(`
+      BEGIN;
+      CREATE TABLE case_participants_m18 (
+        case_id      TEXT NOT NULL REFERENCES cases(id),
+        user_id      TEXT NOT NULL,
+        role_in_case TEXT NOT NULL DEFAULT 'viewer' CHECK (role_in_case IN ('viewer','contributor','lead')),
+        added_by     TEXT NOT NULL,
+        added_at     TEXT NOT NULL,
+        PRIMARY KEY (case_id, user_id)
+      );
+      INSERT INTO case_participants_m18 SELECT case_id, user_id, role_in_case, added_by, added_at FROM case_participants;
+      DROP TABLE case_participants;
+      ALTER TABLE case_participants_m18 RENAME TO case_participants;
+      CREATE INDEX IF NOT EXISTS idx_participants_user ON case_participants(user_id);
+      COMMIT;
+    `);
+  }
   return db;
 }
 
-// Row -> wire shape (camelCase; docs/CONTRACTS.md pins these).
+// Row -> wire shape (camelCase; docs/CONTRACTS.md pins these). my_role is
+// present only on participant-filtered listings (M18: `myRoleInCase`).
 const caseWire = (r) => r && ({
   id: r.id, name: r.name, description: r.description, status: r.status,
   createdBy: r.created_by, createdAt: r.created_at, updatedAt: r.updated_at,
+  ...(r.my_role !== undefined && r.my_role !== null ? { myRoleInCase: r.my_role } : {}),
 });
 const participantWire = (r) => ({
   userId: r.user_id, roleInCase: r.role_in_case, addedBy: r.added_by, addedAt: r.added_at,
@@ -149,7 +176,7 @@ function createApp(overrides) {
     const where = [];
     const params = {};
     if (participant) {
-      where.push('c.id IN (SELECT case_id FROM case_participants WHERE user_id = @participant)');
+      where.push('cp.user_id = @participant');
       params.participant = participant;
     }
     if (status) {
@@ -160,7 +187,11 @@ function createApp(overrides) {
       where.push("(c.name LIKE @q ESCAPE '\\' OR c.description LIKE @q ESCAPE '\\' OR c.id LIKE @q ESCAPE '\\')");
       params.q = likeOf(q);
     }
-    const sql = `SELECT c.* FROM cases c ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY c.created_at DESC`;
+    // Participant-filtered listings join the roster so each row carries the
+    // caller's own role (myRoleInCase); unfiltered listings stay role-free.
+    const sql = participant
+      ? `SELECT c.*, cp.role_in_case AS my_role FROM cases c JOIN case_participants cp ON cp.case_id = c.id ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY c.created_at DESC`
+      : `SELECT c.* FROM cases c ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY c.created_at DESC`;
     res.json(db.prepare(sql).all(params).map(caseWire));
   });
 

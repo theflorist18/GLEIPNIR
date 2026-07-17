@@ -139,6 +139,7 @@ export function CasesAdminPage() {
                   <select value={pRole} onChange={(e) => setPRole(e.target.value as CaseRole)}>
                     <option value="viewer">viewer</option>
                     <option value="contributor">contributor</option>
+                    <option value="lead">case lead</option>
                   </select>
                 </label>
                 <button disabled={!pUser} onClick={addParticipant}>Grant</button>

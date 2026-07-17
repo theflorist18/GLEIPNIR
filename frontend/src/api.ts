@@ -11,6 +11,7 @@
 import type {
   AccessLogRequest,
   CaseDetail,
+  CaseRole,
   CaseStatus,
   CaseSummary,
   CoCEvent,
@@ -257,7 +258,7 @@ export class GatewayClient {
     return this.request<CaseDetail>('GET', `/cases/${encodeURIComponent(id)}`);
   }
 
-  createCase(req: { name: string; description?: string }): Promise<CaseSummary> {
+  createCase(req: { name: string; description?: string; leadUserId?: string }): Promise<CaseSummary> {
     return this.request<CaseSummary>('POST', '/cases', req);
   }
 
@@ -265,7 +266,7 @@ export class GatewayClient {
     return this.request<CaseSummary>('PATCH', `/cases/${encodeURIComponent(id)}`, patch);
   }
 
-  addParticipant(caseId: string, userId: string, roleInCase: 'viewer' | 'contributor'): Promise<unknown> {
+  addParticipant(caseId: string, userId: string, roleInCase: CaseRole): Promise<unknown> {
     return this.request('POST', `/cases/${encodeURIComponent(caseId)}/participants`, { userId, roleInCase });
   }
 

@@ -18,7 +18,10 @@ Port **3000**. Node 20, Express.
 - **User session** — `POST /api/v1/auth/login` exchanges `{username,password}`
   (JSON body only; never query params, never logged) for an opaque token
   (in-memory, TTL `SESSION_TTL_SECONDS`; a gateway restart logs everyone out).
-  Roles: `admin` | `investigator`, enforced server-side. Login is throttled
+  Roles: `admin` | `lead` | `investigator`, enforced server-side (M18: leads
+  create cases and manage the cases they lead; admins read metadata and audit
+  trails everywhere but download blob content only as a case participant —
+  CONTRACTS §12-8). Login is throttled
   per (client IP, username): `LOGIN_MAX_ATTEMPTS` (5) failures within
   `LOGIN_WINDOW_SECONDS` (60) → `429` + `Retry-After`, even for correct
   credentials, until the window expires; success clears the counter. Unknown
@@ -48,21 +51,22 @@ Admin-only routes (user management, `POST /runs`) require an **admin session**
 | `POST` | `/evidence/:id/access` | `AccessLog` (or enqueue); user sessions need a writing role |
 | `DELETE` | `/evidence/:id` | `RemoveEvidence` (or enqueue); best-effort evidence-index status sync |
 | `GET` | `/evidence/:id` | `ReadEvidence`; user sessions: authz-gated + auto `AccessLog(view)` |
-| `GET` | `/evidence/:id/download` | stream bytes from evidence-store; user sessions: authz-gated + auto `AccessLog(download)` |
+| `GET` | `/evidence/:id/download` | stream bytes from evidence-store; user sessions: authz-gated + auto `AccessLog(download)`; blob content is participant-only — the admin bypass does NOT apply here (M18) |
 | `GET` | `/evidence/:id/export` | `{record, auditTrail}` JSON bundle; user sessions: authz-gated + auto `AccessLog(export)` |
 | `GET` | `/evidence/:id/audit` | `GetAuditTrail`; authz-gated, NOT auto-logged |
 | `GET` | `/evidence/:id/verify?eventId=` | proxy → verification service |
 | `GET` | `/evidence/search?caseId=&q=&uploadedBy=&type=&from=&to=` | evidence-index search, participant-scoped unless admin |
-| `POST`/`GET`/`PATCH` | `/cases`, `/cases/:id`, `/cases/search` | proxy → case-registry; create/update admin-only; list/detail participant-scoped unless admin |
-| `POST`/`DELETE` | `/cases/:id/participants[/:userId]` | proxy, admin-only |
-| `POST`/`DELETE` | `/cases/:id/evidence[/:evidenceId]` | categorize/uncategorize, admin-only |
+| `POST`/`GET`/`PATCH` | `/cases`, `/cases/:id`, `/cases/search` | proxy → case-registry; create admin-or-lead (lead creator auto-added as case lead; admin may pass `leadUserId`), update admin-or-case-lead; list/detail participant-scoped unless admin |
+| `POST`/`DELETE` | `/cases/:id/participants[/:userId]` | proxy, admin-or-case-lead; `roleInCase: lead` grants require a global-`lead` target; removing the last case lead is 409 (admin may) |
+| `POST`/`DELETE` | `/cases/:id/evidence[/:evidenceId]` | categorize/uncategorize, admin-or-case-lead |
 | `POST`/`GET` | `/runs`, `/runs/:id` | run-request store (execution is host-side); `POST` is admin-session-only |
 
 Auto-AccessLog is **synchronous**: a user-session view/download/export succeeds
 only if the log write succeeds. It **never** fires for the service token —
 Caliper read workloads must not mutate the ledger. Per-evidence authz
-(case-registry `/internal/authz`) applies to user sessions only; admins and
-the service token bypass it.
+(case-registry `/internal/authz`) applies to user sessions only; the service
+token bypasses it entirely, and admins bypass it for metadata/trails but not
+for blob content (`/download` — M18, CONTRACTS §12-8).
 
 Internal (no `/api/v1` prefix, still bearer-authed): `POST /internal/anchor-root` and
 `GET /internal/anchor-root/:scopeId/:batchId` — the Anchoring variant's root sink on

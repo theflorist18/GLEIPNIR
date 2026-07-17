@@ -193,7 +193,7 @@ export interface RunDetail extends RunManifest {
 // ---- Evidence library (M14): auth, cases, evidence index ----
 // Wire shapes pinned by docs/CONTRACTS.md (M12/M13 additions).
 
-export type Role = 'admin' | 'investigator';
+export type Role = 'admin' | 'lead' | 'investigator';
 
 export interface User {
   id: string;
@@ -206,7 +206,7 @@ export interface User {
 }
 
 export type CaseStatus = 'OPEN' | 'CLOSED' | 'ARCHIVED';
-export type CaseRole = 'viewer' | 'contributor';
+export type CaseRole = 'viewer' | 'contributor' | 'lead';
 
 export interface CaseParticipant {
   userId: string; // the immutable username
@@ -223,6 +223,8 @@ export interface CaseSummary {
   createdBy: string;
   createdAt: string;
   updatedAt: string;
+  /** The caller's own case role — present only on participant-scoped listings (M18). */
+  myRoleInCase?: CaseRole;
 }
 
 export interface CaseDetail extends CaseSummary {
