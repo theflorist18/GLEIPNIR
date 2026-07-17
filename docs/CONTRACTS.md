@@ -222,10 +222,12 @@ path id, which only matches when callers pass an eventId there),
   for the service token — Caliper reads must not mutate the ledger).
 
 **Library wire shapes (M13, pinned):**
-- **User** `{id, username, displayName, role: admin|investigator, active,
-  createdAt, updatedAt}` — `passwordHash` never leaves the gateway's store; users
-  are deactivated, never deleted. User identity in case-registry payloads is the
-  immutable `username`.
+- **User** `{id, username, name, role: admin|investigator, active,
+  createdAt, updatedAt}` — `name` was `displayName` until the M17 rename
+  (§12-8; pre-M17 `users.json` records are upgraded in place on load);
+  `passwordHash` never leaves the gateway's store; users are deactivated,
+  never deleted. User identity in case-registry payloads is the immutable
+  `username`.
 - **Case** `{id: CASE-<uuid>, name, description, status: OPEN|CLOSED|ARCHIVED,
   createdBy, createdAt, updatedAt}` + detail `participants[{userId, roleInCase:
   viewer|contributor, addedBy, addedAt}]` + `evidence[EvidenceIndex]`.
@@ -436,6 +438,14 @@ it is one GoLevelDB directory shared by all of a peer's channels).
    on-chain actors keep resolving. The evidence-store's blobs are immutable
    (exclusive-create), and the receipt store remains deliberately un-hardened — the
    library adds no integrity guarantees the design is supposed to measure.
+
+8. **Library RBAC v2 and the `name` rename (M17–M18, authorized by the authors).**
+   The pinned User wire field `displayName` is renamed to **`name`** across the
+   store, API payloads, and SPA; `users.json` is upgraded in place on load
+   (idempotent — legacy records are mapped once and persisted; `passwordHash`
+   handling is unchanged). Nothing here touches the chaincode, the Codex-Entry
+   head, or the benchmark path. *(The M18 role-model extension will be recorded
+   in this entry when it lands.)*
 
 Anything else that seems to require deviating from ARCHITECTURE.md or CLAUDE.md: STOP
 and ask the authors (per CLAUDE.md ground rule 2).

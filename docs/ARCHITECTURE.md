@@ -450,6 +450,7 @@ sequenceDiagram
 | 14 | Frontend rebuild | Login routes to role-appropriate nav; ingest → categorize → case detail → evidence detail → download works for an investigator; admin sees Users/Case-Admin/Dashboard |
 | 15 | Search & access-log completeness | Participant-scoped search correct; every view/download/export appends exactly one `AccessLog` event (synchronously) |
 | 16 | Docs & closeout | `orchestration/smoke-library.sh` passes against `up.sh --variant standard`; CLAUDE.md / ARCHITECTURE / CONTRACTS / AS-BUILT cross-consistent |
+| 17 | User `name` rename (library) | `displayName` → `name` across store/API/SPA (CONTRACTS §12-8); a pre-M17 `users.json` upgrades in place on boot and login still works; gateway tests + `smoke-library.sh` pass |
 
 ---
 

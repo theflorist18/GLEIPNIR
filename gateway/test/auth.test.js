@@ -133,11 +133,12 @@ test('admin gating: user management requires an admin SESSION — investigator a
   const created = await fetch(`${url}/api/v1/admin/users`, {
     method: 'POST',
     headers: asUser(admin),
-    body: JSON.stringify({ username: 'ivy', password: 'ivy-pw', displayName: 'Ivy Vestigator' }),
+    body: JSON.stringify({ username: 'ivy', password: 'ivy-pw', name: 'Ivy Vestigator' }),
   });
   assert.equal(created.status, 201);
   const ivy = await created.json();
   assert.equal(ivy.role, 'investigator');
+  assert.equal(ivy.name, 'Ivy Vestigator');
   assert.equal(ivy.passwordHash, undefined);
 
   const dup = await fetch(`${url}/api/v1/admin/users`, {
@@ -307,4 +308,30 @@ test('users store persists across reopen from the same dir', async () => {
   assert.equal(b.verifyPassword('ivy', 'ivy-pw').username, 'ivy');
   // seedAdmin is first-boot-only: a non-empty store is never reseeded.
   assert.equal(b.seedAdmin({ username: 'other', password: 'x' }), null);
+});
+
+test('M17 upgrade: a pre-rename users.json (displayName) is migrated to name in place, once', async () => {
+  const dir = tmpAuthDir();
+  const legacy = [{
+    id: 'usr-legacy-1',
+    username: 'old-root',
+    passwordHash: 'scrypt:00:00', // never verified in this test
+    displayName: 'Old Root',
+    role: 'admin',
+    active: true,
+    createdAt: '2026-07-01T00:00:00.000Z',
+    updatedAt: '2026-07-01T00:00:00.000Z',
+  }];
+  fs.writeFileSync(path.join(dir, 'users.json'), JSON.stringify(legacy), 'utf8');
+
+  const store = makeUsersStore(dir);
+  const user = store.getByUsername('old-root');
+  assert.equal(user.name, 'Old Root');
+  assert.equal(user.displayName, undefined);
+
+  // The file on disk was rewritten without displayName (idempotent reopen).
+  const onDisk = JSON.parse(fs.readFileSync(path.join(dir, 'users.json'), 'utf8'));
+  assert.equal(onDisk[0].name, 'Old Root');
+  assert.equal(onDisk[0].displayName, undefined);
+  assert.equal(makeUsersStore(dir).getByUsername('old-root').name, 'Old Root');
 });

@@ -198,7 +198,7 @@ export type Role = 'admin' | 'investigator';
 export interface User {
   id: string;
   username: string;
-  displayName: string;
+  name: string;
   role: Role;
   active: boolean;
   createdAt?: string;

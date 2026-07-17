@@ -71,6 +71,20 @@ function makeUsersStore(authDataDir) {
     fs.writeFileSync(file, JSON.stringify(users, null, 2), 'utf8');
   }
 
+  // M17: the pinned wire field `displayName` was renamed to `name`
+  // (CONTRACTS §12-8). Upgrade pre-M17 records in place, once, on load.
+  {
+    let migrated = false;
+    for (const u of users) {
+      if (u.displayName !== undefined) {
+        if (u.name === undefined) u.name = u.displayName;
+        delete u.displayName;
+        migrated = true;
+      }
+    }
+    if (migrated) persist();
+  }
+
   function findById(id) {
     return users.find((u) => u.id === id) || null;
   }
@@ -79,7 +93,7 @@ function makeUsersStore(authDataDir) {
     return users.find((u) => u.username === username) || null;
   }
 
-  function create({ username, password, displayName, role }) {
+  function create({ username, password, name, role }) {
     if (typeof username !== 'string' || !USERNAME_RE.test(username)) {
       throw new UserError(400, 'username must match ^[A-Za-z0-9._-]{1,64}$');
     }
@@ -92,7 +106,7 @@ function makeUsersStore(authDataDir) {
       id: `usr-${crypto.randomUUID()}`,
       username,
       passwordHash: hashPassword(password),
-      displayName: typeof displayName === 'string' && displayName ? displayName : username,
+      name: typeof name === 'string' && name ? name : username,
       role: r,
       active: true,
       createdAt: now,
@@ -105,9 +119,9 @@ function makeUsersStore(authDataDir) {
 
   // Seeds the first admin only when the store is EMPTY (first boot); returns
   // null otherwise so a restart never resets a live user database.
-  function seedAdmin({ username, password, displayName }) {
+  function seedAdmin({ username, password, name }) {
     if (users.length > 0) return null;
-    return create({ username, password, displayName, role: 'admin' });
+    return create({ username, password, name, role: 'admin' });
   }
 
   function verifyPassword(username, password) {
@@ -136,9 +150,9 @@ function makeUsersStore(authDataDir) {
       if (!ROLES.includes(p.role)) throw new UserError(400, `role must be one of: ${ROLES.join(', ')}`);
       user.role = p.role;
     }
-    if (p.displayName !== undefined) {
-      if (typeof p.displayName !== 'string' || !p.displayName) throw new UserError(400, 'displayName must be a non-empty string');
-      user.displayName = p.displayName;
+    if (p.name !== undefined) {
+      if (typeof p.name !== 'string' || !p.name) throw new UserError(400, 'name must be a non-empty string');
+      user.name = p.name;
     }
     if (p.active !== undefined) {
       if (typeof p.active !== 'boolean') throw new UserError(400, 'active must be a boolean');

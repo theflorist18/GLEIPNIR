@@ -1,5 +1,9 @@
 # GLEIPNIR Evidence-Library Expansion — Chunked Plan
 
+> **Historical planning document (M12–M16, landed 2026-07-16).** Wire shapes
+> quoted below reflect the contracts as of M16; the M17 rename of the User
+> field `displayName` → `name` (CONTRACTS §12-8) supersedes those mentions.
+
 Full context and rationale for every decision below lives in the original plan
 (see the "Context" and "Architecture shape" sections you already have). This
 file breaks that plan into 7 standalone chunks, each scoped to be handed to a

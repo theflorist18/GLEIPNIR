@@ -17,7 +17,7 @@ export function TopBar() {
       <div className="whoami">
         {user && (
           <span className="pill">
-            {user.displayName || user.username} · {user.role}
+            {user.name || user.username} · {user.role}
           </span>
         )}
         <button className="small" onClick={signOut}>Sign out</button>

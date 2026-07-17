@@ -225,11 +225,11 @@ export class GatewayClient {
     return this.request<User[]>('GET', '/admin/users');
   }
 
-  createUser(req: { username: string; password: string; displayName?: string; role?: Role }): Promise<User> {
+  createUser(req: { username: string; password: string; name?: string; role?: Role }): Promise<User> {
     return this.request<User>('POST', '/admin/users', req);
   }
 
-  updateUser(id: string, patch: { displayName?: string; role?: Role; active?: boolean }): Promise<User> {
+  updateUser(id: string, patch: { name?: string; role?: Role; active?: boolean }): Promise<User> {
     return this.request<User>('PATCH', `/admin/users/${encodeURIComponent(id)}`, patch);
   }
 

@@ -14,7 +14,7 @@ export function UsersPage() {
 
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [displayName, setDisplayName] = useState('');
+  const [name, setName] = useState('');
   const [role, setRole] = useState<Role>('investigator');
 
   const [newPassword, setNewPassword] = useState('');
@@ -28,8 +28,8 @@ export function UsersPage() {
 
   const create = () =>
     listErr.run(async () => {
-      await client.createUser({ username, password, displayName: displayName || undefined, role });
-      setUsername(''); setPassword(''); setDisplayName('');
+      await client.createUser({ username, password, name: name || undefined, role });
+      setUsername(''); setPassword(''); setName('');
       await refresh();
     });
 
@@ -54,7 +54,7 @@ export function UsersPage() {
           <h3>Create user</h3>
           <label>username<input value={username} onChange={(e) => setUsername(e.target.value)} /></label>
           <label>password<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} /></label>
-          <label>display name<input value={displayName} onChange={(e) => setDisplayName(e.target.value)} /></label>
+          <label>name<input value={name} onChange={(e) => setName(e.target.value)} /></label>
           <label>role
             <select value={role} onChange={(e) => setRole(e.target.value as Role)}>
               <option value="investigator">investigator</option>
@@ -91,12 +91,12 @@ export function UsersPage() {
         <div className="card">
           <h3>Users ({users.length})</h3>
           <table className="runs">
-            <thead><tr><th>username</th><th>display name</th><th>role</th><th>active</th></tr></thead>
+            <thead><tr><th>username</th><th>name</th><th>role</th><th>active</th></tr></thead>
             <tbody>
               {users.map((u) => (
                 <tr key={u.id} className="clickable" onClick={() => { setSelected(u); setNewPassword(''); }}>
                   <td className="mono small">{u.username}</td>
-                  <td>{u.displayName}</td>
+                  <td>{u.name}</td>
                   <td>{u.role}</td>
                   <td><span className={`pill ${u.active ? 'active' : 'removed'}`}>{u.active ? 'active' : 'inactive'}</span></td>
                 </tr>

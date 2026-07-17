@@ -48,7 +48,7 @@ AUTH_ADMIN=(-H "authorization: Bearer ${ADMIN_TOKEN}" -H "content-type: applicat
 IVY="ivy-${TS}"
 MALLORY="mallory-${TS}"
 curl -fsS "${AUTH_ADMIN[@]}" -X POST "${GATEWAY}/api/v1/admin/users" \
-  -d "{\"username\":\"${IVY}\",\"password\":\"ivy-pw\",\"displayName\":\"Smoke Investigator\"}" >/dev/null
+  -d "{\"username\":\"${IVY}\",\"password\":\"ivy-pw\",\"name\":\"Smoke Investigator\"}" >/dev/null
 curl -fsS "${AUTH_ADMIN[@]}" -X POST "${GATEWAY}/api/v1/admin/users" \
   -d "{\"username\":\"${MALLORY}\",\"password\":\"mallory-pw\"}" >/dev/null
 IVY_TOKEN="$(login "${IVY}" "ivy-pw")";         [ -n "${IVY_TOKEN}" ]     || fail "investigator login"

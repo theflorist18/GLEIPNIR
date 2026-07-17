@@ -41,7 +41,7 @@ Admin-only routes (user management, `POST /runs`) require an **admin session**
 | `POST` | `/auth/logout` | session: invalidate token |
 | `GET` | `/auth/me` | session: current user |
 | `GET`/`POST` | `/admin/users` | admin session: list / create users |
-| `PATCH` | `/admin/users/:id` | admin session: role/displayName/active |
+| `PATCH` | `/admin/users/:id` | admin session: role/name/active |
 | `POST` | `/admin/users/:id/reset-password` | admin session |
 | `POST` | `/evidence` | `CreateEvidence` (or batcher enqueue). Also accepts `multipart/form-data` (M13c): `file` part → evidence-store blob PUT → head committed with the store's ni-URI proof → evidence-index row. The library `caseId` never reaches the chain (linkage is off-chain only) |
 | `POST` | `/evidence/:id/transfer` | `TransferCustody` (or enqueue); user sessions need a writing role |
