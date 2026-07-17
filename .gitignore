@@ -28,3 +28,8 @@ build-workflow.js
 *.log
 .DS_Store
 .env.local
+
+# AI assistant instructions/handoff docs — local-only, not part of the codebase
+CLAUDE.md
+HANDOFF.md
+.claude/
