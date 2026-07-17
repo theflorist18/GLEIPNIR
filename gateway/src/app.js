@@ -81,13 +81,46 @@ function createApp(deps) {
   // an opaque session token (M12). Deployments without a users store (e.g.
   // benchmark-only test harnesses that inject just fabric/batcher) answer 503
   // here; the service-token path below is unaffected.
+  //
+  // Brute-force throttle: a fixed window per (client IP, username). After
+  // maxAttempts consecutive failures the route answers 429 (with Retry-After)
+  // until the window expires — even for correct credentials, so a guesser
+  // learns nothing from the lockout. Success clears the counter. In-memory,
+  // same posture as the session store.
+  const loginFailures = new Map(); // "ip|username" -> { count, windowStart }
+  const loginMaxAttempts = cfg.loginMaxAttempts || 5;
+  const loginWindowMs = (cfg.loginWindowSeconds || 60) * 1000;
+
   app.post('/api/v1/auth/login', (req, res) => {
     if (!users || !sessions) return res.status(503).json({ error: 'user auth not configured' });
     const { username, password } = req.body || {};
-    const user = typeof username === 'string' && typeof password === 'string'
-      ? users.verifyPassword(username, password)
-      : null;
-    if (!user || !user.active) return res.status(401).json({ error: 'invalid credentials' });
+    if (typeof username !== 'string' || typeof password !== 'string') {
+      return res.status(401).json({ error: 'invalid credentials' });
+    }
+
+    const key = `${req.ip}|${username}`;
+    const now = Date.now();
+    if (loginFailures.size > 10000) {
+      for (const [k, v] of loginFailures) {
+        if (now - v.windowStart >= loginWindowMs) loginFailures.delete(k);
+      }
+    }
+    const rec = loginFailures.get(key);
+    if (rec && now - rec.windowStart < loginWindowMs && rec.count >= loginMaxAttempts) {
+      res.set('retry-after', String(Math.ceil((rec.windowStart + loginWindowMs - now) / 1000)));
+      return res.status(429).json({ error: 'too many failed attempts — try again later' });
+    }
+
+    const user = users.verifyPassword(username, password);
+    if (!user || !user.active) {
+      if (rec && now - rec.windowStart < loginWindowMs) {
+        rec.count += 1;
+      } else {
+        loginFailures.set(key, { count: 1, windowStart: now });
+      }
+      return res.status(401).json({ error: 'invalid credentials' });
+    }
+    loginFailures.delete(key);
     return res.json({ token: sessions.create(user.id), user });
   });
 

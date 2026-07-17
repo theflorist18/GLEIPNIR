@@ -88,9 +88,63 @@ a:hover { text-decoration: underline; }
 .tagline { font-size: 12px; }
 .whoami { margin-left: auto; display: flex; gap: 10px; align-items: center; color: var(--muted); }
 
-.login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; }
-.login-card { width: 320px; }
-.login-card .brand { margin-bottom: 4px; }
+.login-wrap {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  background: radial-gradient(ellipse 80% 55% at 50% 38%, #16222e 0%, var(--bg) 70%);
+}
+.login-card {
+  width: 372px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 30px 28px 26px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+}
+.login-brand { font-weight: 700; letter-spacing: 4px; font-size: 20px; text-align: center; }
+.login-sub { color: var(--muted); font-size: 12px; text-align: center; margin: 6px 0 22px; }
+.login-field { display: block; margin-bottom: 14px; font-size: 12px; color: var(--muted); }
+.login-field > span { display: block; margin-bottom: 5px; letter-spacing: 0.4px; }
+.login-field input {
+  width: 100%;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 10px 12px;
+  font-size: 14px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.login-field input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(79, 134, 198, 0.22);
+}
+.pw-wrap { position: relative; }
+.pw-wrap input { padding-right: 42px; }
+.pw-toggle {
+  position: absolute;
+  top: 50%;
+  right: 5px;
+  transform: translateY(-50%);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  padding: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+}
+.pw-toggle:hover { color: var(--text); background: rgba(139, 160, 179, 0.12); }
+.login-submit { width: 100%; padding: 10px; font-size: 14px; border-radius: 7px; margin-top: 6px; }
+.login-submit:hover:not(:disabled) { background: #5f96d6; }
+.login-err { margin-top: 12px; text-align: center; }
+.login-foot { color: var(--muted); font-size: 11px; }
 
 .page-narrow { max-width: 560px; display: flex; flex-direction: column; gap: 14px; }
 .form select { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 6px; }

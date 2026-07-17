@@ -251,6 +251,51 @@ test('actor attribution: user sessions log the authenticated username; service t
   assert.deepEqual(submits.at(-1).args, ['ev-1', 'mallory', 'view']);
 });
 
+test('login throttle: lockout after max failures (even for correct creds), window expiry, success resets', async (t) => {
+  const { deps } = fakeDeps({ loginMaxAttempts: 3, loginWindowSeconds: 1 });
+  const { server, url } = await listen(createApp(deps));
+  t.after(() => server.close());
+
+  // three failures fill the window...
+  for (let i = 0; i < 3; i += 1) {
+    assert.equal((await login(url, 'root', 'wrong')).status, 401);
+  }
+  // ...then even CORRECT credentials are refused until the window expires,
+  // so the lockout leaks nothing about the guess.
+  const locked = await fetch(`${url}/api/v1/auth/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ username: 'root', password: 'root-pw' }),
+  });
+  assert.equal(locked.status, 429);
+  assert.ok(Number(locked.headers.get('retry-after')) >= 0);
+
+  // a different username is unaffected (per-user keying)
+  assert.equal((await login(url, 'ghost', 'nope')).status, 401);
+
+  await new Promise((r) => setTimeout(r, 1100));
+  assert.equal((await login(url, 'root', 'root-pw')).status, 200);
+
+  // success cleared the counter: a couple of new failures do not lock out
+  assert.equal((await login(url, 'root', 'wrong')).status, 401);
+  assert.equal((await login(url, 'root', 'root-pw')).status, 200);
+});
+
+test('unknown-username login still does password verification work (timing equalization)', async (t) => {
+  const { deps } = fakeDeps();
+  const { server, url } = await listen(createApp(deps));
+  t.after(() => server.close());
+
+  // Behavioral check: identical status + body for unknown user vs wrong
+  // password — no oracle in the response. (The scrypt-on-dummy-hash work is
+  // asserted by construction in users.js.)
+  const unknown = await login(url, 'ghost', 'x');
+  const wrongPw = await login(url, 'root', 'x');
+  assert.equal(unknown.status, 401);
+  assert.equal(wrongPw.status, 401);
+  assert.deepEqual(unknown.body, wrongPw.body);
+});
+
 test('users store persists across reopen from the same dir', async () => {
   const dir = tmpAuthDir();
   const a = makeUsersStore(dir);

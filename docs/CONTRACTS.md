@@ -211,6 +211,9 @@ path id, which only matches when callers pass an eventId there),
   client-supplied `actor`/`identity.subject` fields are honored on this path.
 - **User session**: opaque token from `POST /auth/login` (in-memory server-side,
   TTL `SESSION_TTL_SECONDS`); roles `admin`|`investigator` enforced server-side.
+  Login is brute-force-throttled per (IP, username) — `LOGIN_MAX_ATTEMPTS`(5)/
+  `LOGIN_WINDOW_SECONDS`(60) → `429` + `Retry-After` — and unknown usernames do
+  full scrypt work against a dummy hash (no timing-based account enumeration).
   Admin-only: user management, case create/update/roster/categorize, `POST /runs`
   — the service token is **never** sufficient there. Under a user session the
   audit actor is **always** the authenticated username; per-evidence reads/writes

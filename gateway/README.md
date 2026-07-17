@@ -16,8 +16,14 @@ Port **3000**. Node 20, Express.
   REST connector, smoke scripts). Client-supplied `actor`/`identity.subject`
   fields are honoured on this path (load-test realism).
 - **User session** — `POST /api/v1/auth/login` exchanges `{username,password}`
-  for an opaque token (in-memory, TTL `SESSION_TTL_SECONDS`; a gateway restart
-  logs everyone out). Roles: `admin` | `investigator`, enforced server-side.
+  (JSON body only; never query params, never logged) for an opaque token
+  (in-memory, TTL `SESSION_TTL_SECONDS`; a gateway restart logs everyone out).
+  Roles: `admin` | `investigator`, enforced server-side. Login is throttled
+  per (client IP, username): `LOGIN_MAX_ATTEMPTS` (5) failures within
+  `LOGIN_WINDOW_SECONDS` (60) → `429` + `Retry-After`, even for correct
+  credentials, until the window expires; success clears the counter. Unknown
+  usernames still do full scrypt work against a dummy hash, so response
+  timing cannot enumerate accounts.
   Under a user session the audit **actor is always the authenticated username**;
   client-supplied actors are ignored. Users live in `AUTH_DATA_DIR/users.json`
   (scrypt password hashes); they are deactivated, never deleted, so audit-trail
@@ -104,6 +110,7 @@ still starts with user login disabled (service token unaffected).
 
 - `401` — missing/invalid bearer token, bad login credentials, expired session,
   or a session whose user was deactivated.
+- `429` — login throttled after repeated failures (`Retry-After` header set).
 - `403` — role gate: non-admin (or service-token) caller on an admin route.
 - `400` — parallel variant without a valid `caseId`; invalid user fields;
   multipart without a `file` part; unsafe evidenceId.

@@ -57,6 +57,8 @@ async function main() {
       defaultChannel: process.env.DEFAULT_CHANNEL || 'coc-main',
       verificationUrl: process.env.VERIFICATION_URL || 'http://verification:4004',
       maxUploadBytes: parseInt(process.env.MAX_UPLOAD_BYTES, 10) || 26214400,
+      loginMaxAttempts: parseInt(process.env.LOGIN_MAX_ATTEMPTS, 10) || 5,
+      loginWindowSeconds: parseInt(process.env.LOGIN_WINDOW_SECONDS, 10) || 60,
     },
   });
 

@@ -52,6 +52,11 @@ function toPublic(user) {
   return pub;
 }
 
+// Verifying against this dummy hash keeps an unknown-username login doing the
+// same scrypt work as a real mismatch, so response timing cannot be used to
+// enumerate which usernames exist.
+const DUMMY_HASH = hashPassword('gleipnir-timing-equalizer');
+
 function makeUsersStore(authDataDir) {
   fs.mkdirSync(authDataDir, { recursive: true });
   const file = path.join(authDataDir, 'users.json');
@@ -106,8 +111,12 @@ function makeUsersStore(authDataDir) {
   }
 
   function verifyPassword(username, password) {
+    if (typeof password !== 'string') return null;
     const user = findByUsername(username);
-    if (!user || typeof password !== 'string') return null;
+    if (!user) {
+      verifyHash(password, DUMMY_HASH); // equalize timing; result discarded
+      return null;
+    }
     return verifyHash(password, user.passwordHash) ? toPublic(user) : null;
   }
 
