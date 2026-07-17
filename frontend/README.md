@@ -13,9 +13,9 @@ only).
 
 - `src/auth/` — `AuthContext` (session token in localStorage, `GatewayClient`
   owner, 401 → drop session), `LoginPage`, `RequireAuth`, `RequireRole`.
-- `src/components/` — `EvidenceCard`, `AuditTrail`, `MerkleBadge`,
-  `SessionTrail` (promoted verbatim from the old `demo.tsx`),
-  `AuditTrailTimeline` (M21: the CoC trail as a vertical timeline),
+- `src/components/` — `EvidenceCard`, `MerkleBadge`, `SessionTrail`
+  (promoted from the old `demo.tsx`), `AuditTrailTimeline` (M21/M23: the CoC
+  trail as a vertical timeline — replaced the flat `AuditTrail` list),
   `Layout/TopBar` + `Layout/Sidebar` (role-aware nav).
 - `src/components/ui/` — the M21 in-repo primitive kit: `Tabs`, `Stepper`,
   `Modal`, `Timeline`, `Badge`. Deliberately NO component library — styled on
@@ -30,9 +30,11 @@ only).
   category, forensic metadata with ITEM-NNN auto-suggest, file + LOCAL
   WebCrypto ni-URI hash, review; the server's `integrityProof` is compared
   against the local hash after upload), `MyCasesPage`, `CaseDetailPage`
-  (metadata + evidence roster),
-  `EvidenceDetailPage` (card + trail + Merkle badge + download/export +
-  transfer/access forms), `SearchPage` (evidence + case search,
+  (M23 tabs: Overview / Evidence with category+flag columns / Activity feed /
+  Team — admin-or-case-lead only), `EvidenceDetailPage` (M23 tabs: Overview
+  with metadata + flag control / Chain of Custody timeline + verify +
+  transfer/access forms / Examiner Notes composer; admin Download hidden
+  off-case per M18), `SearchPage` (evidence + case search,
   participant-scoped server-side).
 - `src/pages/admin/` — `UsersPage`, `CasesAdminPage` (roster + categorize),
   `DashboardPage` (the old operator dashboard, now admin-gated: variant/sweep

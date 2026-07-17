@@ -3,13 +3,13 @@
 **Status:** describes the system as implemented and live-verified at commit
 `8bb4c4e` (2026-07-10), **updated 2026-07-16 for the M12–M16 evidence
 library** (gateway auth & roles, case-registry, evidence-store, multi-page
-frontend) and **2026-07-17 for M17–M22** (User wire field `displayName` →
+frontend) and **2026-07-17 for M17–M23** (User wire field `displayName` →
 `name`; 3-tier RBAC `admin`/`lead`/`investigator` with lead-owned cases and
 the admin blob-content restriction; per-case evidence categories + off-chain
 forensic ingest metadata; examiner notes/flags/activity feed; the in-repo UI
 kit + modal admin pages; the 4-step ingest wizard with client-side ni-URI
-verification — CONTRACTS §12-8/§12-9). This document is descriptive, not
-normative.
+verification; the tabbed case/evidence detail pages — CONTRACTS
+§12-8/§12-9). This document is descriptive, not normative.
 
 | Document | Role |
 |---|---|

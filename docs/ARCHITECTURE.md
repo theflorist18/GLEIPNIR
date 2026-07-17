@@ -458,6 +458,7 @@ sequenceDiagram
 | 20 | Collaboration (library) | Examiner notes (append-only, immutable-by-API), the strict-enum evidence flag, and the synthesized case activity feed land off-chain (CONTRACTS §12-9): contributor notes + flags, viewer reads but cannot write, the feed shows all five event types, and none of it grows the on-chain trail; `smoke-library.sh` step 16 passes |
 | 21 | UI kit + admin refresh (frontend) | In-repo primitives (Tabs/Stepper/Modal/Timeline/Badge, no component library) + `AuditTrailTimeline` land with the first frontend vitest tests (`npm test` joins the green bar); UsersPage becomes modal-driven with role badges; leads create cases from My Cases; admin designates a lead at creation |
 | 22 | Ingest wizard (frontend) | `/ingest` becomes a 4-step wizard (case+category / metadata with ITEM-NNN auto-suggest / file + local WebCrypto ni-URI hash with progress / review): the local hash is compared against the returned `integrityProof` — match shows "integrity verified end-to-end", mismatch a danger banner; `lib/ni.ts` is vector-tested byte-identical to `gateway/src/ni.js` |
+| 23 | Tabbed detail pages (frontend) | EvidenceDetail → Overview / Chain of Custody (`AuditTrailTimeline`, replacing the flat trail) / Examiner Notes; CaseDetail → Overview / Evidence (category+flag columns) / Activity (feed on Timeline) / Team (admin-or-case-lead only, add/remove via modal); flag control + notes composer render only for writers; admin Download hidden off-case; render-tested with a mocked client |
 
 ---
 

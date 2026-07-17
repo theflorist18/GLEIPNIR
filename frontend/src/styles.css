@@ -207,3 +207,6 @@ a:hover { text-decoration: underline; }
   .card { border-color: #999; break-inside: avoid; }
 }
 .kv-line { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.notes { list-style: none; margin: 0 0 12px; padding: 0; }
+.note { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 8px 12px; margin-bottom: 8px; }
+.form textarea { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; font: inherit; width: 100%; box-sizing: border-box; }
