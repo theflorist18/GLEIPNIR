@@ -262,6 +262,29 @@ export interface EvidenceIndexRow {
   seizedAt?: string | null;
   acquisitionLocation?: string | null;
   handedOverBy?: string | null;
+  /** M20 triage flag (single, or null). */
+  flag?: EvidenceFlag;
+}
+
+/** M20: the one evidence triage flag (or null — unflagged). */
+export type EvidenceFlag = 'HIGH_PRIORITY' | 'PROCESSED' | 'NEEDS_LEAD_REVIEW' | null;
+
+/** M20: examiner note — append-only, immutable through the API. */
+export interface EvidenceNote {
+  id: string; // note-<uuid>
+  evidenceId: string;
+  author: string;
+  body: string;
+  createdAt: string;
+}
+
+/** M20: one entry of the synthesized case activity feed. */
+export interface CaseActivityEvent {
+  type: 'CASE_CREATED' | 'CASE_UPDATED' | 'PARTICIPANT_ADDED' | 'EVIDENCE_ADDED' | 'NOTE_ADDED';
+  ts: string;
+  actor?: string;
+  evidenceId?: string;
+  detail?: Record<string, unknown>;
 }
 
 /** PATCH /evidence/:id/details payload (M19): string sets, null clears. */
@@ -290,6 +313,7 @@ export interface ExportBundle {
 
 export interface EvidenceSearchParams {
   q?: string;
+  flag?: Exclude<EvidenceFlag, null>;
   caseId?: string;
   uploadedBy?: string;
   type?: string;

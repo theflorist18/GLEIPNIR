@@ -165,4 +165,18 @@ META_ROW="$(curl -fsS "${AUTH_IVY[@]}" "${GATEWAY}/api/v1/cases/${LEAD_CASE_ID}"
 [ "$(echo "${META_ROW}" | jq -r '.categoryId')" = "${CAT_ID}" ] || fail "metadata categoryId: ${META_ROW}"
 [ "$(echo "${META_ROW}" | jq -r '.seizedAt')" = "2026-07-15T09:30:00Z" ] || fail "metadata seizedAt: ${META_ROW}"
 
-echo "[smoke-library] PASS — login/3-tier roles, case scoping, lead-owned cases, categories + forensic ingest metadata, multipart ingest, search, the admin content restriction, and the synchronous auto-AccessLog all behave correctly"
+echo "[smoke-library] 16) M20: examiner note, flag, and the case activity feed"
+NOTE_ID="$(curl -fsS "${AUTH_IVY[@]}" -H 'content-type: application/json' \
+  -X POST "${GATEWAY}/api/v1/evidence/${EV2}/notes" \
+  -d '{"body":"smoke examiner note"}' | jq -r '.id')"
+case "${NOTE_ID}" in note-*) ;; *) fail "note create: '${NOTE_ID}'" ;; esac
+NOTES_LEN="$(curl -fsS "${AUTH_IVY[@]}" "${GATEWAY}/api/v1/evidence/${EV2}/notes" | jq 'length')"
+[ "${NOTES_LEN}" -ge 1 ] || fail "notes list length ${NOTES_LEN}"
+FLAG="$(curl -fsS "${AUTH_IVY[@]}" -H 'content-type: application/json' \
+  -X PUT "${GATEWAY}/api/v1/evidence/${EV2}/flag" -d '{"flag":"HIGH_PRIORITY"}' | jq -r '.flag')"
+[ "${FLAG}" = "HIGH_PRIORITY" ] || fail "flag set: '${FLAG}'"
+ACTIVITY="$(curl -fsS "${AUTH_IVY[@]}" "${GATEWAY}/api/v1/cases/${LEAD_CASE_ID}/activity")"
+[ "$(echo "${ACTIVITY}" | jq 'length')" -ge 4 ] || fail "activity feed too short: ${ACTIVITY}"
+echo "${ACTIVITY}" | jq -e '[.[] | select(.type=="NOTE_ADDED")] | length >= 1' >/dev/null || fail "activity missing NOTE_ADDED"
+
+echo "[smoke-library] PASS — login/3-tier roles, case scoping, lead-owned cases, categories + forensic ingest metadata, examiner notes/flags/activity, multipart ingest, search, the admin content restriction, and the synchronous auto-AccessLog all behave correctly"

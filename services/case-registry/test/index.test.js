@@ -384,3 +384,63 @@ test('M19: pre-M19 evidence_index (no metadata columns) gains them on boot, idem
   const url2 = await start(t, dir);
   assert.equal((await json(await call(url2, 'GET', '/evidence-index/ev-old'))).label, 'ITEM-OLD');
 });
+
+test('M20: notes are append-only — create/list work, no mutation routes exist', async (t) => {
+  const url = await start(t);
+  await indexEvidence(url, 'ev-notes');
+
+  const n1 = await json(await call(url, 'POST', '/evidence-index/ev-notes/notes', { author: 'ivy', body: 'first pass done' }));
+  assert.match(n1.id, /^note-/);
+  await call(url, 'POST', '/evidence-index/ev-notes/notes', { author: 'lena', body: 'needs a second look' });
+
+  const listed = await json(await call(url, 'GET', '/evidence-index/ev-notes/notes'));
+  assert.deepEqual(listed.map((n) => n.author), ['ivy', 'lena']); // ascending
+
+  // Immutable-by-API: no PATCH/PUT/DELETE surface for a note anywhere.
+  assert.equal((await call(url, 'PATCH', `/evidence-index/ev-notes/notes/${n1.id}`, { body: 'rewrite' })).status, 404);
+  assert.equal((await call(url, 'DELETE', `/evidence-index/ev-notes/notes/${n1.id}`)).status, 404);
+
+  // Validation + unknown evidence.
+  assert.equal((await call(url, 'POST', '/evidence-index/ev-notes/notes', { author: 'ivy', body: '   ' })).status, 400);
+  assert.equal((await call(url, 'POST', '/evidence-index/ev-ghost/notes', { author: 'ivy', body: 'x' })).status, 404);
+});
+
+test('M20: flag is a strict enum (or null) and searchable', async (t) => {
+  const url = await start(t);
+  await indexEvidence(url, 'ev-flag');
+
+  assert.equal((await json(await call(url, 'PATCH', '/evidence-index/ev-flag', { flag: 'HIGH_PRIORITY' }))).flag, 'HIGH_PRIORITY');
+  assert.equal((await call(url, 'PATCH', '/evidence-index/ev-flag', { flag: 'URGENT' })).status, 400);
+
+  const hits = await json(await call(url, 'GET', '/evidence-index?flag=HIGH_PRIORITY'));
+  assert.deepEqual(hits.map((r) => r.evidenceId), ['ev-flag']);
+  assert.equal((await call(url, 'GET', '/evidence-index?flag=URGENT')).status, 400);
+
+  assert.equal((await json(await call(url, 'PATCH', '/evidence-index/ev-flag', { flag: null }))).flag, null);
+  assert.equal((await json(await call(url, 'GET', '/evidence-index?flag=HIGH_PRIORITY'))).length, 0);
+});
+
+test('M20: activity feed is synthesized, ts-DESC, and complete across all five event types', async (t) => {
+  const url = await start(t);
+  const c = await makeCase(url, 'active case');
+  await call(url, 'POST', `/cases/${c.id}/participants`, { userId: 'ivy', roleInCase: 'contributor', addedBy: 'root' });
+  await indexEvidence(url, 'ev-act', { caseId: c.id, label: 'ITEM-001' });
+  await call(url, 'POST', '/evidence-index/ev-act/notes', { author: 'ivy', body: 'examined' });
+  await call(url, 'PATCH', `/cases/${c.id}`, { status: 'CLOSED' });
+
+  const feed = await json(await call(url, 'GET', `/cases/${c.id}/activity`));
+  const types = feed.map((e) => e.type);
+  for (const expect of ['CASE_CREATED', 'CASE_UPDATED', 'PARTICIPANT_ADDED', 'EVIDENCE_ADDED', 'NOTE_ADDED']) {
+    assert.ok(types.includes(expect), `missing ${expect} in ${types}`);
+  }
+  // ts-DESC ordering.
+  for (let i = 1; i < feed.length; i += 1) {
+    assert.ok(feed[i - 1].ts >= feed[i].ts, 'feed not ts-DESC');
+  }
+  const note = feed.find((e) => e.type === 'NOTE_ADDED');
+  assert.equal(note.actor, 'ivy');
+  assert.equal(note.evidenceId, 'ev-act');
+  // limit applies; unknown case 404s.
+  assert.equal((await json(await call(url, 'GET', `/cases/${c.id}/activity?limit=2`))).length, 2);
+  assert.equal((await call(url, 'GET', '/cases/CASE-ghost/activity')).status, 404);
+});

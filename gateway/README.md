@@ -61,6 +61,9 @@ Admin-only routes (user management, `POST /runs`) require an **admin session**
 | `POST`/`DELETE` | `/cases/:id/evidence[/:evidenceId]` | categorize/uncategorize, admin-or-case-lead |
 | `POST`/`GET`/`PATCH`/`DELETE` | `/cases/:id/categories[/:categoryId]` | evidence taxonomy (M19); read = case visibility, manage = admin-or-case-lead |
 | `PATCH` | `/evidence/:id/details` | M19 metadata (label/category/seizedAt/location/hand-off) → evidence-index; write-gated, never auto-logged |
+| `GET`/`POST` | `/evidence/:id/notes` | examiner notes (M20): append-only, immutable-by-API; read/write gates; sessions stamp the author |
+| `PUT` | `/evidence/:id/flag` | one strict-enum triage flag or null (M20); write-gated |
+| `GET` | `/cases/:id/activity?limit=` | synthesized case activity feed (M20); case-visibility gate; never auto-logged |
 | `POST`/`GET` | `/runs`, `/runs/:id` | run-request store (execution is host-side); `POST` is admin-session-only |
 
 Auto-AccessLog is **synchronous**: a user-session view/download/export succeeds

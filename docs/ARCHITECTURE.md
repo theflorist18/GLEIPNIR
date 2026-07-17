@@ -455,6 +455,7 @@ sequenceDiagram
 | 17 | User `name` rename (library) | `displayName` → `name` across store/API/SPA (CONTRACTS §12-8); a pre-M17 `users.json` upgrades in place on boot and login still works; gateway tests + `smoke-library.sh` pass |
 | 18 | 3-tier RBAC (library) | `lead` role lands (user + case level, CONTRACTS §12-8): a lead creates a case and manages its roster; an investigator cannot create; a pre-M18 `case-registry.db` rebuilds its CHECK in place; admin `GET .../download` off-case → 403 while view/audit/export stay 200; `smoke-library.sh` steps 12–14 pass |
 | 19 | Forensic ingest metadata (library) | Per-case categories + label/seizedAt/acquisitionLocation/handedOverBy land off-chain (CONTRACTS §12-9): lead creates a category, ingest carries the fields to the read-model, the Codex-Entry head is byte-identical, a bad category 400s before any write; `smoke-library.sh` step 15 passes |
+| 20 | Collaboration (library) | Examiner notes (append-only, immutable-by-API), the strict-enum evidence flag, and the synthesized case activity feed land off-chain (CONTRACTS §12-9): contributor notes + flags, viewer reads but cannot write, the feed shows all five event types, and none of it grows the on-chain trail; `smoke-library.sh` step 16 passes |
 
 ---
 

@@ -30,6 +30,8 @@ so the runtime image stays lean). Same Node version pin, different libc.
 | `PATCH` | `/cases/:caseId` | update name/description/status (`OPEN\|CLOSED\|ARCHIVED`) |
 | `POST` | `/cases/:caseId/participants` | grant `{userId, roleInCase: viewer\|contributor\|lead}` (M18); `409` dup |
 | `POST`/`GET`/`PATCH`/`DELETE` | `/cases/:caseId/categories[/:categoryId]` | per-case taxonomy (M19); name unique per case (`409`); delete refused `409` while referenced |
+| `POST`/`GET` | `/evidence-index/:evidenceId/notes` | examiner notes (M20) — append-only; deliberately NO update/delete routes |
+| `GET` | `/cases/:caseId/activity?limit=` | activity feed (M20) — synthesized ts-DESC from existing rows; no event table |
 | `DELETE` | `/cases/:caseId/participants/:userId` | revoke; `404` |
 | `POST` | `/cases/:caseId/evidence` | categorize `{evidenceId}`; idempotent same-case; `409` cross-case |
 | `DELETE` | `/cases/:caseId/evidence/:evidenceId` | uncategorize (`case_id -> NULL`) |

@@ -464,3 +464,57 @@ test('M19: evidence details PATCH is write-gated; viewers cannot, contributors a
   // Details PATCHes are library metadata, not evidence access: no auto-log.
   assert.equal(await s.auditLen('ivy', 'ev-details'), 1); // CREATE only
 });
+
+test('M20: notes follow read/write gates; sessions stamp the author; nothing auto-logs', SKIP, async (t) => {
+  const s = await bootStack(t);
+  const c = await (await fetch(`${s.url}/api/v1/cases`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ name: 'notes case' }) })).json();
+  await fetch(`${s.url}/api/v1/cases/${c.id}/participants`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ userId: 'ivy', roleInCase: 'contributor' }) });
+  await fetch(`${s.url}/api/v1/cases/${c.id}/participants`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ userId: 'mallory', roleInCase: 'viewer' }) });
+  await s.upload('ivy', Buffer.from('note target'), { evidenceId: 'ev-notes', caseId: c.id });
+
+  // Contributor posts; the client-supplied author is overridden by the session.
+  const posted = await fetch(`${s.url}/api/v1/evidence/ev-notes/notes`, {
+    method: 'POST', headers: s.asJson('ivy'), body: JSON.stringify({ author: 'someone-else', body: 'chain of custody intact' }),
+  });
+  assert.equal(posted.status, 201);
+  assert.equal((await posted.json()).author, 'ivy');
+
+  // Viewer reads but cannot post; outsider sees nothing.
+  assert.equal((await fetch(`${s.url}/api/v1/evidence/ev-notes/notes`, { headers: s.as('mallory') })).status, 200);
+  assert.equal((await fetch(`${s.url}/api/v1/evidence/ev-notes/notes`, { method: 'POST', headers: s.asJson('mallory'), body: JSON.stringify({ body: 'nope' }) })).status, 403);
+
+  // Service token: full bypass and the client author is honored.
+  const svc = await fetch(`${s.url}/api/v1/evidence/ev-notes/notes`, {
+    method: 'POST', headers: s.asJson('service'), body: JSON.stringify({ author: 'caliper-worker-3', body: 'load note' }),
+  });
+  assert.equal(svc.status, 201);
+  assert.equal((await svc.json()).author, 'caliper-worker-3');
+
+  // Flag: write-gated, echoed on the read model.
+  assert.equal((await fetch(`${s.url}/api/v1/evidence/ev-notes/flag`, { method: 'PUT', headers: s.asJson('mallory'), body: JSON.stringify({ flag: 'PROCESSED' }) })).status, 403);
+  const flagged = await fetch(`${s.url}/api/v1/evidence/ev-notes/flag`, { method: 'PUT', headers: s.asJson('ivy'), body: JSON.stringify({ flag: 'NEEDS_LEAD_REVIEW' }) });
+  assert.equal(flagged.status, 200);
+  assert.equal((await flagged.json()).flag, 'NEEDS_LEAD_REVIEW');
+  const found = await (await fetch(`${s.url}/api/v1/evidence/search?flag=NEEDS_LEAD_REVIEW`, { headers: s.as('ivy') })).json();
+  assert.deepEqual(found.map((r) => r.evidenceId), ['ev-notes']);
+
+  // None of it touched the on-chain trail: CREATE only.
+  assert.equal(await s.auditLen('ivy', 'ev-notes'), 1);
+});
+
+test('M20: the case activity feed follows case visibility and reflects the collaboration', SKIP, async (t) => {
+  const s = await bootStack(t);
+  const c = await (await fetch(`${s.url}/api/v1/cases`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ name: 'feed case' }) })).json();
+  await fetch(`${s.url}/api/v1/cases/${c.id}/participants`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ userId: 'ivy', roleInCase: 'contributor' }) });
+  await s.upload('ivy', Buffer.from('feed exhibit'), { evidenceId: 'ev-feed', caseId: c.id, label: 'ITEM-007' });
+  await fetch(`${s.url}/api/v1/evidence/ev-feed/notes`, { method: 'POST', headers: s.asJson('ivy'), body: JSON.stringify({ body: 'first note' }) });
+
+  const feed = await (await fetch(`${s.url}/api/v1/cases/${c.id}/activity`, { headers: s.as('ivy') })).json();
+  const types = feed.map((e) => e.type);
+  assert.ok(types.includes('CASE_CREATED') && types.includes('PARTICIPANT_ADDED') && types.includes('EVIDENCE_ADDED') && types.includes('NOTE_ADDED'), String(types));
+  assert.equal(feed.find((e) => e.type === 'EVIDENCE_ADDED').detail.label, 'ITEM-007');
+
+  // Participant and admin read it; outsiders get 404.
+  assert.equal((await fetch(`${s.url}/api/v1/cases/${c.id}/activity`, { headers: s.as('root') })).status, 200);
+  assert.equal((await fetch(`${s.url}/api/v1/cases/${c.id}/activity`, { headers: s.as('mallory') })).status, 404);
+});

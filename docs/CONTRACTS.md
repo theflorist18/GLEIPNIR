@@ -202,6 +202,8 @@ path id, which only matches when callers pass an eventId there),
 `POST/GET/PATCH/DELETE /cases/:id/categories[/:categoryId]` (M19: read =
 case visibility, manage = admin-or-case-lead),
 `PATCH /evidence/:id/details` (M19 metadata; write-gated, never auto-logged),
+`GET/POST /evidence/:id/notes` (M20; append-only, no mutation routes),
+`PUT /evidence/:id/flag`, `GET /cases/:id/activity?limit=` (M20),
 `POST /auth/login|logout`, `GET /auth/me`, `GET/POST /admin/users`,
 `PATCH /admin/users/:id`, `POST /admin/users/:id/reset-password`,
 `POST /runs`, `GET /runs`, `GET /runs/:id`.
@@ -256,6 +258,21 @@ case visibility, manage = admin-or-case-lead),
 - **EvidenceCategory** (M19, per-case taxonomy) `{id: cat-<uuid>, caseId,
   name, createdBy, createdAt}` — name unique per case; managed by
   admin-or-case-lead; undeletable while referenced by evidence (409).
+- **EvidenceNote** (M20) `{id: note-<uuid>, evidenceId, author, body,
+  createdAt}` — **append-only, immutable by API**: no update or delete route
+  exists at the gateway or the registry. Read = evidence read gate; write =
+  evidence write gate; sessions always stamp the authenticated username as
+  `author` (the service path honors the client author, same as audit actors).
+- **Evidence flag** (M20): `EvidenceIndex.flag ∈ HIGH_PRIORITY | PROCESSED |
+  NEEDS_LEAD_REVIEW | null` — one flag, strict enum, set via
+  `PUT /evidence/:id/flag` (write gate); `flag=` joins the search filters.
+- **CaseActivityEvent** (M20) `{type: CASE_CREATED|CASE_UPDATED|
+  PARTICIPANT_ADDED|EVIDENCE_ADDED|NOTE_ADDED, ts, actor?, evidenceId?,
+  detail?}` from `GET /cases/:id/activity?limit=` (case visibility gate) —
+  **synthesized** ts-DESC from existing rows; there is deliberately no event
+  table (per-change history is deferred with the logging mechanism), so
+  CASE_UPDATED reflects only the latest update. Collaboration routes never
+  auto-append `AccessLog` — they are library metadata, not evidence access.
 - Multipart ingest response: `{evidenceId, eventId, integrityProof, txId|batched}`.
   Export bundle: `{evidenceId, exportedAt, record, auditTrail}` (trail as of the
   export moment; the export's own ACCESS event lands after it).
@@ -484,7 +501,8 @@ it is one GoLevelDB directory shared by all of a peer's channels).
    it remains insufficient for user/case management. Nothing here touches the
    chaincode, the Codex-Entry head, or the benchmark path.
 
-9. **Library forensic metadata (M19, authorized by the authors).** The
+9. **Library forensic metadata & collaboration (M19–M20, authorized by the
+   authors).** The
    evidence library gains per-case **evidence categories** (a lead-managed
    taxonomy) and five **off-chain** ingest-metadata fields on the
    evidence-index read-model: `label` (human-readable item number, not
@@ -496,7 +514,14 @@ it is one GoLevelDB directory shared by all of a peer's channels).
    `buildHead`/`buildEvent` are untouched: the Codex-Entry head and the CoC
    event stay byte-identical, and none of this metadata ever reaches the
    chain. Metadata PATCHes are library bookkeeping, not evidence access —
-   they are never auto-AccessLogged.
+   they are never auto-AccessLogged. M20 adds the collaboration layer on the
+   same terms: **examiner notes** (append-only table; immutable-by-API — no
+   update/delete surface exists, which is the integrity posture), a single
+   strict-enum **evidence flag**, and a **synthesized case activity feed**
+   (merged from existing timestamped rows — deliberately no event/log table;
+   the system-wide audit-log mechanism and its exports remain deferred by
+   the authors, and CASE/UCO JSON-LD remains banned). None of the
+   collaboration routes write to the chain or auto-append `AccessLog`.
 
 Anything else that seems to require deviating from ARCHITECTURE.md or CLAUDE.md: STOP
 and ask the authors (per CLAUDE.md ground rule 2).

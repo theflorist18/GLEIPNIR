@@ -10,6 +10,7 @@
 
 import type {
   AccessLogRequest,
+  CaseActivityEvent,
   CaseDetail,
   CaseRole,
   CaseStatus,
@@ -18,7 +19,9 @@ import type {
   CreateEvidenceRequest,
   EvidenceCategory,
   EvidenceDetailsPatch,
+  EvidenceFlag,
   EvidenceIndexRow,
+  EvidenceNote,
   EvidenceRecord,
   EvidenceSearchParams,
   ExportBundle,
@@ -323,11 +326,30 @@ export class GatewayClient {
 
   searchEvidence(params: EvidenceSearchParams): Promise<EvidenceIndexRow[]> {
     const qs = new URLSearchParams();
-    for (const k of ['q', 'caseId', 'uploadedBy', 'type', 'from', 'to'] as const) {
+    for (const k of ['q', 'flag', 'caseId', 'uploadedBy', 'type', 'from', 'to'] as const) {
       const v = params[k];
       if (v) qs.set(k, v);
     }
     return this.request<EvidenceIndexRow[]>('GET', `/evidence/search?${qs}`);
+  }
+
+  // ---- collaboration (M20): examiner notes, flag, case activity ----
+  listNotes(evidenceId: string): Promise<EvidenceNote[]> {
+    return this.request<EvidenceNote[]>('GET', `/evidence/${encodeURIComponent(evidenceId)}/notes`);
+  }
+
+  /** Append-only: there is no edit or delete — notes are immutable by API. */
+  addNote(evidenceId: string, body: string): Promise<EvidenceNote> {
+    return this.request<EvidenceNote>('POST', `/evidence/${encodeURIComponent(evidenceId)}/notes`, { body });
+  }
+
+  setFlag(evidenceId: string, flag: EvidenceFlag): Promise<EvidenceIndexRow> {
+    return this.request<EvidenceIndexRow>('PUT', `/evidence/${encodeURIComponent(evidenceId)}/flag`, { flag });
+  }
+
+  getCaseActivity(caseId: string, limit?: number): Promise<CaseActivityEvent[]> {
+    const qs = limit ? `?limit=${limit}` : '';
+    return this.request<CaseActivityEvent[]>('GET', `/cases/${encodeURIComponent(caseId)}/activity${qs}`);
   }
 
   // Streams the blob back; the caller turns it into a browser download.

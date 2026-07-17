@@ -379,6 +379,42 @@ function createApp(deps) {
     }));
   }));
 
+  // ---- collaboration (M20): notes, flag, activity feed. Off-chain library
+  // metadata, NOT evidence content — none of these routes auto-AccessLog,
+  // and the CoC trail contract is untouched. Notes are immutable-by-API:
+  // no update/delete routes exist anywhere in the stack.
+  app.get('/api/v1/evidence/:id/notes', requireLibrary, wrap(async (req, res) => {
+    await ensureEvidenceAccess(req, req.params.id);
+    proxy(res, await caseRegistry.request('GET', `/evidence-index/${encodeURIComponent(req.params.id)}/notes`));
+  }));
+
+  app.post('/api/v1/evidence/:id/notes', requireLibrary, wrap(async (req, res) => {
+    await ensureEvidenceAccess(req, req.params.id, { write: true });
+    const b = req.body || {};
+    // Sessions always stamp the authenticated username; the service path
+    // honors the client-supplied author (same rule as the audit actor).
+    proxy(res, await caseRegistry.request('POST', `/evidence-index/${encodeURIComponent(req.params.id)}/notes`, {
+      author: actorFor(req, b.author || ''), body: b.body,
+    }));
+  }));
+
+  app.put('/api/v1/evidence/:id/flag', requireLibrary, wrap(async (req, res) => {
+    await ensureEvidenceAccess(req, req.params.id, { write: true });
+    proxy(res, await caseRegistry.request('PATCH', `/evidence-index/${encodeURIComponent(req.params.id)}`, {
+      flag: (req.body || {}).flag ?? null,
+    }));
+  }));
+
+  app.get('/api/v1/cases/:id/activity', requireLibrary, wrap(async (req, res) => {
+    if (isNonAdminUser(req)) {
+      const out = await caseRegistry.request('GET', `/cases/${encodeURIComponent(req.params.id)}`);
+      const mine = out.status === 200 && (out.body.participants || []).some((p) => p.userId === req.principal.username);
+      if (!mine) return res.status(404).json({ error: 'case not found' }); // don't leak existence
+    }
+    const qs = req.query.limit ? `?limit=${encodeURIComponent(String(req.query.limit))}` : '';
+    proxy(res, await caseRegistry.request('GET', `/cases/${encodeURIComponent(req.params.id)}/activity${qs}`));
+  }));
+
   // Must be registered before GET /api/v1/evidence/:id.
   app.get('/api/v1/evidence/search', requireLibrary, wrap(async (req, res) => {
     const qs = new URLSearchParams();

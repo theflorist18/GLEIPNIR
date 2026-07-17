@@ -27,6 +27,8 @@ const Database = require('better-sqlite3');
 // applied to ids that reach SQL params or URLs.
 const SAFE_ID = /^[A-Za-z0-9._:-]+$/;
 const CASE_STATUSES = ['OPEN', 'CLOSED', 'ARCHIVED'];
+// M20: single evidence flag (or null). A deliberate enum, not free-form tags.
+const EVIDENCE_FLAGS = ['HIGH_PRIORITY', 'PROCESSED', 'NEEDS_LEAD_REVIEW'];
 // M18 (CONTRACTS §12-8): 'lead' joined the per-case ladder — leads manage the
 // roster/config of cases where they hold this role (enforced by the gateway).
 const CASE_ROLES = ['viewer', 'contributor', 'lead'];
@@ -91,6 +93,14 @@ function openDb(dataDir) {
       created_at TEXT NOT NULL,
       UNIQUE (case_id, name)
     );
+    CREATE TABLE IF NOT EXISTS evidence_notes (
+      id          TEXT PRIMARY KEY,
+      evidence_id TEXT NOT NULL REFERENCES evidence_index(evidence_id),
+      author      TEXT NOT NULL,
+      body        TEXT NOT NULL,
+      created_at  TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_notes_evidence ON evidence_notes(evidence_id);
     CREATE INDEX IF NOT EXISTS idx_evidence_case ON evidence_index(case_id);
     CREATE INDEX IF NOT EXISTS idx_participants_user ON case_participants(user_id);
     CREATE INDEX IF NOT EXISTS idx_categories_case ON evidence_categories(case_id);
@@ -102,6 +112,7 @@ function openDb(dataDir) {
   addColumnIfMissing(db, 'evidence_index', 'seized_at', 'seized_at TEXT');
   addColumnIfMissing(db, 'evidence_index', 'acquisition_location', 'acquisition_location TEXT');
   addColumnIfMissing(db, 'evidence_index', 'handed_over_by', 'handed_over_by TEXT');
+  addColumnIfMissing(db, 'evidence_index', 'flag', 'flag TEXT');
   // M18: role_in_case gained 'lead'. SQLite cannot ALTER a CHECK constraint,
   // so a pre-M18 table (its stored DDL lacks 'lead') is rebuilt in place —
   // transactional, and idempotent because the second boot sees 'lead' in
@@ -145,6 +156,10 @@ const evidenceWire = (r) => r && ({
   lastSyncedAt: r.last_synced_at,
   label: r.label ?? null, categoryId: r.category_id ?? null, seizedAt: r.seized_at ?? null,
   acquisitionLocation: r.acquisition_location ?? null, handedOverBy: r.handed_over_by ?? null,
+  flag: r.flag ?? null,
+});
+const noteWire = (r) => r && ({
+  id: r.id, evidenceId: r.evidence_id, author: r.author, body: r.body, createdAt: r.created_at,
 });
 const categoryWire = (r) => r && ({
   id: r.id, caseId: r.case_id, name: r.name, createdBy: r.created_by, createdAt: r.created_at,
@@ -413,10 +428,14 @@ function createApp(overrides) {
 
   // Search MUST be registered before /evidence-index/:evidenceId would match.
   app.get('/evidence-index', (req, res) => {
-    const { caseId, q, uploadedBy, type, from, to, visibleToUserId } = req.query;
+    const { caseId, q, uploadedBy, type, from, to, visibleToUserId, flag } = req.query;
     const where = [];
     const params = {};
     if (caseId) { where.push('case_id = @caseId'); params.caseId = caseId; }
+    if (flag) {
+      if (!EVIDENCE_FLAGS.includes(flag)) return bad(res, `flag must be one of: ${EVIDENCE_FLAGS.join(', ')}`);
+      where.push('flag = @flag'); params.flag = flag;
+    }
     if (uploadedBy) { where.push('uploaded_by = @uploadedBy'); params.uploadedBy = uploadedBy; }
     if (type) { where.push("mime_type LIKE @type ESCAPE '\\'"); params.type = `${String(type).replace(/([\\%_])/g, '\\$1')}%`; }
     if (from) { where.push('uploaded_at >= @from'); params.from = from; }
@@ -456,12 +475,65 @@ function createApp(overrides) {
     const meta = metaPatchOf(b, row.case_id, res);
     if (meta === null) return undefined;
     Object.assign(row, meta);
+    if (b.flag !== undefined) {
+      if (b.flag !== null && !EVIDENCE_FLAGS.includes(b.flag)) {
+        return bad(res, `flag must be null or one of: ${EVIDENCE_FLAGS.join(', ')}`);
+      }
+      row.flag = b.flag;
+    }
     row.last_synced_at = nowIso();
     db.prepare(`UPDATE evidence_index SET status = @status, last_synced_at = @last_synced_at,
                   label = @label, category_id = @category_id, seized_at = @seized_at,
-                  acquisition_location = @acquisition_location, handed_over_by = @handed_over_by
+                  acquisition_location = @acquisition_location, handed_over_by = @handed_over_by,
+                  flag = @flag
                 WHERE evidence_id = @evidence_id`).run(row);
     return res.json(evidenceWire(row));
+  });
+
+  // ---- examiner notes (M20): append-only by design. There are NO update or
+  // delete routes — a note, once written, is immutable through this API.
+  app.post('/evidence-index/:evidenceId/notes', (req, res) => {
+    const ev = getEvidence.get(req.params.evidenceId);
+    if (!ev) return notFound(res, 'evidence not found in index');
+    const b = req.body || {};
+    if (typeof b.author !== 'string' || !b.author) return bad(res, 'author is required');
+    if (typeof b.body !== 'string' || !b.body.trim()) return bad(res, 'body is required');
+    const row = { id: `note-${crypto.randomUUID()}`, evidence_id: ev.evidence_id, author: b.author, body: b.body, created_at: nowIso() };
+    db.prepare('INSERT INTO evidence_notes (id, evidence_id, author, body, created_at) VALUES (@id, @evidence_id, @author, @body, @created_at)').run(row);
+    res.status(201).json(noteWire(row));
+  });
+
+  app.get('/evidence-index/:evidenceId/notes', (req, res) => {
+    if (!getEvidence.get(req.params.evidenceId)) return notFound(res, 'evidence not found in index');
+    res.json(db.prepare('SELECT * FROM evidence_notes WHERE evidence_id = ? ORDER BY created_at, id').all(req.params.evidenceId).map(noteWire));
+  });
+
+  // ---- case activity feed (M20): SYNTHESIZED from existing timestamped rows.
+  // Deliberately no event/log table — a per-change history mechanism is
+  // deferred scope; CASE_UPDATED therefore reflects only the latest update.
+  app.get('/cases/:caseId/activity', (req, res) => {
+    const row = getCase.get(req.params.caseId);
+    if (!row) return notFound(res, 'case not found');
+    const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
+    const events = [];
+    events.push({ type: 'CASE_CREATED', ts: row.created_at, actor: row.created_by });
+    if (row.updated_at !== row.created_at) {
+      events.push({ type: 'CASE_UPDATED', ts: row.updated_at, detail: { status: row.status } });
+    }
+    for (const p of db.prepare('SELECT * FROM case_participants WHERE case_id = ?').all(row.id)) {
+      events.push({ type: 'PARTICIPANT_ADDED', ts: p.added_at, actor: p.added_by, detail: { userId: p.user_id, roleInCase: p.role_in_case } });
+    }
+    for (const e of db.prepare('SELECT * FROM evidence_index WHERE case_id = ?').all(row.id)) {
+      events.push({ type: 'EVIDENCE_ADDED', ts: e.uploaded_at, actor: e.uploaded_by, evidenceId: e.evidence_id, detail: { label: e.label ?? null } });
+    }
+    const notes = db.prepare(`SELECT n.* FROM evidence_notes n
+                              JOIN evidence_index e ON e.evidence_id = n.evidence_id
+                              WHERE e.case_id = ?`).all(row.id);
+    for (const n of notes) {
+      events.push({ type: 'NOTE_ADDED', ts: n.created_at, actor: n.author, evidenceId: n.evidence_id, detail: { noteId: n.id } });
+    }
+    events.sort((a, b) => String(b.ts).localeCompare(String(a.ts)));
+    res.json(events.slice(0, limit));
   });
 
   // ---- authz pre-flight (the gateway's per-evidence gate for user sessions) ----
