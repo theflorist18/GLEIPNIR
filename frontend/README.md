@@ -23,9 +23,14 @@ only).
   (`npm test`, jsdom).
 - `src/roles.ts` — display labels for the 3-tier roles and case roles (M18);
   pages never hardcode role strings.
-- `src/pages/investigator/` — `IngestPage` (real file upload → multipart
-  `POST /evidence`; bytes go to the evidence-store, the ledger records the
-  ni-URI proof), `MyCasesPage`, `CaseDetailPage` (metadata + evidence roster),
+- `src/lib/ni.ts` — RFC 6920 ni-URI via `crypto.subtle`, byte-identical to
+  `gateway/src/ni.js` (vector-tested; needs a secure context — localhost
+  qualifies).
+- `src/pages/investigator/` — `IngestPage` (M22: a 4-step wizard — case +
+  category, forensic metadata with ITEM-NNN auto-suggest, file + LOCAL
+  WebCrypto ni-URI hash, review; the server's `integrityProof` is compared
+  against the local hash after upload), `MyCasesPage`, `CaseDetailPage`
+  (metadata + evidence roster),
   `EvidenceDetailPage` (card + trail + Merkle badge + download/export +
   transfer/access forms), `SearchPage` (evidence + case search,
   participant-scoped server-side).
