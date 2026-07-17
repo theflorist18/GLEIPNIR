@@ -182,7 +182,7 @@ lands in the next batch and its receipt PUT overwrites the previous witness
 | receipt-store | **4002** | `PUT /receipts/:eventId`; `GET /receipts/:eventId` (404 if missing) |
 | anchor-client | **4003** | `POST /roots` `{caseId,batchId,merkleRoot,meta}` → `201 {txId}` (submit on `anchor-main`); `GET /roots/:caseId/:batchId` (evaluate on `anchor-main`) |
 | verification | **4004** | `GET /verify/:eventId` → `{ok,reason?,latencyMs,steps:{fetchMs,recomputeMs,compareRootMs}}`; `reason`: `root-mismatch` (200, tamper signal), `missing-receipt`/`missing-anchor-root` (404, not yet anchored), `malformed-receipt` (422 — the un-hardened witness stored junk) |
-| case-registry | **4005** | internal-only (via gateway; `X-Gleipnir-Internal-Token` after `/healthz`): `POST/GET/PATCH /cases[/:caseId]`, `POST/DELETE /cases/:caseId/participants[/:userId]`, `POST/DELETE /cases/:caseId/evidence[/:evidenceId]` (categorize; idempotent same-case, 409 cross-case), `POST/GET/PATCH /evidence-index[/:evidenceId]`, `GET /evidence-index?caseId=&q=&uploadedBy=&type=&from=&to=&visibleToUserId=`, `GET /internal/authz?userId=&evidenceId=` → `{allowed,caseId,roleInCase}` |
+| case-registry | **4005** | internal-only (via gateway; `X-Gleipnir-Internal-Token` after `/healthz`): `POST/GET/PATCH /cases[/:caseId]`, `POST/DELETE /cases/:caseId/participants[/:userId]`, `POST/DELETE /cases/:caseId/evidence[/:evidenceId]` (categorize; idempotent same-case, 409 cross-case; un-assign also clears `categoryId`), `POST/GET/PATCH/DELETE /cases/:caseId/categories[/:categoryId]` (M19 taxonomy; name unique per case → 409; delete refused 409 while referenced), `POST/GET/PATCH /evidence-index[/:evidenceId]` (accepts the M19 metadata fields; `categoryId` must belong to the evidence's case), `GET /evidence-index?caseId=&q=&uploadedBy=&type=&from=&to=&visibleToUserId=`, `GET /internal/authz?userId=&evidenceId=` → `{allowed,caseId,roleInCase}` |
 | evidence-store | **4006** | internal-only (via gateway; `X-Gleipnir-Internal-Token` after `/healthz`): `PUT /blobs/:evidenceId` (raw body + `X-Content-Type`/`X-Original-Filename`) → `201 {integrityProof,sizeBytes,storedAt}`, `409` if exists (immutable), `413` over `MAX_UPLOAD_BYTES`; `GET /blobs/:evidenceId` (attachment stream); `GET /blobs/:evidenceId/meta`; `GET /blobs/:evidenceId/verify?expected=<ni-uri>`; `DELETE /blobs/:evidenceId` (ingest-rollback only) |
 | frontend (nginx) | **8081** | serves SPA; `GET /healthz`; proxies `/api/*` → `gateway:3000` |
 
@@ -199,6 +199,9 @@ path id, which only matches when callers pass an eventId there),
 `GET /evidence/search`, `POST/GET/PATCH /cases[/:id]`, `GET /cases/search`,
 `POST/DELETE /cases/:id/participants[/:userId]`,
 `POST/DELETE /cases/:id/evidence[/:evidenceId]`,
+`POST/GET/PATCH/DELETE /cases/:id/categories[/:categoryId]` (M19: read =
+case visibility, manage = admin-or-case-lead),
+`PATCH /evidence/:id/details` (M19 metadata; write-gated, never auto-logged),
 `POST /auth/login|logout`, `GET /auth/me`, `GET/POST /admin/users`,
 `PATCH /admin/users/:id`, `POST /admin/users/:id/reset-password`,
 `POST /runs`, `GET /runs`, `GET /runs/:id`.
@@ -244,7 +247,15 @@ path id, which only matches when callers pass an eventId there),
   keeps at least one (removing the last lead is 409 for leads, admin-only).
 - **EvidenceIndex** (read-model/cache — the ledger stays authoritative for
   status/custodian) `{evidenceId, caseId|null, originalFilename, mimeType,
-  sizeBytes, integrityProof, uploadedBy, uploadedAt, status, lastSyncedAt}`.
+  sizeBytes, integrityProof, uploadedBy, uploadedAt, status, lastSyncedAt,
+  label|null, categoryId|null, seizedAt|null, acquisitionLocation|null,
+  handedOverBy|null}` — the last five are M19 forensic metadata,
+  **off-chain only** (the Codex-Entry head and CoC event are untouched).
+  `label` is a human-readable item number (e.g. `ITEM-001`), deliberately
+  NOT unique-enforced; the on-chain key stays the uuid `evidenceId`.
+- **EvidenceCategory** (M19, per-case taxonomy) `{id: cat-<uuid>, caseId,
+  name, createdBy, createdAt}` — name unique per case; managed by
+  admin-or-case-lead; undeletable while referenced by evidence (409).
 - Multipart ingest response: `{evidenceId, eventId, integrityProof, txId|batched}`.
   Export bundle: `{evidenceId, exportedAt, record, auditTrail}` (trail as of the
   export moment; the export's own ACCESS event lands after it).
@@ -472,6 +483,20 @@ it is one GoLevelDB directory shared by all of a peer's channels).
    still honored on that path, the auto-AccessLog still never fires for it, and
    it remains insufficient for user/case management. Nothing here touches the
    chaincode, the Codex-Entry head, or the benchmark path.
+
+9. **Library forensic metadata (M19, authorized by the authors).** The
+   evidence library gains per-case **evidence categories** (a lead-managed
+   taxonomy) and five **off-chain** ingest-metadata fields on the
+   evidence-index read-model: `label` (human-readable item number, not
+   unique-enforced — the on-chain key stays the uuid), `categoryId`,
+   `seizedAt`, `acquisitionLocation`, `handedOverBy`. The columns land via
+   idempotent `PRAGMA table_info` guards on the live volume. Multipart ingest
+   accepts the same fields and validates the category **before** any write
+   (a bad category must not surface after the append-only chain commit).
+   `buildHead`/`buildEvent` are untouched: the Codex-Entry head and the CoC
+   event stay byte-identical, and none of this metadata ever reaches the
+   chain. Metadata PATCHes are library bookkeeping, not evidence access —
+   they are never auto-AccessLogged.
 
 Anything else that seems to require deviating from ARCHITECTURE.md or CLAUDE.md: STOP
 and ask the authors (per CLAUDE.md ground rule 2).

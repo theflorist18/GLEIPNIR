@@ -230,6 +230,17 @@ export interface CaseSummary {
 export interface CaseDetail extends CaseSummary {
   participants: CaseParticipant[];
   evidence: EvidenceIndexRow[];
+  /** Per-case evidence taxonomy (M19), lead-managed. */
+  categories?: EvidenceCategory[];
+}
+
+/** Per-case evidence category (M19) — off-chain taxonomy, lead-managed. */
+export interface EvidenceCategory {
+  id: string; // cat-<uuid>
+  caseId: string;
+  name: string;
+  createdBy: string;
+  createdAt: string;
 }
 
 // Read-model row from case-registry — a cache; the ledger stays authoritative
@@ -245,6 +256,21 @@ export interface EvidenceIndexRow {
   uploadedAt: string | null;
   status: string;
   lastSyncedAt: string | null;
+  // M19 forensic metadata — off-chain only, never on the chain record.
+  label?: string | null;
+  categoryId?: string | null;
+  seizedAt?: string | null;
+  acquisitionLocation?: string | null;
+  handedOverBy?: string | null;
+}
+
+/** PATCH /evidence/:id/details payload (M19): string sets, null clears. */
+export interface EvidenceDetailsPatch {
+  label?: string | null;
+  categoryId?: string | null;
+  seizedAt?: string | null;
+  acquisitionLocation?: string | null;
+  handedOverBy?: string | null;
 }
 
 export interface UploadResult {

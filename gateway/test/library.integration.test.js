@@ -394,3 +394,73 @@ test('M18: admins read metadata and trails everywhere but blob content only as a
   await fetch(`${s.url}/api/v1/cases/${c.id}/participants`, { method: 'POST', headers: s.asJson('root'), body: JSON.stringify({ userId: 'root', roleInCase: 'viewer' }) });
   assert.equal((await fetch(`${s.url}/api/v1/evidence/ev-sealed/download`, { headers: s.as('root') })).status, 200);
 });
+
+test('M19: category management is lead-gated; reading follows case visibility', SKIP, async (t) => {
+  const s = await bootStack(t);
+  const c = await (await fetch(`${s.url}/api/v1/cases`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ name: 'taxonomy' }) })).json();
+  await fetch(`${s.url}/api/v1/cases/${c.id}/participants`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ userId: 'ivy', roleInCase: 'contributor' }) });
+
+  // Lead creates; contributor cannot; outsider can't even see the case.
+  const created = await fetch(`${s.url}/api/v1/cases/${c.id}/categories`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ name: 'Mobile Devices' }) });
+  assert.equal(created.status, 201);
+  const cat = await created.json();
+  assert.equal(cat.createdBy, 'lena');
+  assert.equal((await fetch(`${s.url}/api/v1/cases/${c.id}/categories`, { method: 'POST', headers: s.asJson('ivy'), body: JSON.stringify({ name: 'Nope' }) })).status, 403);
+  assert.equal((await fetch(`${s.url}/api/v1/cases/${c.id}/categories`, { headers: s.as('mallory') })).status, 404);
+
+  // Participants and admins list them.
+  assert.deepEqual((await (await fetch(`${s.url}/api/v1/cases/${c.id}/categories`, { headers: s.as('ivy') })).json()).map((x) => x.name), ['Mobile Devices']);
+  assert.equal((await fetch(`${s.url}/api/v1/cases/${c.id}/categories`, { headers: s.as('root') })).status, 200);
+});
+
+test('M19: ingest carries forensic metadata to the read-model; the on-chain head is untouched', SKIP, async (t) => {
+  const s = await bootStack(t);
+  const c = await (await fetch(`${s.url}/api/v1/cases`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ name: 'meta case' }) })).json();
+  await fetch(`${s.url}/api/v1/cases/${c.id}/participants`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ userId: 'ivy', roleInCase: 'contributor' }) });
+  const cat = await (await fetch(`${s.url}/api/v1/cases/${c.id}/categories`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ name: 'Disk Images' }) })).json();
+
+  const up = await s.upload('ivy', Buffer.from('imaged disk'), {
+    evidenceId: 'ev-meta', caseId: c.id, categoryId: cat.id, label: 'ITEM-001',
+    seizedAt: '2026-07-15T09:30:00Z', acquisitionLocation: 'Server room rack 2', handedOverBy: 'Officer Blue',
+  });
+  assert.equal(up.status, 201);
+
+  const row = (await (await fetch(`${s.url}/api/v1/evidence/search?q=ev-meta`, { headers: s.as('ivy') })).json())[0];
+  assert.equal(row.label, 'ITEM-001');
+  assert.equal(row.categoryId, cat.id);
+  assert.equal(row.seizedAt, '2026-07-15T09:30:00Z');
+  assert.equal(row.acquisitionLocation, 'Server room rack 2');
+  assert.equal(row.handedOverBy, 'Officer Blue');
+
+  // The Codex-Entry head carries NONE of the library metadata.
+  const head = JSON.parse(s.fabric.submits.find((x) => x.fn === 'CreateEvidence').args[1]);
+  assert.equal(head.label, undefined);
+  assert.equal(head.categoryId, undefined);
+  assert.equal(head.seizedAt, undefined);
+
+  // A category from the wrong case fails BEFORE anything is written: the id
+  // stays reusable (no blob, no chain commit).
+  const other = await (await fetch(`${s.url}/api/v1/cases`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ name: 'wrong case' }) })).json();
+  await fetch(`${s.url}/api/v1/cases/${other.id}/participants`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ userId: 'ivy', roleInCase: 'contributor' }) });
+  const bad = await s.upload('ivy', Buffer.from('x'), { evidenceId: 'ev-badcat', caseId: other.id, categoryId: cat.id });
+  assert.equal(bad.status, 400);
+  assert.equal((await s.upload('ivy', Buffer.from('x'), { evidenceId: 'ev-badcat', caseId: other.id })).status, 201);
+});
+
+test('M19: evidence details PATCH is write-gated; viewers cannot, contributors and admins can', SKIP, async (t) => {
+  const s = await bootStack(t);
+  const c = await (await fetch(`${s.url}/api/v1/cases`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ name: 'details' }) })).json();
+  await fetch(`${s.url}/api/v1/cases/${c.id}/participants`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ userId: 'ivy', roleInCase: 'contributor' }) });
+  await fetch(`${s.url}/api/v1/cases/${c.id}/participants`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ userId: 'mallory', roleInCase: 'viewer' }) });
+  await s.upload('ivy', Buffer.from('detail bytes'), { evidenceId: 'ev-details', caseId: c.id });
+
+  const patch = (who, body) => fetch(`${s.url}/api/v1/evidence/ev-details/details`, { method: 'PATCH', headers: s.asJson(who), body: JSON.stringify(body) });
+  assert.equal((await patch('mallory', { label: 'ITEM-X' })).status, 403);
+  const ok = await patch('ivy', { label: 'ITEM-001', acquisitionLocation: 'Front desk' });
+  assert.equal(ok.status, 200);
+  assert.equal((await ok.json()).label, 'ITEM-001');
+  assert.equal((await patch('root', { handedOverBy: 'Desk Sgt.' })).status, 200); // metadata: admin bypass applies
+
+  // Details PATCHes are library metadata, not evidence access: no auto-log.
+  assert.equal(await s.auditLen('ivy', 'ev-details'), 1); // CREATE only
+});

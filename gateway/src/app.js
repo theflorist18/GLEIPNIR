@@ -336,6 +336,49 @@ function createApp(deps) {
     proxy(res, await caseRegistry.request('DELETE', `/cases/${encodeURIComponent(req.params.id)}/evidence/${encodeURIComponent(req.params.evidenceId)}`));
   }));
 
+  // ---- evidence categories (M19): per-case taxonomy. Reading follows case
+  // visibility (participant-or-admin); managing is admin-or-case-lead.
+  app.get('/api/v1/cases/:id/categories', requireLibrary, wrap(async (req, res) => {
+    const out = await caseRegistry.request('GET', `/cases/${encodeURIComponent(req.params.id)}`);
+    if (out.status === 200 && isNonAdminUser(req)) {
+      const mine = (out.body.participants || []).some((p) => p.userId === req.principal.username);
+      if (!mine) return res.status(404).json({ error: 'case not found' }); // don't leak existence
+    }
+    if (out.status !== 200) return proxy(res, out);
+    return res.json(out.body.categories || []);
+  }));
+
+  app.post('/api/v1/cases/:id/categories', requireLibrary, wrap(async (req, res) => {
+    await ensureCaseLead(req, req.params.id);
+    proxy(res, await caseRegistry.request('POST', `/cases/${encodeURIComponent(req.params.id)}/categories`, {
+      name: (req.body || {}).name, createdBy: req.principal.username,
+    }));
+  }));
+
+  app.patch('/api/v1/cases/:id/categories/:categoryId', requireLibrary, wrap(async (req, res) => {
+    await ensureCaseLead(req, req.params.id);
+    proxy(res, await caseRegistry.request('PATCH', `/cases/${encodeURIComponent(req.params.id)}/categories/${encodeURIComponent(req.params.categoryId)}`, {
+      name: (req.body || {}).name,
+    }));
+  }));
+
+  app.delete('/api/v1/cases/:id/categories/:categoryId', requireLibrary, wrap(async (req, res) => {
+    await ensureCaseLead(req, req.params.id);
+    proxy(res, await caseRegistry.request('DELETE', `/cases/${encodeURIComponent(req.params.id)}/categories/${encodeURIComponent(req.params.categoryId)}`));
+  }));
+
+  // Library-owned evidence metadata (M19): label, category, seizure context.
+  // Write-gated like the on-chain ops; metadata only, so the admin bypass
+  // applies. Nothing here touches the chain — the head record is immutable.
+  app.patch('/api/v1/evidence/:id/details', requireLibrary, wrap(async (req, res) => {
+    await ensureEvidenceAccess(req, req.params.id, { write: true });
+    const b = req.body || {};
+    proxy(res, await caseRegistry.request('PATCH', `/evidence-index/${encodeURIComponent(req.params.id)}`, {
+      label: b.label, categoryId: b.categoryId, seizedAt: b.seizedAt,
+      acquisitionLocation: b.acquisitionLocation, handedOverBy: b.handedOverBy,
+    }));
+  }));
+
   // Must be registered before GET /api/v1/evidence/:id.
   app.get('/api/v1/evidence/search', requireLibrary, wrap(async (req, res) => {
     const qs = new URLSearchParams();
@@ -389,6 +432,16 @@ function createApp(deps) {
     const caseId = b.caseId || null;
     if (caseId) await ensureCaseIngest(req, caseId);
 
+    // Validate the category BEFORE any write: a bad categoryId must fail the
+    // ingest cleanly, not after the append-only chain commit (M19).
+    if (b.categoryId) {
+      if (!caseId) throw new RequestError(400, 'categoryId requires a caseId');
+      const cd = await caseRegistry.request('GET', `/cases/${encodeURIComponent(caseId)}`);
+      if (cd.status !== 200 || !(cd.body.categories || []).some((c) => c.id === b.categoryId)) {
+        throw new RequestError(400, "category does not belong to the evidence's case");
+      }
+    }
+
     const stored = await evidenceStore.put(evidenceId, req.file.buffer, {
       contentType: req.file.mimetype || 'application/octet-stream',
       originalFilename: req.file.originalname || null,
@@ -427,6 +480,10 @@ function createApp(deps) {
       sizeBytes: req.file.size,
       integrityProof,
       uploadedBy: actor,
+      // M19 forensic metadata — off-chain only; buildHead/buildEvent above
+      // are untouched, so the on-chain record stays byte-identical.
+      label: b.label, categoryId: b.categoryId, seizedAt: b.seizedAt,
+      acquisitionLocation: b.acquisitionLocation, handedOverBy: b.handedOverBy,
     });
     if (indexed.status !== 201) {
       // The on-chain commit already happened (append-only ledger) — fail

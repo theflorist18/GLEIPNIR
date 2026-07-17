@@ -42,6 +42,14 @@ function loadConfig() {
 
 const nowIso = () => new Date().toISOString();
 
+// Idempotent column-add guard (M19): the live case-registry-data volume has
+// no migration framework, so new nullable columns land via checked ALTERs.
+function addColumnIfMissing(db, table, col, ddl) {
+  if (!db.pragma(`table_info(${table})`).some((c) => c.name === col)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+  }
+}
+
 function openDb(dataDir) {
   const db = new Database(path.join(dataDir, 'case-registry.db'));
   db.pragma('journal_mode = WAL');
@@ -75,9 +83,25 @@ function openDb(dataDir) {
       status            TEXT NOT NULL DEFAULT 'ACTIVE',
       last_synced_at    TEXT
     );
+    CREATE TABLE IF NOT EXISTS evidence_categories (
+      id         TEXT PRIMARY KEY,
+      case_id    TEXT NOT NULL REFERENCES cases(id),
+      name       TEXT NOT NULL,
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE (case_id, name)
+    );
     CREATE INDEX IF NOT EXISTS idx_evidence_case ON evidence_index(case_id);
     CREATE INDEX IF NOT EXISTS idx_participants_user ON case_participants(user_id);
+    CREATE INDEX IF NOT EXISTS idx_categories_case ON evidence_categories(case_id);
   `);
+  // M19: forensic ingest metadata — off-chain only, nullable, validated in
+  // code (no CHECKs: the volume has live rows and CHECKs cannot be altered).
+  addColumnIfMissing(db, 'evidence_index', 'label', 'label TEXT');
+  addColumnIfMissing(db, 'evidence_index', 'category_id', 'category_id TEXT');
+  addColumnIfMissing(db, 'evidence_index', 'seized_at', 'seized_at TEXT');
+  addColumnIfMissing(db, 'evidence_index', 'acquisition_location', 'acquisition_location TEXT');
+  addColumnIfMissing(db, 'evidence_index', 'handed_over_by', 'handed_over_by TEXT');
   // M18: role_in_case gained 'lead'. SQLite cannot ALTER a CHECK constraint,
   // so a pre-M18 table (its stored DDL lacks 'lead') is rebuilt in place —
   // transactional, and idempotent because the second boot sees 'lead' in
@@ -119,6 +143,11 @@ const evidenceWire = (r) => r && ({
   mimeType: r.mime_type, sizeBytes: r.size_bytes, integrityProof: r.integrity_proof,
   uploadedBy: r.uploaded_by, uploadedAt: r.uploaded_at, status: r.status,
   lastSyncedAt: r.last_synced_at,
+  label: r.label ?? null, categoryId: r.category_id ?? null, seizedAt: r.seized_at ?? null,
+  acquisitionLocation: r.acquisition_location ?? null, handedOverBy: r.handed_over_by ?? null,
+});
+const categoryWire = (r) => r && ({
+  id: r.id, caseId: r.case_id, name: r.name, createdBy: r.created_by, createdAt: r.created_at,
 });
 
 // LIKE-escape so a search term containing % or _ matches literally.
@@ -200,7 +229,8 @@ function createApp(overrides) {
     if (!row) return notFound(res, 'case not found');
     const participants = db.prepare('SELECT * FROM case_participants WHERE case_id = ? ORDER BY added_at').all(row.id).map(participantWire);
     const evidence = db.prepare('SELECT * FROM evidence_index WHERE case_id = ? ORDER BY uploaded_at').all(row.id).map(evidenceWire);
-    res.json({ ...caseWire(row), participants, evidence });
+    const categories = db.prepare('SELECT * FROM evidence_categories WHERE case_id = ? ORDER BY name').all(row.id).map(categoryWire);
+    res.json({ ...caseWire(row), participants, evidence, categories });
   });
 
   app.patch('/cases/:caseId', (req, res) => {
@@ -245,6 +275,55 @@ function createApp(overrides) {
     res.status(204).end();
   });
 
+  // ---- evidence categories (M19): per-case taxonomy, lead-managed via the
+  // gateway. Deleting a category referenced by evidence is refused (409) —
+  // forensic metadata never silently disappears.
+  const getCategory = db.prepare('SELECT * FROM evidence_categories WHERE id = ?');
+
+  app.post('/cases/:caseId/categories', (req, res) => {
+    const caseRow = getCase.get(req.params.caseId);
+    if (!caseRow) return notFound(res, 'case not found');
+    const b = req.body || {};
+    if (typeof b.name !== 'string' || !b.name.trim()) return bad(res, 'name is required');
+    if (typeof b.createdBy !== 'string' || !b.createdBy) return bad(res, 'createdBy is required');
+    const row = { id: `cat-${crypto.randomUUID()}`, case_id: caseRow.id, name: b.name.trim(), created_by: b.createdBy, created_at: nowIso() };
+    try {
+      db.prepare('INSERT INTO evidence_categories (id, case_id, name, created_by, created_at) VALUES (@id, @case_id, @name, @created_by, @created_at)').run(row);
+    } catch (err) {
+      if (String(err.message).includes('UNIQUE')) return res.status(409).json({ error: 'a category with this name already exists in the case' });
+      throw err;
+    }
+    res.status(201).json(categoryWire(row));
+  });
+
+  app.get('/cases/:caseId/categories', (req, res) => {
+    if (!getCase.get(req.params.caseId)) return notFound(res, 'case not found');
+    res.json(db.prepare('SELECT * FROM evidence_categories WHERE case_id = ? ORDER BY name').all(req.params.caseId).map(categoryWire));
+  });
+
+  app.patch('/cases/:caseId/categories/:categoryId', (req, res) => {
+    const row = getCategory.get(req.params.categoryId);
+    if (!row || row.case_id !== req.params.caseId) return notFound(res, 'category not found');
+    const b = req.body || {};
+    if (typeof b.name !== 'string' || !b.name.trim()) return bad(res, 'name is required');
+    try {
+      db.prepare('UPDATE evidence_categories SET name = ? WHERE id = ?').run(b.name.trim(), row.id);
+    } catch (err) {
+      if (String(err.message).includes('UNIQUE')) return res.status(409).json({ error: 'a category with this name already exists in the case' });
+      throw err;
+    }
+    res.json(categoryWire(getCategory.get(row.id)));
+  });
+
+  app.delete('/cases/:caseId/categories/:categoryId', (req, res) => {
+    const row = getCategory.get(req.params.categoryId);
+    if (!row || row.case_id !== req.params.caseId) return notFound(res, 'category not found');
+    const inUse = db.prepare('SELECT COUNT(*) AS n FROM evidence_index WHERE category_id = ?').get(row.id).n;
+    if (inUse > 0) return res.status(409).json({ error: 'category is referenced by evidence', count: inUse });
+    db.prepare('DELETE FROM evidence_categories WHERE id = ?').run(row.id);
+    res.status(204).end();
+  });
+
   // ---- categorization (case <-> evidence linkage, off-chain only) ----
   app.post('/cases/:caseId/evidence', (req, res) => {
     const caseRow = getCase.get(req.params.caseId);
@@ -260,11 +339,42 @@ function createApp(overrides) {
   });
 
   app.delete('/cases/:caseId/evidence/:evidenceId', (req, res) => {
-    const out = db.prepare('UPDATE evidence_index SET case_id = NULL, last_synced_at = ? WHERE evidence_id = ? AND case_id = ?')
+    // Uncategorizing also clears the case-scoped category (M19): a category
+    // belongs to the case the evidence is leaving.
+    const out = db.prepare('UPDATE evidence_index SET case_id = NULL, category_id = NULL, last_synced_at = ? WHERE evidence_id = ? AND case_id = ?')
       .run(nowIso(), req.params.evidenceId, req.params.caseId);
     if (out.changes === 0) return notFound(res, 'evidence not found in this case');
     res.status(204).end();
   });
+
+  // M19 metadata fields (all optional, off-chain only): string sets, null
+  // clears. categoryId must reference a category of the evidence's own case.
+  const META_FIELDS = [
+    ['label', 'label'],
+    ['seizedAt', 'seized_at'],
+    ['acquisitionLocation', 'acquisition_location'],
+    ['handedOverBy', 'handed_over_by'],
+  ];
+  // Returns an {column: value} patch or writes a 400/404 and returns null.
+  function metaPatchOf(b, caseId, res) {
+    const patch = {};
+    for (const [wire, col] of META_FIELDS) {
+      if (b[wire] === undefined) continue;
+      if (b[wire] !== null && typeof b[wire] !== 'string') { bad(res, `${wire} must be a string or null`); return null; }
+      patch[col] = b[wire];
+    }
+    if (b.categoryId !== undefined) {
+      if (b.categoryId === null) {
+        patch.category_id = null;
+      } else {
+        const cat = getCategory.get(b.categoryId);
+        if (!cat) { notFound(res, 'category not found'); return null; }
+        if (!caseId || cat.case_id !== caseId) { bad(res, 'category does not belong to the evidence\'s case'); return null; }
+        patch.category_id = b.categoryId;
+      }
+    }
+    return patch;
+  }
 
   // ---- evidence index (read-model; registered once by the gateway at ingest) ----
   app.post('/evidence-index', (req, res) => {
@@ -272,6 +382,8 @@ function createApp(overrides) {
     if (typeof b.evidenceId !== 'string' || !SAFE_ID.test(b.evidenceId)) return bad(res, 'evidenceId must match ^[A-Za-z0-9._:-]+$');
     if (getEvidence.get(b.evidenceId)) return res.status(409).json({ error: 'evidence already indexed' });
     if (b.caseId !== undefined && b.caseId !== null && !getCase.get(b.caseId)) return notFound(res, 'case not found');
+    const meta = metaPatchOf(b, b.caseId || null, res);
+    if (meta === null) return undefined;
     const row = {
       evidence_id: b.evidenceId,
       case_id: b.caseId || null,
@@ -283,12 +395,20 @@ function createApp(overrides) {
       uploaded_at: b.uploadedAt || nowIso(),
       status: b.status || 'ACTIVE',
       last_synced_at: nowIso(),
+      label: null,
+      category_id: null,
+      seized_at: null,
+      acquisition_location: null,
+      handed_over_by: null,
+      ...meta,
     };
     db.prepare(`INSERT INTO evidence_index (evidence_id, case_id, original_filename, mime_type, size_bytes,
-                  integrity_proof, uploaded_by, uploaded_at, status, last_synced_at)
+                  integrity_proof, uploaded_by, uploaded_at, status, last_synced_at,
+                  label, category_id, seized_at, acquisition_location, handed_over_by)
                 VALUES (@evidence_id, @case_id, @original_filename, @mime_type, @size_bytes,
-                  @integrity_proof, @uploaded_by, @uploaded_at, @status, @last_synced_at)`).run(row);
-    res.status(201).json(evidenceWire(row));
+                  @integrity_proof, @uploaded_by, @uploaded_at, @status, @last_synced_at,
+                  @label, @category_id, @seized_at, @acquisition_location, @handed_over_by)`).run(row);
+    return res.status(201).json(evidenceWire(row));
   });
 
   // Search MUST be registered before /evidence-index/:evidenceId would match.
@@ -322,8 +442,9 @@ function createApp(overrides) {
     res.json(evidenceWire(row));
   });
 
-  // Cache sync: the chain stays authoritative; the gateway PATCHes status here
-  // after on-chain writes (e.g. REMOVE) so listings track reality.
+  // Cache sync + metadata updates: the chain stays authoritative for status
+  // (the gateway PATCHes it after on-chain writes, e.g. REMOVE); the M19
+  // metadata fields are library-owned and validated here.
   app.patch('/evidence-index/:evidenceId', (req, res) => {
     const row = getEvidence.get(req.params.evidenceId);
     if (!row) return notFound(res, 'evidence not found in index');
@@ -332,9 +453,15 @@ function createApp(overrides) {
       if (typeof b.status !== 'string' || !b.status) return bad(res, 'status must be a non-empty string');
       row.status = b.status;
     }
+    const meta = metaPatchOf(b, row.case_id, res);
+    if (meta === null) return undefined;
+    Object.assign(row, meta);
     row.last_synced_at = nowIso();
-    db.prepare('UPDATE evidence_index SET status = @status, last_synced_at = @last_synced_at WHERE evidence_id = @evidence_id').run(row);
-    res.json(evidenceWire(row));
+    db.prepare(`UPDATE evidence_index SET status = @status, last_synced_at = @last_synced_at,
+                  label = @label, category_id = @category_id, seized_at = @seized_at,
+                  acquisition_location = @acquisition_location, handed_over_by = @handed_over_by
+                WHERE evidence_id = @evidence_id`).run(row);
+    return res.json(evidenceWire(row));
   });
 
   // ---- authz pre-flight (the gateway's per-evidence gate for user sessions) ----

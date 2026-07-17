@@ -16,6 +16,8 @@ import type {
   CaseSummary,
   CoCEvent,
   CreateEvidenceRequest,
+  EvidenceCategory,
+  EvidenceDetailsPatch,
   EvidenceIndexRow,
   EvidenceRecord,
   EvidenceSearchParams,
@@ -272,6 +274,27 @@ export class GatewayClient {
 
   removeParticipant(caseId: string, userId: string): Promise<void> {
     return this.request<void>('DELETE', `/cases/${encodeURIComponent(caseId)}/participants/${encodeURIComponent(userId)}`);
+  }
+
+  // ---- evidence categories (M19): per-case taxonomy, lead-managed ----
+  listCategories(caseId: string): Promise<EvidenceCategory[]> {
+    return this.request<EvidenceCategory[]>('GET', `/cases/${encodeURIComponent(caseId)}/categories`);
+  }
+
+  createCategory(caseId: string, name: string): Promise<EvidenceCategory> {
+    return this.request<EvidenceCategory>('POST', `/cases/${encodeURIComponent(caseId)}/categories`, { name });
+  }
+
+  renameCategory(caseId: string, categoryId: string, name: string): Promise<EvidenceCategory> {
+    return this.request<EvidenceCategory>('PATCH', `/cases/${encodeURIComponent(caseId)}/categories/${encodeURIComponent(categoryId)}`, { name });
+  }
+
+  deleteCategory(caseId: string, categoryId: string): Promise<void> {
+    return this.request<void>('DELETE', `/cases/${encodeURIComponent(caseId)}/categories/${encodeURIComponent(categoryId)}`);
+  }
+
+  updateEvidenceDetails(evidenceId: string, patch: EvidenceDetailsPatch): Promise<EvidenceIndexRow> {
+    return this.request<EvidenceIndexRow>('PATCH', `/evidence/${encodeURIComponent(evidenceId)}/details`, patch);
   }
 
   assignEvidence(caseId: string, evidenceId: string): Promise<EvidenceIndexRow> {

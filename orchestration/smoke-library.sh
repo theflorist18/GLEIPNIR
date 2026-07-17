@@ -149,4 +149,20 @@ echo "[smoke-library] 14) M18: admin reads metadata/trails but not blob content 
 [ "$(code_of "${ADMIN_TOKEN}" GET "${GATEWAY}/api/v1/evidence/${EV}/download")" = "403" ] \
   || fail "admin download of a non-participant case not 403"
 
-echo "[smoke-library] PASS — login/3-tier roles, case scoping, lead-owned cases, multipart ingest, search, the admin content restriction, and the synchronous auto-AccessLog all behave correctly"
+echo "[smoke-library] 15) M19: lead creates a category; ingest carries forensic metadata"
+CAT_ID="$(curl -fsS "${AUTH_LENA[@]}" -X POST "${GATEWAY}/api/v1/cases/${LEAD_CASE_ID}/categories" \
+  -d '{"name":"Physical Media"}' | jq -r '.id')"
+case "${CAT_ID}" in cat-*) ;; *) fail "category create: '${CAT_ID}'" ;; esac
+EV2="ev-smoke-meta-${TS}"
+head -c 1024 /dev/urandom > "${WORK}/exhibit2.bin"
+curl -fsS "${AUTH_IVY[@]}" -X POST "${GATEWAY}/api/v1/evidence" \
+  -F "file=@${WORK}/exhibit2.bin;type=application/octet-stream" -F "evidenceId=${EV2}" \
+  -F "caseId=${LEAD_CASE_ID}" -F "categoryId=${CAT_ID}" -F "label=ITEM-001" \
+  -F "seizedAt=2026-07-15T09:30:00Z" -F "acquisitionLocation=smoke locker" >/dev/null
+META_ROW="$(curl -fsS "${AUTH_IVY[@]}" "${GATEWAY}/api/v1/cases/${LEAD_CASE_ID}" \
+  | jq --arg ev "${EV2}" '.evidence[] | select(.evidenceId == $ev)')"
+[ "$(echo "${META_ROW}" | jq -r '.label')" = "ITEM-001" ] || fail "metadata label: ${META_ROW}"
+[ "$(echo "${META_ROW}" | jq -r '.categoryId')" = "${CAT_ID}" ] || fail "metadata categoryId: ${META_ROW}"
+[ "$(echo "${META_ROW}" | jq -r '.seizedAt')" = "2026-07-15T09:30:00Z" ] || fail "metadata seizedAt: ${META_ROW}"
+
+echo "[smoke-library] PASS — login/3-tier roles, case scoping, lead-owned cases, categories + forensic ingest metadata, multipart ingest, search, the admin content restriction, and the synchronous auto-AccessLog all behave correctly"

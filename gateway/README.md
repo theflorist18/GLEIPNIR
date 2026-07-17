@@ -59,6 +59,8 @@ Admin-only routes (user management, `POST /runs`) require an **admin session**
 | `POST`/`GET`/`PATCH` | `/cases`, `/cases/:id`, `/cases/search` | proxy → case-registry; create admin-or-lead (lead creator auto-added as case lead; admin may pass `leadUserId`), update admin-or-case-lead; list/detail participant-scoped unless admin |
 | `POST`/`DELETE` | `/cases/:id/participants[/:userId]` | proxy, admin-or-case-lead; `roleInCase: lead` grants require a global-`lead` target; removing the last case lead is 409 (admin may) |
 | `POST`/`DELETE` | `/cases/:id/evidence[/:evidenceId]` | categorize/uncategorize, admin-or-case-lead |
+| `POST`/`GET`/`PATCH`/`DELETE` | `/cases/:id/categories[/:categoryId]` | evidence taxonomy (M19); read = case visibility, manage = admin-or-case-lead |
+| `PATCH` | `/evidence/:id/details` | M19 metadata (label/category/seizedAt/location/hand-off) → evidence-index; write-gated, never auto-logged |
 | `POST`/`GET` | `/runs`, `/runs/:id` | run-request store (execution is host-side); `POST` is admin-session-only |
 
 Auto-AccessLog is **synchronous**: a user-session view/download/export succeeds

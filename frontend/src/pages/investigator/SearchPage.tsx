@@ -56,10 +56,11 @@ export function SearchPage() {
       ) : (
         <div className="card">
           <table className="runs">
-            <thead><tr><th>evidence</th><th>file</th><th>type</th><th>case</th><th>uploaded by</th><th>status</th></tr></thead>
+            <thead><tr><th>item</th><th>evidence</th><th>file</th><th>type</th><th>case</th><th>uploaded by</th><th>status</th></tr></thead>
             <tbody>
               {rows.map((r) => (
                 <tr key={r.evidenceId} className="clickable">
+                  <td className="small">{r.label ?? '—'}</td>
                   <td><Link className="mono small" to={`/evidence/${encodeURIComponent(r.evidenceId)}`}>{r.evidenceId}</Link></td>
                   <td>{r.originalFilename ?? '—'}</td>
                   <td className="small">{r.mimeType ?? '—'}</td>

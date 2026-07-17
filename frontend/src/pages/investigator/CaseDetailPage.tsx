@@ -56,10 +56,11 @@ export function CaseDetailPage() {
           <p className="muted">Nothing assigned to this case yet.</p>
         ) : (
           <table className="runs">
-            <thead><tr><th>evidence</th><th>file</th><th>type</th><th>size</th><th>uploaded by</th><th>uploaded</th><th>status</th></tr></thead>
+            <thead><tr><th>item</th><th>evidence</th><th>file</th><th>type</th><th>size</th><th>uploaded by</th><th>uploaded</th><th>status</th></tr></thead>
             <tbody>
               {detail.evidence.map((e) => (
                 <tr key={e.evidenceId} className="clickable">
+                  <td className="small">{e.label ?? '—'}</td>
                   <td><Link className="mono small" to={`/evidence/${encodeURIComponent(e.evidenceId)}`}>{e.evidenceId}</Link></td>
                   <td>{e.originalFilename ?? '—'}</td>
                   <td className="small">{e.mimeType ?? '—'}</td>

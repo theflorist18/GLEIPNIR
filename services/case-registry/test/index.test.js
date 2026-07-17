@@ -286,3 +286,101 @@ test('M18: participant-scoped case listings carry myRoleInCase; unscoped listing
   const bad = await call(url, 'POST', `/cases/${c.id}/participants`, { userId: 'x', roleInCase: 'boss' });
   assert.equal(bad.status, 400);
 });
+
+test('M19: category CRUD — dup 409, cross-case 400, in-use delete 409', async (t) => {
+  const url = await start(t);
+  const c1 = await makeCase(url, 'cat case');
+  const c2 = await makeCase(url, 'other case');
+
+  const cat = await json(await call(url, 'POST', `/cases/${c1.id}/categories`, { name: 'Mobile Devices', createdBy: 'lena' }));
+  assert.match(cat.id, /^cat-/);
+  assert.equal(cat.caseId, c1.id);
+  assert.equal((await call(url, 'POST', `/cases/${c1.id}/categories`, { name: 'Mobile Devices', createdBy: 'lena' })).status, 409);
+  assert.equal((await call(url, 'POST', '/cases/CASE-ghost/categories', { name: 'x', createdBy: 'lena' })).status, 404);
+
+  const listed = await json(await call(url, 'GET', `/cases/${c1.id}/categories`));
+  assert.deepEqual(listed.map((x) => x.name), ['Mobile Devices']);
+  // ...and the case detail carries them too.
+  assert.equal((await json(await call(url, 'GET', `/cases/${c1.id}`))).categories.length, 1);
+
+  const renamed = await json(await call(url, 'PATCH', `/cases/${c1.id}/categories/${cat.id}`, { name: 'Network PCAP' }));
+  assert.equal(renamed.name, 'Network PCAP');
+  // A category is invisible through the wrong case path.
+  assert.equal((await call(url, 'PATCH', `/cases/${c2.id}/categories/${cat.id}`, { name: 'x' })).status, 404);
+
+  // Evidence pinned to the category blocks deletion; clearing it unblocks.
+  await indexEvidence(url, 'ev-cat', { caseId: c1.id, categoryId: cat.id });
+  assert.equal((await call(url, 'DELETE', `/cases/${c1.id}/categories/${cat.id}`)).status, 409);
+  await call(url, 'PATCH', '/evidence-index/ev-cat', { categoryId: null });
+  assert.equal((await call(url, 'DELETE', `/cases/${c1.id}/categories/${cat.id}`)).status, 204);
+
+  // A category from another case is refused on evidence rows.
+  const catB = await json(await call(url, 'POST', `/cases/${c2.id}/categories`, { name: 'Cloud', createdBy: 'lena' }));
+  assert.equal((await call(url, 'PATCH', '/evidence-index/ev-cat', { categoryId: catB.id })).status, 400);
+});
+
+test('M19: metadata fields set at registration and via PATCH; uncategorize clears the category', async (t) => {
+  const url = await start(t);
+  const c = await makeCase(url, 'meta case');
+  const cat = await json(await call(url, 'POST', `/cases/${c.id}/categories`, { name: 'Physical Media', createdBy: 'lena' }));
+
+  const row = await json(await indexEvidence(url, 'ev-meta', {
+    caseId: c.id, categoryId: cat.id, label: 'ITEM-001',
+    seizedAt: '2026-07-15T09:30:00Z', acquisitionLocation: 'Suspect desk drawer', handedOverBy: 'Officer Blue',
+  }));
+  assert.equal(row.label, 'ITEM-001');
+  assert.equal(row.categoryId, cat.id);
+  assert.equal(row.seizedAt, '2026-07-15T09:30:00Z');
+  assert.equal(row.acquisitionLocation, 'Suspect desk drawer');
+  assert.equal(row.handedOverBy, 'Officer Blue');
+
+  // PATCH sets and clears; junk types are 400.
+  const patched = await json(await call(url, 'PATCH', '/evidence-index/ev-meta', { label: 'ITEM-002', handedOverBy: null }));
+  assert.equal(patched.label, 'ITEM-002');
+  assert.equal(patched.handedOverBy, null);
+  assert.equal((await call(url, 'PATCH', '/evidence-index/ev-meta', { label: 42 })).status, 400);
+
+  // Uncategorizing the evidence clears its case-scoped category.
+  await call(url, 'DELETE', `/cases/${c.id}/evidence/ev-meta`);
+  const after = await json(await call(url, 'GET', '/evidence-index/ev-meta'));
+  assert.equal(after.caseId, null);
+  assert.equal(after.categoryId, null);
+  assert.equal(after.label, 'ITEM-002'); // non-case metadata survives
+});
+
+test('M19: pre-M19 evidence_index (no metadata columns) gains them on boot, idempotently', async (t) => {
+  const Database = require('better-sqlite3');
+  const dir = tmpDataDir();
+  {
+    const db = new Database(path.join(dir, 'case-registry.db'));
+    db.exec(`
+      CREATE TABLE cases (
+        id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN','CLOSED','ARCHIVED')),
+        created_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+      CREATE TABLE case_participants (
+        case_id TEXT NOT NULL REFERENCES cases(id), user_id TEXT NOT NULL,
+        role_in_case TEXT NOT NULL DEFAULT 'viewer' CHECK (role_in_case IN ('viewer','contributor','lead')),
+        added_by TEXT NOT NULL, added_at TEXT NOT NULL, PRIMARY KEY (case_id, user_id)
+      );
+      CREATE TABLE evidence_index (
+        evidence_id TEXT PRIMARY KEY, case_id TEXT NULL REFERENCES cases(id),
+        original_filename TEXT, mime_type TEXT, size_bytes INTEGER, integrity_proof TEXT,
+        uploaded_by TEXT, uploaded_at TEXT, status TEXT NOT NULL DEFAULT 'ACTIVE', last_synced_at TEXT
+      );
+      INSERT INTO evidence_index (evidence_id, status) VALUES ('ev-old', 'ACTIVE');
+    `);
+    db.close();
+  }
+
+  const url = await start(t, dir);
+  const row = await json(await call(url, 'GET', '/evidence-index/ev-old'));
+  assert.equal(row.evidenceId, 'ev-old');
+  assert.equal(row.label, null);
+  // The new columns are writable on the migrated table...
+  assert.equal((await call(url, 'PATCH', '/evidence-index/ev-old', { label: 'ITEM-OLD' })).status, 200);
+  // ...and a second boot from the same dir is a no-op.
+  const url2 = await start(t, dir);
+  assert.equal((await json(await call(url2, 'GET', '/evidence-index/ev-old'))).label, 'ITEM-OLD');
+});
