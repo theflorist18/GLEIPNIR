@@ -24,8 +24,8 @@ This pass is **incomplete** and the reader must not treat it as a clean bill of 
 | Authorization / RBAC vs CONTRACTS §6/§12-7/§12-8 | reviewed |
 | Network exposure / secrets / service trust | reviewed |
 | Frontend security | reviewed |
-| **Injection & output encoding (backend SQL, path traversal, filename handling)** | **NOT REVIEWED — ran out of session budget** |
-| **Error handling / info leakage / DoS** | **NOT REVIEWED — ran out of session budget** |
+| Injection & output encoding (backend SQL, path traversal, filename handling) | reviewed (round 2, inline, author-verified) |
+| Error handling / info leakage / DoS | reviewed (round 2, inline, author-verified) |
 
 The planned adversarial-verification stage **did not run** (every verifier agent failed on
 the session limit). Two reviewers also ran while the safety classifier was unavailable.
@@ -34,12 +34,8 @@ independently re-read the cited code for every finding marked ✅ below. Finding
 are carried from the reviewers' reading and are *not* independently confirmed — verify
 before acting on them.
 
-Partial knowledge already held about the two unreviewed dimensions (from earlier mapping,
-unverified in this pass): case-registry SQL appears parameterised throughout with `LIKE`
-escaping; evidence-store's `SAFE_EVIDENCE_ID` guard structurally prevents path traversal;
-the gateway's `wrap()` returns raw upstream `err.message` as `detail` on 5xx
-(`gateway/src/app.js:140`), which is a probable info-leak finding. **Both dimensions should
-be completed before the review is considered done.**
+The final two dimensions were completed in a second, inline pass (S15–S20 below); every
+claim there was read directly from the source by the author, so they are all ✅.
 
 ---
 
@@ -224,6 +220,98 @@ a lead can pull an admin into a case's scope.
 
 ---
 
+## Round 2 — injection / output encoding, and errors / DoS (all ✅ author-verified)
+
+### Clean results (no action)
+
+- **SQL injection: none.** Every dynamic `WHERE` in `services/case-registry/src/index.js`
+  (lines 310-325, 572-592) is assembled from **fixed literal fragments**; all user values are
+  bound as named parameters (`@participant`, `@q`, `@flag`, …). `LIKE` patterns escape
+  `% _ \` and use `ESCAPE '\'`. The only interpolated identifier, `CATEGORY_ORDER`
+  (line 42), is the hardcoded constant `"(name = 'Other'), name"` — not user input.
+  better-sqlite3 prepared statements throughout.
+- **Path traversal: structurally prevented.** `SAFE_EVIDENCE_ID = /^[A-Za-z0-9._:-]+$/`
+  (`services/evidence-store/src/index.js:23`) forbids `/` and `\`, so
+  `path.join(dataDir, id)` can never leave the data directory; the `app.param` guard
+  (line 69) covers every `:evidenceId` route and also rejects the `.meta.json` suffix,
+  closing the sidecar-collision trick. Content-Disposition is sanitised by
+  `dispositionName` (line 45).
+  *Info only:* the regex admits a bare `..` and `:`. Neither is exploitable — `..`/`.`
+  resolve to a directory and fail `EISDIR`, and `:` (an NTFS ADS separator) is inert in the
+  Linux container. No change needed; worth knowing if the store is ever run on Windows.
+
+### S15 — gateway `wrap()` returns raw upstream error text to the client ✅
+`gateway/src/app.js:140` · classification: **fix** · severity: **low-medium**
+
+```js
+return res.status(502).json({ error: 'upstream error', detail: String((err && err.message) || err) });
+```
+Any unmapped failure surfaces the internal exception message — service hostnames, and
+(via S16) absolute container filesystem paths — to any authenticated caller.
+
+**Fix.** Log the detail server-side; return a generic message (optionally a correlation id).
+Keep the existing status-carrying and `isNotFound` branches untouched, since routes and
+tests depend on their pass-through semantics.
+
+### S16 — evidence-store 5xx handlers leak filesystem paths ✅
+`services/evidence-store/src/index.js:96,101,113,131,147,162` · classification: **fix**
+· severity: **low**
+
+Six handlers return `detail: err.message`, and Node `fs` errors embed absolute paths
+(`ENOENT: no such file or directory, open '/data/<evidenceId>'`). Reachable through the
+gateway's 502 detail (S15). Largely contained once 4006 is unpublished (S2), but the
+message should still be generic.
+
+### S17 — authenticated ledger-write amplification through the auto-AccessLog ✅
+`gateway/src/app.js:257-262`, report loop at `477-479` · classification: **fix**
+· severity: **medium**
+
+`logAccess` correctly ignores the service principal, so *unauthenticated* amplification is
+not possible. But **any** authenticated user with access to one case can drive unbounded
+on-chain writes, and there is **no rate limiting anywhere except the login route**.
+
+The strongest vector is the CoC report: trail reads are nicely bounded (chunks of 4), but
+the logging loop is one sequential `AccessLog` **per exhibit**, so a single
+`GET /cases/:id/coc-report` on an N-exhibit case commits N ledger transactions. Repeated
+fetches inflate ledger size — a quantity this thesis *measures* — and flood the exhibit's
+custody trail with noise.
+
+Benchmark data is not at risk: Caliper uses the service token, which never auto-logs.
+
+**Fix.** Add a modest per-session rate limit on the auto-logging read routes (view /
+download / export / coc-report). Do **not** make the logging asynchronous or best-effort —
+synchronous logging is the documented contract (S18).
+
+### S18 — synchronous auto-log couples read availability to chain health ✅
+`gateway/src/app.js:257-262` · classification: **document-as-designed**
+
+Because the ACCESS write is awaited, a slow or down ledger makes evidence reads fail rather
+than silently serving unlogged access. That is the correct trade for a chain-of-custody
+system and is the stated contract (§6, "synchronously auto-append"). Verified live in
+Chunk 2. Record as an availability caveat in the paper; do not "fix".
+
+### S19 — unbounded result sets on list/search ✅
+`services/case-registry/src/index.js:324-325, 592` · classification: **fix (low)**
+
+`/cases` and `/evidence-index` search build `SELECT … ORDER BY …` with **no `LIMIT`**. The
+case activity feed does it correctly (`Math.min(limit || 50, 200)`, line 684). Harmless at
+thesis scale; a capped default plus `limit` parameter is cheap insurance.
+
+### S20 — uploaded MIME type is client-declared and drives the render path ✅
+`gateway/src/app.js:594,626-627` · classification: **fix** · severity: **medium**
+
+`req.file.mimetype` and `originalname` are stored verbatim with no server-side content
+sniffing. The stored `mimeType` is what the SPA's `previewKind()` consults to decide whether
+to render the blob in an **iframe** — so an uploader fully controls that decision by
+declaring `application/pdf` for arbitrary bytes. This is the enabling half of S11; the two
+should be fixed together.
+
+**Fix.** Sandbox the frame (S11) *and* verify the magic bytes server-side before trusting
+the declared type for render decisions — at minimum, only allow the preview path for types
+confirmed by content sniffing. Size is already capped at 25 MiB by multer.
+
+---
+
 ## Document-as-designed (do NOT "fix")
 
 - **D1 — receipt-store is unauthenticated and un-hardened.** `CLAUDE.md` is explicit: no
@@ -260,8 +348,11 @@ a lead can pull an admin into a case's scope.
 2. S1 (`requireService` on `/internal/anchor-root`)
 3. S4, S5, S7 (authz/session correctness — small, well-understood)
 4. S6 (async scrypt)
-5. S10, S11, S12 (CSV neutralisation, iframe sandbox, headers)
-6. S14, S13, S9 (lower value; S9 mostly resolved by S2)
+5. S10, S11 + S20, S12 (CSV neutralisation; iframe sandbox **with** server-side content
+   sniffing — fix these two together; security headers)
+6. S15, S16 (generic error bodies)
+7. S17 (rate-limit the auto-logging read routes)
+8. S14, S13, S19, S9 (lower value; S9 mostly resolved by S2)
 
 Every fix must keep the service-token path byte-compatible and must not perturb the
 benchmark write path. Re-run: gateway/case-registry/evidence-store unit gates, frontend
@@ -269,5 +360,6 @@ vitest + build, and a live `smoke-library.sh`. **After the S2/S3 port change, re
 variant smoke that exercises the batcher** (anchoring) to prove `verify.js`'s host `/flush`
 still reaches 4001.
 
-**Before Chunk 4 is signed off, complete the two unreviewed dimensions** (injection /
-output-encoding, and error-handling / DoS).
+All six dimensions are now reviewed. Findings marked ⚠️ (S8, S9, S12, S13, S14) are still
+carried from the agent pass without independent confirmation — re-read those before
+implementing them.
