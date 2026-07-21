@@ -46,9 +46,38 @@ def load_sweeps():
         return yaml.safe_load(fh)
 
 
-def run(cmd, **kw):
+def run(cmd, check=False, **kw):
+    """Run a subprocess. check=True raises on non-zero exit (F76): the sweep's
+    provisioning/checkpoint/collect steps MUST fail loudly — a silent non-zero
+    there produced empty or missing manifests that only surfaced much later.
+    Caliper itself is streamed separately (see caliper()), not through here."""
     print("+ " + (cmd if isinstance(cmd, str) else " ".join(cmd)))
-    return subprocess.run(cmd, shell=isinstance(cmd, str), cwd=kw.pop("cwd", REPO_ROOT), check=False, **kw)
+    return subprocess.run(cmd, shell=isinstance(cmd, str), cwd=kw.pop("cwd", REPO_ROOT), check=check, **kw)
+
+
+def assert_collected(run_id):
+    """Fail loudly if collect.py produced a manifest with zero rounds (F48/F76):
+    a caliper.log parse miss or a run with no successful rounds must not pass
+    silently as a 'done' cell."""
+    manifest_path = os.path.join(BENCH_DIR, "results", run_id, "manifest.json")
+    with open(manifest_path, encoding="utf-8") as fh:
+        manifest = json.load(fh)
+    rounds = manifest.get("rounds") or []
+    if not rounds:
+        raise SystemExit(
+            f"FATAL: collect produced 0 rounds for {run_id} — caliper.log parse failed "
+            f"or the run had no successful rounds (F76). Inspect "
+            f"benchmark/results/{run_id}/caliper.log before continuing.")
+    print(f"  collected {len(rounds)} rounds for {run_id}")
+
+
+def reset_verify_metrics():
+    """Truncate the verification service's RQ2 metrics file so a verify run's
+    manifest summarises exactly that run's requests (the named volume persists
+    across cells). No-op if the container is absent (non-anchoring variants)."""
+    subprocess.run(
+        ["docker", "exec", "gleipnir-verification", "sh", "-c", ": > /verify-metrics/verify.jsonl"],
+        check=False, capture_output=True, text=True)
 
 
 def set_env_var(key, value):
@@ -73,12 +102,12 @@ def recreate_batcher():
          "-f", os.path.join(COMPOSE_DIR, "compose-net.yaml"),
          "-f", os.path.join(COMPOSE_DIR, "compose-ca.yaml"),
          "-f", os.path.join(COMPOSE_DIR, "compose-services.yaml"),
-         "up", "-d", "--force-recreate", "merkle-batcher"])
+         "up", "-d", "--force-recreate", "merkle-batcher"], check=True)
 
 
 def ensure_channels(n):
     for i in range(1, n + 1):
-        run([os.path.join(ORCH, "provision-channel.sh"), f"case-{i:03d}"])
+        run([os.path.join(ORCH, "provision-channel.sh"), f"case-{i:03d}"], check=True)
 
 
 def configs_for(variant, regime, cell):
@@ -224,10 +253,11 @@ def main():
             print(f"\n===== cell {run_id} =====")
 
             seed_manifest(run_id, args.variant, args.regime, cell, rep, sweeps, "write")
-            run([sys.executable, os.path.join(ORCH, "checkpoint.py"), run_id, "--label", "t0"])
+            run([sys.executable, os.path.join(ORCH, "checkpoint.py"), run_id, "--label", "t0"], check=True)
             caliper(run_id, benchconfig, netcfg)
-            run([sys.executable, os.path.join(ORCH, "checkpoint.py"), run_id, "--label", "t1"])
-            run([sys.executable, os.path.join(ORCH, "collect.py"), run_id])
+            run([sys.executable, os.path.join(ORCH, "checkpoint.py"), run_id, "--label", "t1"], check=True)
+            run([sys.executable, os.path.join(ORCH, "collect.py"), run_id], check=True)
+            assert_collected(run_id)
 
             if verifycfg:
                 # Verification/audit latency for the SAME cell (thesis RQ2,
@@ -236,8 +266,12 @@ def main():
                 verify_id = f"{run_id}-verify"
                 print(f"===== cell {verify_id} (RQ2) =====")
                 seed_manifest(verify_id, args.variant, args.regime, cell, rep, sweeps, "verify")
+                # Reset the per-request step log so the verify manifest summarises
+                # exactly this run (the named volume persists across cells).
+                reset_verify_metrics()
                 caliper(verify_id, verifycfg, REST_NET)
-                run([sys.executable, os.path.join(ORCH, "collect.py"), verify_id])
+                run([sys.executable, os.path.join(ORCH, "collect.py"), verify_id], check=True)
+                assert_collected(verify_id)
 
     print("\nsweep complete.")
 

@@ -14,6 +14,9 @@ volumes:
   gateway-auth-data:
   case-registry-data:
   evidence-blob-data:
+  # RQ2 per-request verify-step timings (fetch/recompute/compare). sweep.py
+  # truncates this before each verify run; collect.py reads it after.
+  verify-metrics:
 
 services:
   gateway:
@@ -150,9 +153,14 @@ services:
       - GATEWAY_URL=http://gateway:3000
       - ANCHOR_CLIENT_URL=http://anchor-client:4003
       - GLEIPNIR_TOKEN=${GLEIPNIR_TOKEN:-dev-token}
+      # RQ2: append one JSON line per verify with the fetch/recompute/compare
+      # step breakdown, OFF the timed path. collect.py summarises it per run.
+      - VERIFY_METRICS_PATH=/verify-metrics/verify.jsonl
     # Not host-published (S2). Reached over gleipnir-net; the gateway proxies
     # verification via GET /api/v1/evidence/:id/verify, so the host never needs
     # 4004 directly.
+    volumes:
+      - verify-metrics:/verify-metrics
     networks: [gleipnir-net]
 
   anchor-client:

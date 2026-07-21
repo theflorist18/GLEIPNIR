@@ -32,6 +32,7 @@ rate is  reported * Succ/(Succ+Fail)  — derivable from the summary alone.
 """
 import argparse
 import json
+import math
 import os
 import re
 import subprocess
@@ -66,6 +67,75 @@ def config_shas():
         if sha:
             shas[rel] = sha
     return shas
+
+
+def _percentile(sorted_vals, p):
+    """Linear-interpolated percentile over a pre-sorted list (no numpy dep)."""
+    if not sorted_vals:
+        return None
+    if len(sorted_vals) == 1:
+        return sorted_vals[0]
+    k = (len(sorted_vals) - 1) * (p / 100.0)
+    lo = math.floor(k)
+    hi = math.ceil(k)
+    if lo == hi:
+        return sorted_vals[int(k)]
+    return sorted_vals[lo] + (sorted_vals[hi] - sorted_vals[lo]) * (k - lo)
+
+
+def _summarize(records, key):
+    vals = sorted(r[key] for r in records if isinstance(r.get(key), (int, float)))
+    if not vals:
+        return None
+    return {
+        "min": vals[0],
+        "p50": _percentile(vals, 50),
+        "p95": _percentile(vals, 95),
+        "p99": _percentile(vals, 99),
+        "max": vals[-1],
+        "mean": sum(vals) / len(vals),
+    }
+
+
+def verify_step_metrics(phase):
+    """RQ2 (thesis): read the verification service's per-request step log for a
+    verify run and summarise fetch/recompute/compare/latency percentiles. The
+    Caliper REST connector discards the response body, so this container-side
+    JSONL is the only place the step breakdown survives. Reached the same way as
+    checkpoint.py — `docker exec` into the running container. Returns None for a
+    non-verify phase or if the log is absent/empty."""
+    if phase != "verify":
+        return None
+    try:
+        out = subprocess.run(
+            ["docker", "exec", "gleipnir-verification", "sh", "-c", "cat /verify-metrics/verify.jsonl 2>/dev/null"],
+            capture_output=True, text=True, timeout=60)
+    except Exception:  # noqa: BLE001
+        return None
+    if out.returncode != 0 or not out.stdout.strip():
+        return None
+    records = []
+    for line in out.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    if not records:
+        return None
+    ok_count = sum(1 for r in records if r.get("ok") is True)
+    return {
+        "count": len(records),
+        "okRate": ok_count / len(records),
+        "fetchMs": _summarize(records, "fetchMs"),
+        "recomputeMs": _summarize(records, "recomputeMs"),
+        "compareRootMs": _summarize(records, "compareRootMs"),
+        "latencyMs": _summarize(records, "latencyMs"),
+        "note": "per-request step timings from the verification service (RQ2); "
+                "Caliper's aggregate verify latency is in rounds[] above",
+    }
 
 
 def parse_caliper_log(log_path):
@@ -276,6 +346,12 @@ def main():
     manifest["rounds"] = rounds
     manifest["failureClasses"] = {"MVCC_READ_CONFLICT": count_mvcc(log_path)}
     manifest["throughputPolicy"] = "successful-only (Succ/window); Caliper reported=(Succ+Fail)/window, issue #1418"
+    # RQ2: on a verify run, fold in the verification service's per-request step
+    # breakdown (fetch/recompute/compare percentiles) — the metric the aggregate
+    # Caliper latency cannot decompose.
+    verify_steps = verify_step_metrics(manifest.get("phase"))
+    if verify_steps is not None:
+        manifest["verifySteps"] = verify_steps
     if checkpoints is not None:
         manifest["checkpoints"] = checkpoints
     if storage is not None:

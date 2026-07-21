@@ -3,6 +3,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const os = require('node:os');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const { createApp } = require('../src/index');
 
@@ -138,6 +141,49 @@ test('malformed receipt -> 422 malformed-receipt, service stays up', async (t) =
   // Process survived both: the handler is still serving.
   const health = await fetch(`${v.url}/healthz`);
   assert.equal((await health.json()).ok, true);
+});
+
+// RQ2: when VERIFY_METRICS_PATH is set, each COMPLETED (3-step, 200) verify
+// appends one JSON line with the fetch/recompute/compare breakdown; error paths
+// (partial steps) do not. This is the per-request source collect.py summarises.
+test('RQ2: a completed verify appends a step-breakdown metric line; errors do not', async (t) => {
+  const metricsPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'verify-metrics-')), 'verify.jsonl');
+  const rstore = await receiptStore(new Map([['evt-1', goodReceipt('shared')]])); // evt-missing absent
+  const gw = await startServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ merkleRoot: V2.ROOT }));
+  });
+  const app = createApp({ variant: 'anchoring', receiptStoreUrl: rstore.url, gatewayUrl: gw.url, logLevel: 'silent', metricsPath });
+  const v = await listen(app);
+  t.after(() => { v.server.close(); rstore.server.close(); gw.server.close(); });
+
+  assert.equal((await fetch(`${v.url}/verify/evt-1`)).status, 200);       // records
+  assert.equal((await fetch(`${v.url}/verify/evt-missing`)).status, 404); // must NOT record
+
+  // The append is fire-and-forget; give the event loop a couple of ticks.
+  await new Promise((r) => setTimeout(r, 50));
+
+  const lines = fs.readFileSync(metricsPath, 'utf8').trim().split('\n').filter(Boolean);
+  assert.equal(lines.length, 1, 'exactly one completed verify should be recorded');
+  const rec = JSON.parse(lines[0]);
+  assert.equal(rec.eventId, 'evt-1');
+  assert.equal(rec.ok, true);
+  for (const k of ['fetchMs', 'recomputeMs', 'compareRootMs', 'latencyMs']) {
+    assert.ok(typeof rec[k] === 'number', `${k} should be a number`);
+  }
+});
+
+test('RQ2: with no metricsPath (default) nothing is written and verify still works', async (t) => {
+  const rstore = await receiptStore(new Map([['evt-1', goodReceipt('shared')]]));
+  const gw = await startServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ merkleRoot: V2.ROOT }));
+  });
+  const app = createApp({ variant: 'anchoring', receiptStoreUrl: rstore.url, gatewayUrl: gw.url, logLevel: 'silent' });
+  const v = await listen(app);
+  t.after(() => { v.server.close(); rstore.server.close(); gw.server.close(); });
+
+  assert.equal((await fetch(`${v.url}/verify/evt-1`)).status, 200); // no throw despite no metrics sink
 });
 
 test('parallel-anchored path reads the anchor-client, not the gateway', async (t) => {

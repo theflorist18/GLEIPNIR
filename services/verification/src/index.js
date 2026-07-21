@@ -19,6 +19,7 @@
 // Contracts: docs/CONTRACTS.md §4/§6/§9; docs/ARCHITECTURE.md §4.5.
 
 const express = require('express');
+const fsp = require('fs/promises');
 const { computeRoot } = require('./merkle');
 
 function loadConfig() {
@@ -30,7 +31,21 @@ function loadConfig() {
     anchorClientUrl: process.env.ANCHOR_CLIENT_URL || 'http://anchor-client:4003',
     token: process.env.GLEIPNIR_TOKEN || 'dev-token',
     logLevel: process.env.LOG_LEVEL || 'info',
+    // RQ2: where to append the per-request step breakdown. Empty (the default)
+    // disables it — only the sweep sets it, so unit tests and ad-hoc runs write
+    // nothing. sweep.py truncates the file before each verify run; collect.py
+    // reads it after and summarises percentiles into the run manifest.
+    metricsPath: process.env.VERIFY_METRICS_PATH || '',
   };
+}
+
+// Append one metric line per completed 3-step verify. Fire-and-forget and OFF
+// the timed path: the step values are already captured (process.hrtime) before
+// this runs, and the async append never blocks the event loop, so it cannot
+// perturb the latency it records. Failures (e.g. no volume mounted) are ignored.
+function recordVerifyMetric(cfg, line) {
+  if (!cfg.metricsPath) return;
+  fsp.appendFile(cfg.metricsPath, `${JSON.stringify(line)}\n`).catch(() => {});
 }
 
 const msSince = (start) => Number(process.hrtime.bigint() - start) / 1e6;
@@ -135,6 +150,17 @@ function createApp(overrides) {
       return res.status(404).json({ ok: false, reason: 'missing-anchor-root', latencyMs, steps });
     }
     const ok = anchoredRoot === recomputedRoot;
+    // RQ2: record the complete 3-step measurement (only the 200 path ran all
+    // three steps; error paths have partial timings and are not recorded).
+    recordVerifyMetric(cfg, {
+      ts: new Date().toISOString(),
+      eventId,
+      ok,
+      fetchMs: steps.fetchMs,
+      recomputeMs: steps.recomputeMs,
+      compareRootMs: steps.compareRootMs,
+      latencyMs,
+    });
     // A mismatch is a tamper signal, not a server error -> 200 with ok:false.
     return res.status(200).json({ ok, reason: ok ? undefined : 'root-mismatch', latencyMs, steps });
   });
