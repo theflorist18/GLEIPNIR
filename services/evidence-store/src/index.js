@@ -41,8 +41,23 @@ function loadConfig() {
   };
 }
 
-// Strip anything that could break out of a quoted Content-Disposition value.
-const dispositionName = (name) => String(name || 'evidence.bin').replace(/["\\\r\n]/g, '_');
+// Content-Disposition for a possibly-non-ASCII filename (B1). A raw Unicode
+// value in an HTTP header throws (header values must be latin1), so we emit BOTH
+// an ASCII-only quoted `filename="..."` fallback (non-ASCII and quote/backslash/
+// CR/LF replaced with _) and an RFC 5987 `filename*=UTF-8''<pct>` that modern
+// browsers prefer and that carries the true name.
+function contentDisposition(name) {
+  const raw = String(name || 'evidence.bin');
+  const asciiFallback = raw.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
+  return `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encodeURIComponent(raw)}`;
+}
+
+// The gateway percent-encodes x-original-filename so non-latin1 names survive
+// the HTTP header (B1); decode it back to the true filename for storage.
+function decodeOriginalFilename(header) {
+  if (!header) return null;
+  try { return decodeURIComponent(header); } catch { return header; }
+}
 
 // 5xx without leaking internals (S16). Node fs errors embed absolute container
 // paths (e.g. "ENOENT ... open '/data/<id>'"); log them server-side and return
@@ -90,7 +105,7 @@ function createApp(overrides) {
     if (bytes.length === 0) return res.status(400).json({ error: 'empty body' });
     const meta = {
       evidenceId,
-      originalFilename: req.get('x-original-filename') || null,
+      originalFilename: decodeOriginalFilename(req.get('x-original-filename')),
       contentType: req.get('x-content-type') || 'application/octet-stream',
       sizeBytes: bytes.length,
       integrityProof: niUri(bytes),
@@ -123,7 +138,7 @@ function createApp(overrides) {
     }
     res.set('content-type', meta.contentType || 'application/octet-stream');
     res.set('content-length', String(meta.sizeBytes));
-    res.set('content-disposition', `attachment; filename="${dispositionName(meta.originalFilename)}"`);
+    res.set('content-disposition', contentDisposition(meta.originalFilename));
     const stream = fs.createReadStream(blobFor(evidenceId));
     stream.on('error', (err) => {
       if (!res.headersSent) res.status(err.code === 'ENOENT' ? 404 : 500);

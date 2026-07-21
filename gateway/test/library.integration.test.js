@@ -594,6 +594,22 @@ test('S14: a lead cannot add or promote an admin on a case roster; an admin can'
   assert.equal((await fetch(`${s.url}/api/v1/cases/${c.id}/participants`, { method: 'POST', headers: s.asJson('root'), body: JSON.stringify({ userId: 'ivy', roleInCase: 'contributor' }) })).status, 201);
 });
 
+// B1: a Unicode evidence filename survives ingest intact. busboy latin1-decodes
+// the multipart filename to mojibake; the gateway recovers it and transports it
+// to evidence-store in a percent-encoded header, so the read-model row shows the
+// TRUE name (not "è¨¼æ ...") — and the ingest does not 502 on a header-encoding
+// throw.
+test('B1: a Unicode evidence filename is stored intact, not mojibake', SKIP, async (t) => {
+  const s = await bootStack(t);
+  const name = '証拠 file.pdf';
+  const up = await s.upload('ivy', Buffer.from('unicode exhibit'), { evidenceId: 'ev-uni' }, name, 'application/pdf');
+  assert.equal(up.status, 201);
+  const rows = await (await fetch(`${s.url}/api/v1/evidence/search?q=ev-uni`, { headers: s.as('ivy') })).json();
+  const row = rows.find((r) => r.evidenceId === 'ev-uni');
+  assert.ok(row, 'evidence row not found');
+  assert.equal(row.originalFilename, name);
+});
+
 // Regression: both of these reach the registry through PATCH /evidence-index/:id,
 // whose audit rows take the actor from the X-Gleipnir-Actor header. They were the
 // only mutating registry calls that omitted the opts argument, so the flag and

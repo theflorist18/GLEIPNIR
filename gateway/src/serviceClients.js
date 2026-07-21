@@ -41,7 +41,11 @@ function makeEvidenceStoreClient(baseUrl, internalToken) {
         ...headers,
         'content-type': 'application/octet-stream',
         ...(contentType ? { 'x-content-type': contentType } : {}),
-        ...(originalFilename ? { 'x-original-filename': originalFilename } : {}),
+        // Percent-encode: the recovered filename may hold non-latin1 code
+        // points (e.g. CJK/emoji), which are illegal in an HTTP header value
+        // and would otherwise throw when the request is built (B1). evidence-
+        // store percent-decodes it back.
+        ...(originalFilename ? { 'x-original-filename': encodeURIComponent(originalFilename) } : {}),
       },
       body: bytes,
     });

@@ -74,9 +74,28 @@ test('GET streams bytes back with content headers from the sidecar', async (t) =
   const r = await fetch(`${url}/blobs/ev-bin`, { headers: HDR });
   assert.equal(r.status, 200);
   assert.equal(r.headers.get('content-type'), 'application/octet-stream');
-  assert.equal(r.headers.get('content-disposition'), 'attachment; filename="disk.img"');
+  // ASCII filename: quoted fallback + RFC 5987 form both present.
+  assert.equal(r.headers.get('content-disposition'), 'attachment; filename="disk.img"; filename*=UTF-8\'\'disk.img');
   assert.equal(r.headers.get('content-length'), String(bytes.length));
   assert.deepEqual(Buffer.from(await r.arrayBuffer()), bytes);
+});
+
+// B1: a non-ASCII filename arrives percent-encoded (the gateway encodes it),
+// is stored decoded, and is served back without throwing on the header — the
+// ASCII fallback is sanitised and the true name rides in filename*.
+test('B1: a Unicode filename round-trips and is served via RFC 5987', async (t) => {
+  const url = await start(t);
+  const name = '証拠 file.pdf';
+  await putBlob(url, 'ev-uni', Buffer.from('x'), { 'x-original-filename': encodeURIComponent(name) });
+
+  const meta = await (await fetch(`${url}/blobs/ev-uni/meta`, { headers: HDR })).json();
+  assert.equal(meta.originalFilename, name); // stored decoded, intact
+
+  const r = await fetch(`${url}/blobs/ev-uni`, { headers: HDR });
+  assert.equal(r.status, 200); // did NOT throw setting the header
+  const cd = r.headers.get('content-disposition');
+  assert.match(cd, /filename="__ file\.pdf"/);            // non-ASCII -> _, safe
+  assert.match(cd, /filename\*=UTF-8''%E8%A8%BC%E6%8B%A0%20file\.pdf/); // true name
 });
 
 test('meta returns the sidecar; 404 for unknown ids', async (t) => {

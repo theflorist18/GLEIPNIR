@@ -21,6 +21,18 @@ const nowIso = () => new Date().toISOString();
 // here so a bad id fails before any bytes are stored.
 const SAFE_EVIDENCE_ID = /^[A-Za-z0-9._:-]+$/;
 
+// Recover the true upload filename (B1). Browsers send multipart filenames as
+// UTF-8 (RFC 7578), but busboy/multer decode them as latin1, so a name like
+// "証拠.pdf" arrives mojibake ("è¨¼æ .pdf"). Re-interpreting the latin1 bytes as
+// UTF-8 restores it; pure-ASCII names are unchanged (ASCII is a subset of both).
+// The recovered name may contain code points > 255, so it must be transported to
+// evidence-store in an ASCII-safe header (serviceClients percent-encodes it) and
+// served back via an RFC 5987 Content-Disposition.
+function decodeUploadFilename(name) {
+  if (!name) return null;
+  try { return Buffer.from(name, 'latin1').toString('utf8'); } catch { return name; }
+}
+
 function isNotFound(err) {
   return /not[\s-]?found|does not exist|no such key/i.test(String((err && err.message) || ''));
 }
@@ -630,9 +642,10 @@ function createApp(deps) {
       }
     }
 
+    const originalFilename = decodeUploadFilename(req.file.originalname);
     const stored = await evidenceStore.put(evidenceId, req.file.buffer, {
       contentType: req.file.mimetype || 'application/octet-stream',
-      originalFilename: req.file.originalname || null,
+      originalFilename,
     });
     if (stored.status === 409) throw new RequestError(409, 'evidence already exists');
     if (stored.status !== 201) throw new RequestError(502, `evidence-store put failed (${stored.status})`);
@@ -663,7 +676,7 @@ function createApp(deps) {
     const indexed = await caseRegistry.request('POST', '/evidence-index', {
       evidenceId,
       caseId: caseId || undefined,
-      originalFilename: req.file.originalname || null,
+      originalFilename,
       mimeType: req.file.mimetype || null,
       sizeBytes: req.file.size,
       integrityProof,
