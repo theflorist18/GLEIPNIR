@@ -43,7 +43,8 @@ const TEXT_PREVIEW_CAP = 64 * 1024; // bytes shown of a text file
 
 // Loads the blob through the same authed download route as the Download
 // button — so previewing IS a download and is auto-logged as one on the
-// chain (the trail refresh after load makes that visible, not hidden).
+// chain (the trail-only refresh after load makes that visible, not hidden,
+// and does not itself append a further access).
 function EvidencePreview({ id, mime, onLogged }: { id: string; mime: string | null; onLogged: () => Promise<void> | void }) {
   const { client } = useAuth();
   const { msg, run } = useErr();
@@ -261,6 +262,19 @@ export function EvidenceDetailPage() {
     [client, evidenceId],
   );
 
+  // Trail-only refresh. GET /evidence/:id/audit is never auto-logged, while
+  // GET /evidence/:id IS — so after an action that already wrote its own
+  // ACCESS (download/export/preview) we must re-read ONLY the trail. Calling
+  // the full refresh() there appended a second, spurious ACCESS('view') that
+  // no examiner performed, inflating the chain of custody with the UI's own
+  // bookkeeping. The head record is immutable and the index/roster do not
+  // change on a read, so the trail is the only thing that can have moved.
+  const refreshTrail = useCallback(
+    () => run(async () => { setEvents(await client.getAudit(evidenceId)); }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [client, evidenceId],
+  );
+
   useEffect(() => { void refresh(); }, [refresh]);
 
   // Pending-vs-tamper must never be conflated (F49): a 404 missing-receipt /
@@ -294,7 +308,7 @@ export function EvidenceDetailPage() {
       a.download = filename;
       a.click();
       URL.revokeObjectURL(url);
-      await refresh(); // the download was auto-logged; show it
+      await refreshTrail(); // the download auto-logged itself; show it without logging again
     });
 
   const doExport = () =>
@@ -307,7 +321,7 @@ export function EvidenceDetailPage() {
       a.download = `${evidenceId}-export.json`;
       a.click();
       URL.revokeObjectURL(url);
-      await refresh(); // the export was auto-logged; show it
+      await refreshTrail(); // the export auto-logged itself; show it without logging again
     });
 
   const myCaseRole = caseDetail?.participants.find((p) => p.userId === user?.username)?.roleInCase;
@@ -373,7 +387,7 @@ export function EvidenceDetailPage() {
               </dl>
             )}
             {canDownload && indexRow && (
-              <EvidencePreview id={evidenceId} mime={indexRow.mimeType} onLogged={refresh} />
+              <EvidencePreview id={evidenceId} mime={indexRow.mimeType} onLogged={refreshTrail} />
             )}
             {canWrite && (
               <div>

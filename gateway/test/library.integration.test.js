@@ -561,6 +561,40 @@ test('M20: the case activity feed follows case visibility and reflects the colla
   assert.equal(removedEvt.target, 'ivy');
 });
 
+// Regression: both of these reach the registry through PATCH /evidence-index/:id,
+// whose audit rows take the actor from the X-Gleipnir-Actor header. They were the
+// only mutating registry calls that omitted the opts argument, so the flag and
+// details events landed in the persistent case audit log with an EMPTY actor —
+// an unattributed entry in a chain-of-custody log (CONTRACTS §6: under a user
+// session the audit actor is ALWAYS the authenticated username).
+test('M25b: flag and details changes are actor-attributed in the case audit log', SKIP, async (t) => {
+  const s = await bootStack(t);
+  const c = await (await fetch(`${s.url}/api/v1/cases`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ name: 'attribution case' }) })).json();
+  await fetch(`${s.url}/api/v1/cases/${c.id}/participants`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ userId: 'ivy', roleInCase: 'contributor' }) });
+  await s.upload('ivy', Buffer.from('attributed exhibit'), { evidenceId: 'ev-attr', caseId: c.id, label: 'ITEM-042' });
+
+  await fetch(`${s.url}/api/v1/evidence/ev-attr/flag`, { method: 'PUT', headers: s.asJson('ivy'), body: JSON.stringify({ flag: 'HIGH_PRIORITY' }) });
+  await fetch(`${s.url}/api/v1/evidence/ev-attr/details`, { method: 'PATCH', headers: s.asJson('ivy'), body: JSON.stringify({ acquisitionLocation: 'evidence locker B' }) });
+
+  const feed = await (await fetch(`${s.url}/api/v1/cases/${c.id}/activity`, { headers: s.as('ivy') })).json();
+  const flagEvt = feed.find((e) => e.type === 'FLAG_CHANGED');
+  assert.ok(flagEvt, `no FLAG_CHANGED in ${feed.map((e) => e.type)}`);
+  assert.equal(flagEvt.actor, 'ivy');
+  assert.deepEqual(flagEvt.detail, { from: null, to: 'HIGH_PRIORITY' });
+
+  const detailsEvt = feed.find((e) => e.type === 'EVIDENCE_DETAILS_UPDATED');
+  assert.ok(detailsEvt, `no EVIDENCE_DETAILS_UPDATED in ${feed.map((e) => e.type)}`);
+  assert.equal(detailsEvt.actor, 'ivy');
+
+  // The service path keeps its contract: no session, so no session attribution
+  // is forced onto the row (it must not be stamped with a user identity).
+  await fetch(`${s.url}/api/v1/evidence/ev-attr/flag`, { method: 'PUT', headers: s.asJson('service'), body: JSON.stringify({ flag: 'PROCESSED' }) });
+  const feed2 = await (await fetch(`${s.url}/api/v1/cases/${c.id}/activity`, { headers: s.as('ivy') })).json();
+  const svcFlag = feed2.find((e) => e.type === 'FLAG_CHANGED' && e.detail && e.detail.to === 'PROCESSED');
+  assert.ok(svcFlag, 'service-token flag change not recorded');
+  assert.ok(!svcFlag.actor, `service path must not stamp a user actor, got ${svcFlag.actor}`);
+});
+
 test('M24: per-case CoC report — json + csv shapes, authz, and exactly one ACCESS per evidence for sessions', SKIP, async (t) => {
   const s = await bootStack(t);
   const c = await (await fetch(`${s.url}/api/v1/cases`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ name: 'court case' }) })).json();

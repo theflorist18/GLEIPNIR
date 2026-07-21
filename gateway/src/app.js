@@ -420,7 +420,7 @@ function createApp(deps) {
     proxy(res, await caseRegistry.request('PATCH', `/evidence-index/${encodeURIComponent(req.params.id)}`, {
       label: b.label, categoryId: b.categoryId, seizedAt: b.seizedAt,
       acquisitionLocation: b.acquisitionLocation, handedOverBy: b.handedOverBy,
-    }));
+    }, { actor: sessionActor(req) }));
   }));
 
   // ---- collaboration (M20): notes, flag, activity feed. Off-chain library
@@ -446,7 +446,7 @@ function createApp(deps) {
     await ensureEvidenceAccess(req, req.params.id, { write: true });
     proxy(res, await caseRegistry.request('PATCH', `/evidence-index/${encodeURIComponent(req.params.id)}`, {
       flag: (req.body || {}).flag ?? null,
-    }));
+    }, { actor: sessionActor(req) }));
   }));
 
   // ---- per-case Chain-of-Custody report (M24). Metadata + on-chain trails,
