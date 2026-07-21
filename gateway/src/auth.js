@@ -53,7 +53,17 @@ function makeAuth({ token, sessions, users }) {
     };
   }
 
-  return { authenticate, requireUser, requireRole };
+  // Gate for gateway-internal routes that belong to the off-chain machinery
+  // (the batcher's anchor-root sink, the verification service). The contract
+  // (docs/CONTRACTS.md §6) puts these on the SERVICE-token path — a user
+  // session, even an admin's, must not be able to commit anchor roots. This is
+  // the inverse of requireRole: only the service principal passes.
+  function requireService(req, res, next) {
+    if (req.principal && req.principal.kind === 'service') return next();
+    return res.status(403).json({ error: 'service token required' });
+  }
+
+  return { authenticate, requireUser, requireRole, requireService };
 }
 
 module.exports = { makeAuth, bearerOf };

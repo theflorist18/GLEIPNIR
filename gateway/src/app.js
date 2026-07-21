@@ -73,6 +73,14 @@ function createApp(deps) {
   const auth = makeAuth({ token: cfg.token, sessions, users });
 
   const app = express();
+  // The gateway sits behind exactly one reverse proxy (the nginx container that
+  // serves the SPA and proxies /api). Trust that single hop so req.ip is the
+  // real client address rather than nginx's, which the login throttle keys on
+  // (without this the per-(ip,username) throttle collapsed to per-username and
+  // any client could lock out a named account — S7). Trust ONE hop, not `true`:
+  // a client reaching :3000 directly can still spoof X-Forwarded-For, an
+  // accepted local-dev residual.
+  app.set('trust proxy', 1);
   app.use(express.json({ limit: '2mb' }));
 
   // Health check is unauthenticated.
@@ -134,10 +142,14 @@ function createApp(deps) {
 
   const wrap = (fn) => (req, res) => fn(req, res).catch((err) => {
     // Any error carrying an HTTP status (RequestError, UserError, upstream
-    // service errors) maps straight through.
+    // service errors) maps straight through — these messages are ours and safe.
     if (Number.isInteger(err && err.status)) return res.status(err.status).json({ error: err.message });
     if (isNotFound(err)) return res.status(404).json({ error: err.message });
-    return res.status(502).json({ error: 'upstream error', detail: String((err && err.message) || err) });
+    // Unmapped failure: the raw message can carry internal hostnames and
+    // absolute container paths (e.g. an fs ENOENT from evidence-store). Log it
+    // server-side; return a generic body to the client (S15).
+    console.error('[gateway] unhandled error:', (err && err.stack) || err);
+    return res.status(502).json({ error: 'upstream error' });
   });
 
   const V = cfg.variant;
@@ -176,7 +188,11 @@ function createApp(deps) {
   }));
 
   app.post('/api/v1/admin/users/:id/reset-password', requireAdmin, wrap(async (req, res) => {
-    res.json(users.resetPassword(req.params.id, (req.body || {}).password));
+    const updated = users.resetPassword(req.params.id, (req.body || {}).password);
+    // A reset is the response to a suspected compromise — kill the target's
+    // live sessions so a stolen token cannot outlive it (S5).
+    if (sessions && sessions.destroyForUser) sessions.destroyForUser(req.params.id);
+    res.json(updated);
   }));
 
   // ---- user directory (M25): a read-only roster picker for team management.
@@ -247,6 +263,12 @@ function createApp(deps) {
     const me = (out.body.participants || []).find((p) => p.userId === req.principal.username);
     if (!me) throw new RequestError(404, 'case not found'); // don't leak existence
     if (me.roleInCase !== 'lead') throw new RequestError(403, 'the case lead role is required');
+    // Re-check the caller's CURRENT global role, not just the case-role row: a
+    // user demoted from global 'lead' to 'investigator' may still hold a stale
+    // case-lead participant row, and users are deactivated-not-deleted, so
+    // demotion is a real operation. auth.js re-fetches the user per request, so
+    // req.principal.role is live (S4). Admins already returned above.
+    if (req.principal.role !== 'lead') throw new RequestError(403, 'the lead role is required');
     return out.body;
   }
 
@@ -322,6 +344,16 @@ function createApp(deps) {
     if (users && b.userId && !users.getByUsername(b.userId)) {
       return res.status(404).json({ error: 'no such user' });
     }
+    // Admins sit above a lead's scope: a lead may not pull an admin account
+    // onto their roster. The directory picker already hides admins from leads
+    // (M25b); mirror it on the write path, since participation is exactly what
+    // unlocks the §12-8 admin blob-content check. Admins may add anyone (S14).
+    if (req.principal.role !== 'admin' && users) {
+      const target = users.getByUsername(b.userId);
+      if (target && target.role === 'admin') {
+        return res.status(403).json({ error: 'cannot add an admin account to a case roster' });
+      }
+    }
     // The case-lead role is reserved for users whose global role is 'lead'.
     if (b.roleInCase === 'lead' && users) {
       const target = users.getByUsername(b.userId);
@@ -340,6 +372,14 @@ function createApp(deps) {
   app.patch('/api/v1/cases/:id/participants/:userId', requireLibrary, wrap(async (req, res) => {
     const detail = await ensureCaseLead(req, req.params.id);
     const role = (req.body || {}).roleInCase;
+    // A lead may not manage an admin's roster entry (mirror of the add-path
+    // rule; admins are above a lead's scope — S14).
+    if (req.principal.role !== 'admin' && users) {
+      const target = users.getByUsername(req.params.userId);
+      if (target && target.role === 'admin') {
+        return res.status(403).json({ error: 'cannot manage an admin account on a case roster' });
+      }
+    }
     if (role === 'lead' && users) {
       const target = users.getByUsername(req.params.userId);
       if (!target || target.role !== 'lead') {
@@ -752,14 +792,20 @@ function createApp(deps) {
   }));
 
   // ---- internal: anchor-root sink for the Anchoring variant (coc-main) ----
-  app.post('/internal/anchor-root', wrap(async (req, res) => {
+  // Service-principal only (S1). These routes commit/read Merkle roots on the
+  // ledger and belong to the batcher + verification service, which use the
+  // service token (docs/CONTRACTS.md §6). Global auth.authenticate alone would
+  // admit any user session — an investigator could commit an arbitrary root or
+  // squat a batchId to break verification of a genuine batch. requireService
+  // closes that without touching the frozen service-token semantics.
+  app.post('/internal/anchor-root', auth.requireService, wrap(async (req, res) => {
     const { batchId, merkleRoot, meta } = req.body || {};
     if (!batchId || !merkleRoot) throw new RequestError(400, 'batchId and merkleRoot are required');
     const txId = await fabric.submit(cfg.defaultChannel, 'CommitAnchorRoot', [batchId, merkleRoot, JSON.stringify(meta || {})]);
     res.status(201).json({ txId });
   }));
 
-  app.get('/internal/anchor-root/:scopeId/:batchId', wrap(async (req, res) => {
+  app.get('/internal/anchor-root/:scopeId/:batchId', auth.requireService, wrap(async (req, res) => {
     const out = await fabric.evaluate(cfg.defaultChannel, 'ReadAnchorRoot', [req.params.scopeId, req.params.batchId]);
     res.type('application/json').send(out);
   }));

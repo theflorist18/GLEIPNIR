@@ -44,6 +44,15 @@ function loadConfig() {
 // Strip anything that could break out of a quoted Content-Disposition value.
 const dispositionName = (name) => String(name || 'evidence.bin').replace(/["\\\r\n]/g, '_');
 
+// 5xx without leaking internals (S16). Node fs errors embed absolute container
+// paths (e.g. "ENOENT ... open '/data/<id>'"); log them server-side and return
+// a generic body so the path never reaches the client (or the gateway's 502
+// detail, before the S15 fix strips that too).
+function serverError(res, label, err) {
+  console.error(`[evidence-store] ${label}:`, (err && err.stack) || err);
+  return res.status(500).json({ error: label });
+}
+
 function createApp(overrides) {
   const cfg = { ...loadConfig(), ...(overrides || {}) };
   fs.mkdirSync(cfg.dataDir, { recursive: true });
@@ -93,12 +102,12 @@ function createApp(overrides) {
       await fsp.writeFile(blobFor(evidenceId), bytes, { flag: 'wx' });
     } catch (err) {
       if (err.code === 'EEXIST') return res.status(409).json({ error: 'blob already exists (immutable)', evidenceId });
-      return res.status(500).json({ error: 'write failed', detail: err.message });
+      return serverError(res, 'write failed', err);
     }
     try {
       await fsp.writeFile(metaFor(evidenceId), JSON.stringify(meta, null, 2), 'utf8');
     } catch (err) {
-      return res.status(500).json({ error: 'meta write failed', detail: err.message });
+      return serverError(res, 'meta write failed', err);
     }
     return res.status(201).json({ integrityProof: meta.integrityProof, sizeBytes: meta.sizeBytes, storedAt: meta.storedAt });
   });
@@ -110,7 +119,7 @@ function createApp(overrides) {
       meta = await readMeta(evidenceId);
     } catch (err) {
       if (err.code === 'ENOENT') return res.status(404).json({ error: 'blob not found', evidenceId });
-      return res.status(500).json({ error: 'read failed', detail: err.message });
+      return serverError(res, 'read failed', err);
     }
     res.set('content-type', meta.contentType || 'application/octet-stream');
     res.set('content-length', String(meta.sizeBytes));
@@ -128,7 +137,7 @@ function createApp(overrides) {
       res.json(await readMeta(req.params.evidenceId));
     } catch (err) {
       if (err.code === 'ENOENT') return res.status(404).json({ error: 'blob not found', evidenceId: req.params.evidenceId });
-      return res.status(500).json({ error: 'read failed', detail: err.message });
+      return serverError(res, 'read failed', err);
     }
   });
 
@@ -144,7 +153,7 @@ function createApp(overrides) {
       [bytes, meta] = [await fsp.readFile(blobFor(evidenceId)), await readMeta(evidenceId)];
     } catch (err) {
       if (err.code === 'ENOENT') return res.status(404).json({ error: 'blob not found', evidenceId });
-      return res.status(500).json({ error: 'read failed', detail: err.message });
+      return serverError(res, 'read failed', err);
     }
     const actual = niUri(bytes);
     const expected = req.query.expected || meta.integrityProof;
@@ -159,7 +168,7 @@ function createApp(overrides) {
       await fsp.unlink(blobFor(evidenceId));
     } catch (err) {
       if (err.code === 'ENOENT') return res.status(404).json({ error: 'blob not found', evidenceId });
-      return res.status(500).json({ error: 'delete failed', detail: err.message });
+      return serverError(res, 'delete failed', err);
     }
     await fsp.unlink(metaFor(evidenceId)).catch(() => { /* sidecar may not exist */ });
     return res.status(204).end();

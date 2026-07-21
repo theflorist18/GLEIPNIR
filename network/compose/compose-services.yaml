@@ -59,8 +59,10 @@ services:
       - PORT=4005
       - DATA_DIR=/data
       - GLEIPNIR_INTERNAL_TOKEN=${GLEIPNIR_INTERNAL_TOKEN:-internal-dev-token}
-    ports:
-      - "4005:4005"
+    # Not host-published (S2). CONTRACTS §6 declares this internal-only; the
+    # gateway reaches it over gleipnir-net as http://case-registry:4005. Its
+    # only guard is the shared internal token, so exposing it on the host would
+    # put a full bypass of the gateway's ACL layer one committed header away.
     volumes:
       - case-registry-data:/data
     networks: [gleipnir-net]
@@ -74,8 +76,9 @@ services:
       - DATA_DIR=/data
       - GLEIPNIR_INTERNAL_TOKEN=${GLEIPNIR_INTERNAL_TOKEN:-internal-dev-token}
       - MAX_UPLOAD_BYTES=${MAX_UPLOAD_BYTES:-26214400}
-    ports:
-      - "4006:4006"
+    # Not host-published (S2). Internal-only per CONTRACTS §6; the gateway uses
+    # http://evidence-store:4006 over gleipnir-net. Host exposure would let
+    # anyone with the committed internal token read or DELETE evidence blobs.
     volumes:
       - evidence-blob-data:/data
     networks: [gleipnir-net]
@@ -107,8 +110,15 @@ services:
       - ANCHOR_CLIENT_URL=http://anchor-client:4003
       # The gateway bearer-auths /internal/anchor-root (audit F23).
       - GLEIPNIR_TOKEN=${GLEIPNIR_TOKEN:-dev-token}
+    # LOOPBACK ONLY (S3). The batcher has no auth, but the RQ2 verify workload
+    # (benchmark/workload/verify.js) POSTs /flush to localhost:4001 FROM THE
+    # HOST, so the port cannot simply be removed — that would silently break
+    # RQ2 (the flush call swallows errors). 127.0.0.1 keeps Caliper's access
+    # while removing LAN and cross-container reach. Do NOT add auth to the
+    # batcher: it is the frozen benchmark write path and verify.js calls it
+    # unauthenticated.
     ports:
-      - "4001:4001"
+      - "127.0.0.1:4001:4001"
     networks: [gleipnir-net]
 
   receipt-store:
@@ -119,8 +129,11 @@ services:
     environment:
       - PORT=4002
       - DATA_DIR=/data
-    ports:
-      - "4002:4002"
+    # Not host-published (S2). Reached over gleipnir-net as
+    # http://receipt-store:4002 by the batcher and verification service.
+    # NOTE: this is NOT hardening the receipt store (a banned change) — no auth,
+    # hash chain or signature is added; the store stays fully writable on the
+    # docker network. It only removes the extra LAN attack surface.
     volumes:
       - receipt-data:/data
     networks: [gleipnir-net]
@@ -137,8 +150,9 @@ services:
       - GATEWAY_URL=http://gateway:3000
       - ANCHOR_CLIENT_URL=http://anchor-client:4003
       - GLEIPNIR_TOKEN=${GLEIPNIR_TOKEN:-dev-token}
-    ports:
-      - "4004:4004"
+    # Not host-published (S2). Reached over gleipnir-net; the gateway proxies
+    # verification via GET /api/v1/evidence/:id/verify, so the host never needs
+    # 4004 directly.
     networks: [gleipnir-net]
 
   anchor-client:
@@ -155,8 +169,10 @@ services:
       - TLS_CERT_PATH=/organizations/peerOrganizations/anchor.example.com/peers/peer0.anchor.example.com/tls/ca.crt
       - ANCHOR_CHANNEL=anchor-main
       - CC_NAME=evidence
-    ports:
-      - "4003:4003"
+    # Not host-published (S2). Reached over gleipnir-net as
+    # http://anchor-client:4003 by the batcher and verification service. This is
+    # the only holder of the AnchorClientMSP identity (a held-constant thesis
+    # control); host exposure let anyone commit arbitrary roots on anchor-main.
     volumes:
       - ../organizations:/organizations:ro
     networks: [gleipnir-net]

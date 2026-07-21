@@ -389,3 +389,89 @@ test('M17 upgrade: a pre-rename users.json (displayName) is migrated to name in 
   assert.equal(onDisk[0].displayName, undefined);
   assert.equal(makeUsersStore(dir).getByUsername('old-root').name, 'Old Root');
 });
+
+// ---- Chunk 4 security fixes ----
+
+// S1: /internal/anchor-root is service-principal only. Global authenticate
+// alone admitted any user session; an investigator (or anyone with a session)
+// could commit or squat Merkle roots on coc-main.
+test('S1: /internal/anchor-root requires the service principal', async (t) => {
+  const { deps, submits } = fakeDeps({ variant: 'anchoring' });
+  const { server, url } = await listen(createApp(deps));
+  t.after(() => server.close());
+
+  const admin = (await login(url, 'root', 'root-pw')).body.token;
+  await fetch(`${url}/api/v1/admin/users`, { method: 'POST', headers: asUser(admin), body: JSON.stringify({ username: 'ivy', password: 'ivy-pw' }) });
+  const ivy = (await login(url, 'ivy', 'ivy-pw')).body.token;
+
+  const body = JSON.stringify({ batchId: 'shared-b000001', merkleRoot: 'a'.repeat(64) });
+  // an investigator session: 403 and NO submit
+  const asInvestigator = await fetch(`${url}/internal/anchor-root`, { method: 'POST', headers: asUser(ivy), body });
+  assert.equal(asInvestigator.status, 403);
+  // even an admin session: 403 (this is the service path, not a role)
+  const asAdmin = await fetch(`${url}/internal/anchor-root`, { method: 'POST', headers: asUser(admin), body });
+  assert.equal(asAdmin.status, 403);
+  assert.equal(submits.length, 0, 'no CommitAnchorRoot should have been submitted by a user session');
+
+  // the service token: accepted, submits CommitAnchorRoot
+  const asService = await fetch(`${url}/internal/anchor-root`, { method: 'POST', headers: asUser('secret-token'), body });
+  assert.equal(asService.status, 201);
+  assert.equal(submits.length, 1);
+  assert.equal(submits[0].fn, 'CommitAnchorRoot');
+
+  // the read side is service-only too
+  assert.equal((await fetch(`${url}/internal/anchor-root/shared/b1`, { headers: asUser(ivy) })).status, 403);
+  assert.equal((await fetch(`${url}/internal/anchor-root/shared/b1`, { headers: asUser('secret-token') })).status, 200);
+});
+
+// S5: an admin password reset invalidates the target's live sessions, so a
+// stolen token cannot outlive the response to a compromise.
+test('S5: password reset invalidates the target user\'s live sessions', async (t) => {
+  const { deps } = fakeDeps();
+  const { server, url } = await listen(createApp(deps));
+  t.after(() => server.close());
+
+  const admin = (await login(url, 'root', 'root-pw')).body.token;
+  const ivy = await (await fetch(`${url}/api/v1/admin/users`, {
+    method: 'POST', headers: asUser(admin), body: JSON.stringify({ username: 'ivy', password: 'old-pw' }),
+  })).json();
+  const ivyToken = (await login(url, 'ivy', 'old-pw')).body.token;
+  // the session works before the reset
+  assert.equal((await fetch(`${url}/api/v1/auth/me`, { headers: asUser(ivyToken) })).status, 200);
+
+  await fetch(`${url}/api/v1/admin/users/${ivy.id}/reset-password`, {
+    method: 'POST', headers: asUser(admin), body: JSON.stringify({ password: 'new-pw' }),
+  });
+  // the pre-reset token is now dead
+  assert.equal((await fetch(`${url}/api/v1/auth/me`, { headers: asUser(ivyToken) })).status, 401);
+});
+
+// S7: with trust proxy set, the login throttle keys on the real client IP
+// (X-Forwarded-For), so locking one client out does not lock a named account
+// out for everyone.
+test('S7: login throttle keys per client IP, not globally per username', async (t) => {
+  const { deps } = fakeDeps({ loginMaxAttempts: 3, loginWindowSeconds: 60 });
+  const { server, url } = await listen(createApp(deps));
+  t.after(() => server.close());
+
+  const failFrom = (ip) => fetch(`${url}/api/v1/auth/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-forwarded-for': ip },
+    body: JSON.stringify({ username: 'root', password: 'wrong' }),
+  });
+
+  // lock out client A against username 'root'
+  for (let i = 0; i < 3; i += 1) assert.equal((await failFrom('9.9.9.9')).status, 401);
+  assert.equal((await failFrom('9.9.9.9')).status, 429, 'client A should be locked');
+
+  // client B, same username, is NOT locked — the key is (real-ip, username)
+  assert.equal((await failFrom('8.8.8.8')).status, 401, 'client B must not inherit A\'s lockout');
+
+  // and the real admin, arriving from a different IP with correct creds, is fine
+  const ok = await fetch(`${url}/api/v1/auth/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-forwarded-for': '7.7.7.7' },
+    body: JSON.stringify({ username: 'root', password: 'root-pw' }),
+  });
+  assert.equal(ok.status, 200);
+});

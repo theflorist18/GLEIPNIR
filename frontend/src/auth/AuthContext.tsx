@@ -3,13 +3,20 @@ import { GatewayClient } from '../api';
 import type { User } from '../types';
 
 // Session state for the whole SPA (M14). The opaque session token from
-// POST /auth/login is kept in localStorage so a refresh survives; any 401 from
-// the gateway drops the session (the gateway restarts wipe sessions server-side,
-// so the client must treat them as disposable). The GatewayClient lives here —
-// it needs the token getter — and replaces the client that settings.tsx used
-// to own when auth was a hand-typed static token.
-
+// POST /auth/login is kept in sessionStorage so a refresh and deep-link survive
+// but the credential dies with the tab and is not shared across windows (S13);
+// any 401 from the gateway drops the session (gateway restarts wipe sessions
+// server-side, so the client must treat them as disposable). The GatewayClient
+// lives here — it needs the token getter — and replaces the client settings.tsx
+// used to own when auth was a hand-typed static token.
+//
+// sessionStorage over localStorage narrows the XSS/shared-workstation exposure
+// of a role-carrying bearer token; the token is never an HttpOnly cookie by
+// design (the gateway is header-authenticated per CONTRACTS §6, and a cookie
+// would add CSRF surface). One-time migration clears any token a prior build
+// left in localStorage.
 const TOKEN_KEY = 'gleipnir.session';
+try { localStorage.removeItem(TOKEN_KEY); } catch { /* storage may be unavailable */ }
 
 interface Auth {
   user: User | null;
@@ -24,11 +31,11 @@ const AuthContext = createContext<Auth | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [ready, setReady] = useState(false);
-  const tokenRef = useRef<string>(localStorage.getItem(TOKEN_KEY) ?? '');
+  const tokenRef = useRef<string>(sessionStorage.getItem(TOKEN_KEY) ?? '');
 
   const clearSession = useCallback(() => {
     tokenRef.current = '';
-    localStorage.removeItem(TOKEN_KEY);
+    sessionStorage.removeItem(TOKEN_KEY);
     setUser(null);
   }, []);
 
@@ -58,7 +65,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = useCallback(async (username: string, password: string) => {
     const res = await client.login(username, password);
     tokenRef.current = res.token;
-    localStorage.setItem(TOKEN_KEY, res.token);
+    sessionStorage.setItem(TOKEN_KEY, res.token);
     setUser(res.user);
   }, [client]);
 

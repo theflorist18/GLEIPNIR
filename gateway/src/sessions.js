@@ -32,7 +32,20 @@ function makeSessions({ ttlSeconds = 28800 } = {}) {
     sessions.delete(token);
   }
 
-  return { create, get, destroy };
+  // Invalidate every live session for a user. Used on admin password reset:
+  // resetting a password is the standard response to a suspected compromise,
+  // so a stolen token must not keep working for the rest of its TTL. Matches
+  // the immediate-propagation model auth.js already gives deactivation and
+  // role change (the user is re-fetched per request).
+  function destroyForUser(userId) {
+    let n = 0;
+    for (const [token, s] of sessions) {
+      if (s.userId === userId) { sessions.delete(token); n += 1; }
+    }
+    return n;
+  }
+
+  return { create, get, destroy, destroyForUser };
 }
 
 module.exports = { makeSessions };

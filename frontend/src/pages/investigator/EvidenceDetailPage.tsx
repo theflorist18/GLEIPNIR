@@ -92,7 +92,13 @@ function EvidencePreview({ id, mime, onLogged }: { id: string; mime: string | nu
       {kind === 'image' && url && <img className="preview-media" src={url} alt={id} />}
       {kind === 'video' && url && <video className="preview-media" controls src={url} />}
       {kind === 'audio' && url && <audio controls src={url} />}
-      {kind === 'pdf' && url && <iframe className="preview-frame" src={url} title={`${id} PDF preview`} />}
+      {/* Sandbox the preview of attacker-supplied bytes (S11): an empty sandbox
+          blocks script execution, form submission and same-origin access, so a
+          malicious PDF's OpenAction/JS or annotations cannot drive the app
+          origin or read the localStorage session. The built-in PDF viewer
+          renders fine without allow-scripts. Pairs with server-side content
+          sniffing (S20) so the mimeType that routes here can be trusted. */}
+      {kind === 'pdf' && url && <iframe className="preview-frame" src={url} title={`${id} PDF preview`} sandbox="" referrerPolicy="no-referrer" />}
       {kind === 'text' && text !== null && (
         <div>
           <pre className="preview-text">{text}</pre>

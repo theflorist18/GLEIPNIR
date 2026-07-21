@@ -34,7 +34,12 @@ const PRESET_CATEGORIES = ['Image', 'Video', 'Audio', 'Text', 'Document', 'PDF',
 // rows — library metadata only (no blob fetch, no trail), so it is not an
 // evidence access and is deliberately not auto-logged (mirrors /details).
 const csvCell = (v: unknown): string => {
-  const s = v === null || v === undefined ? '' : String(v);
+  const raw = v === null || v === undefined ? '' : String(v);
+  // Neutralise spreadsheet formula injection (S10): a value starting = + - @
+  // TAB or CR runs as a formula when this export is opened in Excel/Sheets.
+  // Prefix with a single quote so it renders literally. File names, labels and
+  // free-text metadata are user-controlled and reach these cells.
+  const s = /^[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw;
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 

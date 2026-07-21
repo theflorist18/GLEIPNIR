@@ -561,6 +561,39 @@ test('M20: the case activity feed follows case visibility and reflects the colla
   assert.equal(removedEvt.target, 'ivy');
 });
 
+// S4: ensureCaseLead re-checks the caller's CURRENT global role, not just the
+// stale case-role row. A user demoted from global 'lead' to 'investigator'
+// loses case-lead powers immediately, even where a lead participant row remains.
+test('S4: a demoted lead loses case-lead powers even with a stale lead row', async (t) => {
+  const s = await bootStack(t);
+  const c = await (await fetch(`${s.url}/api/v1/cases`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ name: 'demotion case' }) })).json();
+  // lena is the case lead and can manage the roster
+  assert.equal((await fetch(`${s.url}/api/v1/cases/${c.id}/participants`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ userId: 'ivy', roleInCase: 'contributor' }) })).status, 201);
+
+  // admin demotes lena to investigator (users are deactivated-not-deleted, so
+  // demotion is the realistic operation). Her case-lead participant row remains.
+  const lena = (await fetch(`${s.url}/api/v1/admin/users`, { headers: s.as('root') }).then((r) => r.json())).find((u) => u.username === 'lena');
+  assert.equal((await fetch(`${s.url}/api/v1/admin/users/${lena.id}`, { method: 'PATCH', headers: s.asJson('root'), body: JSON.stringify({ role: 'investigator' }) })).status, 200);
+
+  // now every case-lead action is refused
+  assert.equal((await fetch(`${s.url}/api/v1/cases/${c.id}`, { method: 'PATCH', headers: s.asJson('lena'), body: JSON.stringify({ status: 'CLOSED' }) })).status, 403);
+  assert.equal((await fetch(`${s.url}/api/v1/cases/${c.id}/participants`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ userId: 'mallory', roleInCase: 'viewer' }) })).status, 403);
+});
+
+// S14: a case lead cannot pull an admin account onto their roster (mirror of
+// the directory rule; participation is what unlocks the §12-8 blob-content
+// check). Admins may still add anyone.
+test('S14: a lead cannot add or promote an admin on a case roster; an admin can', async (t) => {
+  const s = await bootStack(t);
+  const c = await (await fetch(`${s.url}/api/v1/cases`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ name: 'roster case' }) })).json();
+  // 'root' is the seeded admin
+  const asLead = await fetch(`${s.url}/api/v1/cases/${c.id}/participants`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ userId: 'root', roleInCase: 'viewer' }) });
+  assert.equal(asLead.status, 403, 'a lead must not add an admin to the roster');
+
+  // an admin adding a non-admin is unaffected
+  assert.equal((await fetch(`${s.url}/api/v1/cases/${c.id}/participants`, { method: 'POST', headers: s.asJson('root'), body: JSON.stringify({ userId: 'ivy', roleInCase: 'contributor' }) })).status, 201);
+});
+
 // Regression: both of these reach the registry through PATCH /evidence-index/:id,
 // whose audit rows take the actor from the X-Gleipnir-Actor header. They were the
 // only mutating registry calls that omitted the opts argument, so the flag and

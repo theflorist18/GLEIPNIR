@@ -7,6 +7,33 @@ Scope: the off-chain evidence-library stack (gateway, case-registry, evidence-st
 frontend) and the service exposure around it. The chaincode, Fabric network topology and
 Caliper machinery are in scope only where the library touches them.
 
+## Remediation status (Chunk 4, commit pending)
+
+| Finding | Status |
+|---|---|
+| S1 anchor-root service gate | **fixed** + test |
+| S2 internal ports unpublished | **fixed** (verified live: 4002-4006 refuse from host) |
+| S3 4001 loopback bind | **fixed** (full anchoring `/flush` re-test deferred to Chunk 9) |
+| S4 ensureCaseLead live-role recheck | **fixed** + test |
+| S5 password reset kills sessions | **fixed** + test |
+| S7 trust proxy | **fixed** + test |
+| S10 CSV formula neutralisation | **fixed** (server + client) + test |
+| S11 iframe sandbox | **fixed** |
+| S12 security headers / CSP | **fixed** (verified live: SPA + Recharts render, no CSP violation) |
+| S13 sessionStorage token | **fixed** (verified live) |
+| S14 lead cannot add admin to roster | **fixed** + test |
+| S15 generic gateway error body | **fixed** |
+| S16 evidence-store generic errors | **fixed** |
+| S6 async scrypt | **deferred** — invasive across boot + 3 test files; medium DoS on local-dev; do in isolation |
+| S17 rate-limit auto-log routes | **deferred** — pairs with S6 (shared rate-limit utility); benchmark path unaffected |
+| S9 evidence-store DELETE scope guard | **deferred** — largely resolved by S2 (4006 no longer host-reachable) |
+| S19 LIMIT on list/search | **deferred** — low; behaviour change needs a frontend check |
+| S20 server-side content sniffing | **deferred** — S11 sandbox is the load-bearing mitigation; sniffing is defence-in-depth |
+
+Deferred items are tracked as a follow-up; none is high-severity once S1/S2 land.
+
+---
+
 Findings are ranked by severity and classified:
 
 - **fix** — a genuine defect fixable without breaking a binding invariant.
