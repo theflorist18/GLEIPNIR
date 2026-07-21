@@ -182,7 +182,7 @@ lands in the next batch and its receipt PUT overwrites the previous witness
 | receipt-store | **4002** | `PUT /receipts/:eventId`; `GET /receipts/:eventId` (404 if missing) |
 | anchor-client | **4003** | `POST /roots` `{caseId,batchId,merkleRoot,meta}` → `201 {txId}` (submit on `anchor-main`); `GET /roots/:caseId/:batchId` (evaluate on `anchor-main`) |
 | verification | **4004** | `GET /verify/:eventId` → `{ok,reason?,latencyMs,steps:{fetchMs,recomputeMs,compareRootMs}}`; `reason`: `root-mismatch` (200, tamper signal), `missing-receipt`/`missing-anchor-root` (404, not yet anchored), `malformed-receipt` (422 — the un-hardened witness stored junk) |
-| case-registry | **4005** | internal-only (via gateway; `X-Gleipnir-Internal-Token` after `/healthz`): `POST/GET/PATCH /cases[/:caseId]`, `POST/DELETE /cases/:caseId/participants[/:userId]`, `POST/DELETE /cases/:caseId/evidence[/:evidenceId]` (categorize; idempotent same-case, 409 cross-case; un-assign also clears `categoryId`), `POST/GET/PATCH/DELETE /cases/:caseId/categories[/:categoryId]` (M19 taxonomy; name unique per case → 409; delete refused 409 while referenced), `POST/GET/PATCH /evidence-index[/:evidenceId]` (accepts the M19 metadata fields; `categoryId` must belong to the evidence's case), `GET /evidence-index?caseId=&q=&uploadedBy=&type=&from=&to=&visibleToUserId=`, `GET /internal/authz?userId=&evidenceId=` → `{allowed,caseId,roleInCase}` |
+| case-registry | **4005** | internal-only (via gateway; `X-Gleipnir-Internal-Token` after `/healthz`): `POST/GET/PATCH /cases[/:caseId]`, `POST/PATCH/DELETE /cases/:caseId/participants[/:userId]` (PATCH = M25 in-place role change; policy in the gateway), `POST/DELETE /cases/:caseId/evidence[/:evidenceId]` (categorize; idempotent same-case, 409 cross-case; un-assign also clears `categoryId`), `POST/GET/PATCH/DELETE /cases/:caseId/categories[/:categoryId]` (M19 taxonomy; name unique per case → 409; delete refused 409 while referenced), `POST/GET/PATCH /evidence-index[/:evidenceId]` (accepts the M19 metadata fields; `categoryId` must belong to the evidence's case), `GET /evidence-index?caseId=&q=&uploadedBy=&type=&from=&to=&visibleToUserId=`, `GET /internal/authz?userId=&evidenceId=` → `{allowed,caseId,roleInCase}` |
 | evidence-store | **4006** | internal-only (via gateway; `X-Gleipnir-Internal-Token` after `/healthz`): `PUT /blobs/:evidenceId` (raw body + `X-Content-Type`/`X-Original-Filename`) → `201 {integrityProof,sizeBytes,storedAt}`, `409` if exists (immutable), `413` over `MAX_UPLOAD_BYTES`; `GET /blobs/:evidenceId` (attachment stream); `GET /blobs/:evidenceId/meta`; `GET /blobs/:evidenceId/verify?expected=<ni-uri>`; `DELETE /blobs/:evidenceId` (ingest-rollback only) |
 | frontend (nginx) | **8081** | serves SPA; `GET /healthz`; proxies `/api/*` → `gateway:3000` |
 
@@ -190,20 +190,42 @@ lands in the next batch and its receipt PUT overwrites the previous witness
 (JSON body — or `multipart/form-data` for library ingest: blob → evidence-store,
 head committed with the store's proof, evidence-index row registered; the library
 `caseId` never reaches the chain),
-`POST /evidence/:id/transfer`, `POST /evidence/:id/access`, `DELETE /evidence/:id`,
+`POST /evidence/:id/transfer`, `POST /evidence/:id/access` (user sessions:
+contributor-or-lead), `DELETE /evidence/:id` (M25 role ladder: user sessions
+need the case-lead role — viewer = view/export, contributor = + write events
+and annotations but never removal; the uploader keeps removal for their own
+uncategorized evidence, which has no case lead),
 `GET /evidence/:id`, `GET /evidence/:id/audit`, `GET /evidence/:id/download`,
 `GET /evidence/:id/export`,
 `GET /evidence/:id/verify?eventId=<eventId>` (the verify chain is keyed by **event**
 id — receipts are per event; without the query param the gateway falls back to the
 path id, which only matches when callers pass an eventId there),
 `GET /evidence/search`, `POST/GET/PATCH /cases[/:id]`, `GET /cases/search`,
-`POST/DELETE /cases/:id/participants[/:userId]`,
+`POST/PATCH/DELETE /cases/:id/participants[/:userId]` (PATCH is M25:
+in-place role change, same policy as grant/revoke incl. the last-lead 409),
+`GET /users/directory` (M25: active users for the roster picker;
+admin-or-lead sessions only — investigator sessions and the service token
+get 403; M25b: lead sessions never see admin accounts — admins sit above a
+lead's access scope),
 `POST/DELETE /cases/:id/evidence[/:evidenceId]`,
 `POST/GET/PATCH/DELETE /cases/:id/categories[/:categoryId]` (M19: read =
-case visibility, manage = admin-or-case-lead),
+case visibility, manage = admin-or-case-lead; M25: case-registry seeds each
+new case with the preset file-type categories Image/Video/Audio/Document/Text
+— ordinary rows, fully lead-editable),
 `PATCH /evidence/:id/details` (M19 metadata; write-gated, never auto-logged),
 `GET/POST /evidence/:id/notes` (M20; append-only, no mutation routes),
-`PUT /evidence/:id/flag`, `GET /cases/:id/activity?limit=` (M20),
+`PUT /evidence/:id/flag`, `GET /cases/:id/activity?limit=` (M20; M25b: reads
+the persistent append-only `case_audit_log` — every library management
+action is one actor-attributed row written in the same transaction as its
+mutation, actor forwarded gateway→registry via `X-Gleipnir-Actor` and always
+session-derived; evidence ACCESS events stay on-chain per evidence — the two
+logs are complementary, never duplicated),
+`GET /cases/:id/coc-report?format=csv|json` (M24: case-visibility gate;
+assembles every exhibit's `GetAuditTrail`; user sessions synchronously
+auto-append one `AccessLog('coc-report')` per exhibit AFTER assembly — the
+reported trails are pre-report, mirroring `/export`; never for the service
+token; CSV is hand-rolled RFC 4180, one row per CoC event; global/system
+audit-log export stays deferred and CASE/UCO JSON-LD stays banned),
 `POST /auth/login|logout`, `GET /auth/me`, `GET/POST /admin/users`,
 `PATCH /admin/users/:id`, `POST /admin/users/:id/reset-password`,
 `POST /runs`, `GET /runs`, `GET /runs/:id`.

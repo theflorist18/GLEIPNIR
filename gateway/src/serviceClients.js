@@ -10,12 +10,15 @@
 function makeCaseRegistryClient(baseUrl, internalToken) {
   // Generic pass-through: the gateway's proxy routes translate/forward the
   // registry's own status codes, so this returns {status, body} instead of
-  // throwing on non-2xx.
-  async function request(method, path, body) {
+  // throwing on non-2xx. opts.actor (M25b) carries the session-attributed
+  // username to the registry's case audit log via X-Gleipnir-Actor.
+  async function request(method, path, body, opts) {
+    const actor = opts && opts.actor;
     const resp = await fetch(`${baseUrl}${path}`, {
       method,
       headers: {
         'x-gleipnir-internal-token': internalToken,
+        ...(actor ? { 'x-gleipnir-actor': actor } : {}),
         ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,

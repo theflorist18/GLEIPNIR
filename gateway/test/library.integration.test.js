@@ -395,6 +395,36 @@ test('M18: admins read metadata and trails everywhere but blob content only as a
   assert.equal((await fetch(`${s.url}/api/v1/evidence/ev-sealed/download`, { headers: s.as('root') })).status, 200);
 });
 
+test('M25: role ladder — remove is lead-only; participant role PATCH policy', SKIP, async (t) => {
+  const s = await bootStack(t);
+  const c = await (await fetch(`${s.url}/api/v1/cases`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ name: 'ladder' }) })).json();
+  await fetch(`${s.url}/api/v1/cases/${c.id}/participants`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ userId: 'ivy', roleInCase: 'contributor' }) });
+  await fetch(`${s.url}/api/v1/cases/${c.id}/participants`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ userId: 'mallory', roleInCase: 'viewer' }) });
+  await s.upload('ivy', Buffer.from('x'), { evidenceId: 'ev-ladder', caseId: c.id });
+
+  // Contributor (even the uploader) and viewer cannot remove case evidence; the lead can.
+  const del = (who) => fetch(`${s.url}/api/v1/evidence/ev-ladder`, { method: 'DELETE', headers: s.asJson(who), body: JSON.stringify({ reason: 'x' }) });
+  assert.equal((await del('ivy')).status, 403);
+  assert.equal((await del('mallory')).status, 403);
+  assert.equal((await del('lena')).status, 201);
+
+  // Role PATCH: the lead promotes/demotes in place; enum junk 400s upstream.
+  const patchRole = (who, userId, roleInCase) => fetch(`${s.url}/api/v1/cases/${c.id}/participants/${userId}`, {
+    method: 'PATCH', headers: s.asJson(who), body: JSON.stringify({ roleInCase }),
+  });
+  assert.equal((await patchRole('lena', 'mallory', 'contributor')).status, 200);
+  const detail = await (await fetch(`${s.url}/api/v1/cases/${c.id}`, { headers: s.as('lena') })).json();
+  assert.equal(detail.participants.find((p) => p.userId === 'mallory').roleInCase, 'contributor');
+
+  // Case-lead grants still need a global-lead target; a contributor may not call at all.
+  assert.equal((await patchRole('lena', 'ivy', 'lead')).status, 400);
+  assert.equal((await patchRole('ivy', 'mallory', 'viewer')).status, 403);
+
+  // Demoting the case's only lead: refused for the lead, allowed for the admin.
+  assert.equal((await patchRole('lena', 'lena', 'contributor')).status, 409);
+  assert.equal((await patchRole('root', 'lena', 'contributor')).status, 200);
+});
+
 test('M19: category management is lead-gated; reading follows case visibility', SKIP, async (t) => {
   const s = await bootStack(t);
   const c = await (await fetch(`${s.url}/api/v1/cases`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ name: 'taxonomy' }) })).json();
@@ -408,8 +438,8 @@ test('M19: category management is lead-gated; reading follows case visibility', 
   assert.equal((await fetch(`${s.url}/api/v1/cases/${c.id}/categories`, { method: 'POST', headers: s.asJson('ivy'), body: JSON.stringify({ name: 'Nope' }) })).status, 403);
   assert.equal((await fetch(`${s.url}/api/v1/cases/${c.id}/categories`, { headers: s.as('mallory') })).status, 404);
 
-  // Participants and admins list them.
-  assert.deepEqual((await (await fetch(`${s.url}/api/v1/cases/${c.id}/categories`, { headers: s.as('ivy') })).json()).map((x) => x.name), ['Mobile Devices']);
+  // Participants and admins list them (M25: alongside the seeded presets).
+  assert.ok((await (await fetch(`${s.url}/api/v1/cases/${c.id}/categories`, { headers: s.as('ivy') })).json()).map((x) => x.name).includes('Mobile Devices'));
   assert.equal((await fetch(`${s.url}/api/v1/cases/${c.id}/categories`, { headers: s.as('root') })).status, 200);
 });
 
@@ -517,4 +547,59 @@ test('M20: the case activity feed follows case visibility and reflects the colla
   // Participant and admin read it; outsiders get 404.
   assert.equal((await fetch(`${s.url}/api/v1/cases/${c.id}/activity`, { headers: s.as('root') })).status, 200);
   assert.equal((await fetch(`${s.url}/api/v1/cases/${c.id}/activity`, { headers: s.as('mallory') })).status, 404);
+
+  // M25b: management actions are audited persistently with the SESSION actor —
+  // a removal leaves a log row even though the participant row is gone.
+  await fetch(`${s.url}/api/v1/cases/${c.id}/participants/ivy`, { method: 'PATCH', headers: s.asJson('lena'), body: JSON.stringify({ roleInCase: 'viewer' }) });
+  await fetch(`${s.url}/api/v1/cases/${c.id}/participants/ivy`, { method: 'DELETE', headers: s.as('lena') });
+  const after = await (await fetch(`${s.url}/api/v1/cases/${c.id}/activity`, { headers: s.as('lena') })).json();
+  const roleChanged = after.find((e) => e.type === 'PARTICIPANT_ROLE_CHANGED');
+  assert.deepEqual({ actor: roleChanged.actor, target: roleChanged.target, detail: roleChanged.detail },
+    { actor: 'lena', target: 'ivy', detail: { from: 'contributor', to: 'viewer' } });
+  const removedEvt = after.find((e) => e.type === 'PARTICIPANT_REMOVED');
+  assert.equal(removedEvt.actor, 'lena');
+  assert.equal(removedEvt.target, 'ivy');
+});
+
+test('M24: per-case CoC report — json + csv shapes, authz, and exactly one ACCESS per evidence for sessions', SKIP, async (t) => {
+  const s = await bootStack(t);
+  const c = await (await fetch(`${s.url}/api/v1/cases`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ name: 'court case' }) })).json();
+  await fetch(`${s.url}/api/v1/cases/${c.id}/participants`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ userId: 'ivy', roleInCase: 'contributor' }) });
+  const cat = await (await fetch(`${s.url}/api/v1/cases/${c.id}/categories`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ name: 'Media' }) })).json();
+  await s.upload('ivy', Buffer.from('exhibit A'), { evidenceId: 'ev-rep-a', caseId: c.id, label: 'ITEM-001', categoryId: cat.id });
+  await s.upload('ivy', Buffer.from('exhibit B'), { evidenceId: 'ev-rep-b', caseId: c.id, label: 'ITEM-002' });
+
+  // Outsiders can't see it; participants and admins can.
+  assert.equal((await fetch(`${s.url}/api/v1/cases/${c.id}/coc-report`, { headers: s.as('mallory') })).status, 404);
+
+  const asIvy = await fetch(`${s.url}/api/v1/cases/${c.id}/coc-report`, { headers: s.as('ivy') });
+  assert.equal(asIvy.status, 200);
+  const report = await asIvy.json();
+  assert.equal(report.caseId, c.id);
+  assert.deepEqual(report.evidence.map((e) => e.evidenceId), ['ev-rep-a', 'ev-rep-b']);
+  assert.equal(report.evidence[0].category, 'Media');
+  // The report shows the pre-report trails (1 CREATE each)...
+  assert.equal(report.evidence[0].auditTrail.length, 1);
+  // ...and the report itself appended exactly one ACCESS per evidence.
+  assert.equal(await s.auditLen('ivy', 'ev-rep-a'), 2);
+  assert.equal(await s.auditLen('ivy', 'ev-rep-b'), 2);
+  const reportActs = s.fabric.submits.filter((x) => x.fn === 'AccessLog' && x.args[2] === 'coc-report');
+  assert.deepEqual(reportActs.map((x) => x.args[1]), ['ivy', 'ivy']);
+
+  // CSV: header + one row per event, all cells quoted, attachment headers.
+  const csvRes = await fetch(`${s.url}/api/v1/cases/${c.id}/coc-report?format=csv`, { headers: s.as('root') });
+  assert.equal(csvRes.status, 200);
+  assert.match(csvRes.headers.get('content-type') || '', /text\/csv/);
+  assert.match(csvRes.headers.get('content-disposition') || '', /attachment; filename="coc-CASE-/);
+  const csv = await csvRes.text();
+  const lines = csv.trimEnd().split('\r\n');
+  assert.equal(lines[0], '"caseId","caseName","evidenceLabel","evidenceId","originalFilename","category","integrityProof","eventId","op","actor","ts","detail"');
+  // 2 evidence x (CREATE + ivy's coc-report ACCESS) = 4 event rows minimum.
+  assert.ok(lines.length >= 5, csv);
+  assert.ok(lines.some((l) => l.includes('"ITEM-001"') && l.includes('"CREATE"')), csv);
+
+  // The service token gets the report without growing any trail.
+  const before = await s.auditLen('service', 'ev-rep-a');
+  assert.equal((await fetch(`${s.url}/api/v1/cases/${c.id}/coc-report`, { headers: s.as('service') })).status, 200);
+  assert.equal(await s.auditLen('service', 'ev-rep-a'), before);
 });

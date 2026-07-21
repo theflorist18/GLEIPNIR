@@ -7,8 +7,10 @@ import { Sidebar } from './components/Layout/Sidebar';
 import { IngestPage } from './pages/investigator/IngestPage';
 import { MyCasesPage } from './pages/investigator/MyCasesPage';
 import { CaseDetailPage } from './pages/investigator/CaseDetailPage';
+import { CoCReportPage } from './pages/investigator/CoCReportPage';
 import { EvidenceDetailPage } from './pages/investigator/EvidenceDetailPage';
 import { SearchPage } from './pages/investigator/SearchPage';
+import { LeadDashboardPage } from './pages/lead/LeadDashboardPage';
 import { UsersPage } from './pages/admin/UsersPage';
 import { CasesAdminPage } from './pages/admin/CasesAdminPage';
 import { DashboardPage } from './pages/admin/DashboardPage';
@@ -39,6 +41,9 @@ export function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      {/* Print-optimized CoC report (M24): authenticated but OUTSIDE the
+          shell — no nav chrome on the court document. */}
+      <Route path="/cases/:caseId/report" element={<RequireAuth><CoCReportPage /></RequireAuth>} />
       <Route element={<RequireAuth><Shell /></RequireAuth>}>
         <Route index element={<Navigate to="/cases" replace />} />
         <Route path="/ingest" element={<IngestPage />} />
@@ -46,6 +51,7 @@ export function App() {
         <Route path="/cases/:caseId" element={<CaseDetailPage />} />
         <Route path="/evidence/:evidenceId" element={<EvidenceDetailPage />} />
         <Route path="/search" element={<SearchPage />} />
+        <Route path="/lead/dashboard" element={<RequireRole roles={['lead', 'admin']}><LeadDashboardPage /></RequireRole>} />
         <Route path="/admin/users" element={<RequireRole roles={['admin']}><UsersPage /></RequireRole>} />
         <Route path="/admin/cases" element={<RequireRole roles={['admin']}><CasesAdminPage /></RequireRole>} />
         <Route path="/admin/dashboard" element={<RequireRole roles={['admin']}><DashboardPage /></RequireRole>} />

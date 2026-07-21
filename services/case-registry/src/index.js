@@ -32,6 +32,14 @@ const EVIDENCE_FLAGS = ['HIGH_PRIORITY', 'PROCESSED', 'NEEDS_LEAD_REVIEW'];
 // M18 (CONTRACTS §12-8): 'lead' joined the per-case ladder — leads manage the
 // roster/config of cases where they hold this role (enforced by the gateway).
 const CASE_ROLES = ['viewer', 'contributor', 'lead'];
+// M25: every new case starts with a general file-type taxonomy. These are
+// ordinary per-case category rows — the lead can rename or delete them (delete
+// still refuses when referenced) and add custom ones; nothing is hard-coded
+// downstream of creation.
+const DEFAULT_CATEGORIES = ['Image', 'Video', 'Audio', 'Text', 'Document', 'PDF', 'Spreadsheet', 'Archive', 'Other'];
+// Category listings sort alphabetically with the catch-all 'Other' pinned
+// last (SQLite: a boolean expression sorts 0-before-1).
+const CATEGORY_ORDER = "(name = 'Other'), name";
 
 function loadConfig() {
   return {
@@ -100,6 +108,17 @@ function openDb(dataDir) {
       body        TEXT NOT NULL,
       created_at  TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS case_audit_log (
+      id          TEXT PRIMARY KEY,
+      case_id     TEXT NOT NULL REFERENCES cases(id),
+      ts          TEXT NOT NULL,
+      actor       TEXT NOT NULL DEFAULT '',
+      type        TEXT NOT NULL,
+      evidence_id TEXT,
+      target      TEXT,
+      detail      TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_audit_case_ts ON case_audit_log(case_id, ts);
     CREATE INDEX IF NOT EXISTS idx_notes_evidence ON evidence_notes(evidence_id);
     CREATE INDEX IF NOT EXISTS idx_evidence_case ON evidence_index(case_id);
     CREATE INDEX IF NOT EXISTS idx_participants_user ON case_participants(user_id);
@@ -173,6 +192,23 @@ function createApp(overrides) {
   fs.mkdirSync(cfg.dataDir, { recursive: true });
   const db = openDb(cfg.dataDir);
 
+  // M25 backfill: cases that predate preset seeding start with an empty
+  // taxonomy, which leaves the ingest wizard's category picker empty. Any
+  // ZERO-category case gets the current preset set on boot (attributed to the
+  // case creator); a case whose lead already defined categories — including a
+  // partial preset set — is left untouched.
+  db.transaction(() => {
+    const insert = db.prepare('INSERT INTO evidence_categories (id, case_id, name, created_by, created_at) VALUES (@id, @case_id, @name, @created_by, @created_at)');
+    const empty = db.prepare(`SELECT c.id, c.created_by FROM cases c
+                              WHERE NOT EXISTS (SELECT 1 FROM evidence_categories ec WHERE ec.case_id = c.id)`).all();
+    for (const c of empty) {
+      for (const name of DEFAULT_CATEGORIES) {
+        insert.run({ id: `cat-${crypto.randomUUID()}`, case_id: c.id, name, created_by: c.created_by, created_at: nowIso() });
+      }
+    }
+    if (empty.length > 0) console.log(`[case-registry] seeded preset categories into ${empty.length} pre-M25 case(s)`);
+  })();
+
   const app = express();
   app.use(express.json({ limit: '1mb' }));
 
@@ -183,6 +219,9 @@ function createApp(overrides) {
     if (req.get('x-gleipnir-internal-token') !== cfg.internalToken) {
       return res.status(401).json({ error: 'unauthorized' });
     }
+    // M25b: the acting username, attributed by the GATEWAY (session-derived,
+    // never client-supplied on user sessions). Empty for service-token calls.
+    req.actor = req.get('x-gleipnir-actor') || '';
     return next();
   });
 
@@ -192,6 +231,47 @@ function createApp(overrides) {
   const getCase = db.prepare('SELECT * FROM cases WHERE id = ?');
   const getEvidence = db.prepare('SELECT * FROM evidence_index WHERE evidence_id = ?');
   const getParticipant = db.prepare('SELECT * FROM case_participants WHERE case_id = ? AND user_id = ?');
+
+  // ---- case audit log (M25b) ----
+  // Append-only, one row per management action, written in the SAME
+  // transaction as the mutation it records. This is the library's own log —
+  // evidence ACCESS (view/download/export) stays on-chain per evidence (the
+  // thesis's CoC trail); duplicating it here would create a second source of
+  // truth. No update/delete routes exist: immutable-by-API, like notes.
+  const insertAudit = db.prepare(`INSERT INTO case_audit_log (id, case_id, ts, actor, type, evidence_id, target, detail)
+    VALUES (@id, @case_id, @ts, @actor, @type, @evidence_id, @target, @detail)`);
+  function audit(caseId, type, { actor = '', evidenceId = null, target = null, detail = null, ts = null } = {}) {
+    insertAudit.run({
+      id: `evt-${crypto.randomUUID()}`, case_id: caseId, ts: ts || nowIso(), actor, type,
+      evidence_id: evidenceId, target, detail: detail === null ? null : JSON.stringify(detail),
+    });
+  }
+
+  // History backfill, once per case: the M20 feed was SYNTHESIZED from
+  // timestamped rows (so participant removals etc. were invisible). Cases
+  // with zero audit rows get their derivable history materialized with the
+  // original timestamps; from then on every event is a real appended row.
+  db.transaction(() => {
+    const bare = db.prepare(`SELECT c.* FROM cases c
+                             WHERE NOT EXISTS (SELECT 1 FROM case_audit_log a WHERE a.case_id = c.id)`).all();
+    for (const row of bare) {
+      audit(row.id, 'CASE_CREATED', { actor: row.created_by, ts: row.created_at });
+      if (row.updated_at !== row.created_at) {
+        audit(row.id, 'CASE_UPDATED', { ts: row.updated_at, detail: { status: row.status } });
+      }
+      for (const p of db.prepare('SELECT * FROM case_participants WHERE case_id = ?').all(row.id)) {
+        audit(row.id, 'PARTICIPANT_ADDED', { actor: p.added_by, ts: p.added_at, target: p.user_id, detail: { roleInCase: p.role_in_case } });
+      }
+      for (const e of db.prepare('SELECT * FROM evidence_index WHERE case_id = ?').all(row.id)) {
+        audit(row.id, 'EVIDENCE_ADDED', { actor: e.uploaded_by || '', ts: e.uploaded_at, evidenceId: e.evidence_id, detail: { label: e.label ?? null } });
+      }
+      const notes = db.prepare(`SELECT n.* FROM evidence_notes n JOIN evidence_index e ON e.evidence_id = n.evidence_id WHERE e.case_id = ?`).all(row.id);
+      for (const n of notes) {
+        audit(row.id, 'NOTE_ADDED', { actor: n.author, ts: n.created_at, evidenceId: n.evidence_id, detail: { noteId: n.id } });
+      }
+    }
+    if (bare.length > 0) console.log(`[case-registry] backfilled audit history for ${bare.length} case(s)`);
+  })();
 
   // ---- cases ----
   app.post('/cases', (req, res) => {
@@ -209,8 +289,15 @@ function createApp(overrides) {
       created_at: now,
       updated_at: now,
     };
-    db.prepare(`INSERT INTO cases (id, name, description, status, created_by, created_at, updated_at)
-                VALUES (@id, @name, @description, @status, @created_by, @created_at, @updated_at)`).run(row);
+    const insertCategory = db.prepare('INSERT INTO evidence_categories (id, case_id, name, created_by, created_at) VALUES (@id, @case_id, @name, @created_by, @created_at)');
+    db.transaction(() => {
+      db.prepare(`INSERT INTO cases (id, name, description, status, created_by, created_at, updated_at)
+                  VALUES (@id, @name, @description, @status, @created_by, @created_at, @updated_at)`).run(row);
+      for (const name of DEFAULT_CATEGORIES) {
+        insertCategory.run({ id: `cat-${crypto.randomUUID()}`, case_id: row.id, name, created_by: b.createdBy, created_at: now });
+      }
+      audit(row.id, 'CASE_CREATED', { actor: b.createdBy, ts: now, detail: { seededCategories: DEFAULT_CATEGORIES.length } });
+    })();
     res.status(201).json(caseWire(row));
   });
 
@@ -244,7 +331,7 @@ function createApp(overrides) {
     if (!row) return notFound(res, 'case not found');
     const participants = db.prepare('SELECT * FROM case_participants WHERE case_id = ? ORDER BY added_at').all(row.id).map(participantWire);
     const evidence = db.prepare('SELECT * FROM evidence_index WHERE case_id = ? ORDER BY uploaded_at').all(row.id).map(evidenceWire);
-    const categories = db.prepare('SELECT * FROM evidence_categories WHERE case_id = ? ORDER BY name').all(row.id).map(categoryWire);
+    const categories = db.prepare(`SELECT * FROM evidence_categories WHERE case_id = ? ORDER BY ${CATEGORY_ORDER}`).all(row.id).map(categoryWire);
     res.json({ ...caseWire(row), participants, evidence, categories });
   });
 
@@ -265,7 +352,13 @@ function createApp(overrides) {
       row.status = b.status;
     }
     row.updated_at = nowIso();
-    db.prepare('UPDATE cases SET name=@name, description=@description, status=@status, updated_at=@updated_at WHERE id=@id').run(row);
+    db.transaction(() => {
+      db.prepare('UPDATE cases SET name=@name, description=@description, status=@status, updated_at=@updated_at WHERE id=@id').run(row);
+      audit(row.id, 'CASE_UPDATED', {
+        actor: req.actor, ts: row.updated_at,
+        detail: { fields: ['name', 'description', 'status'].filter((k) => b[k] !== undefined), status: row.status },
+      });
+    })();
     res.json(caseWire(row));
   });
 
@@ -279,14 +372,38 @@ function createApp(overrides) {
     if (!CASE_ROLES.includes(role)) return bad(res, `roleInCase must be one of: ${CASE_ROLES.join(', ')}`);
     if (getParticipant.get(row.id, b.userId)) return res.status(409).json({ error: 'already a participant' });
     const p = { case_id: row.id, user_id: b.userId, role_in_case: role, added_by: b.addedBy || '', added_at: nowIso() };
-    db.prepare(`INSERT INTO case_participants (case_id, user_id, role_in_case, added_by, added_at)
-                VALUES (@case_id, @user_id, @role_in_case, @added_by, @added_at)`).run(p);
+    db.transaction(() => {
+      db.prepare(`INSERT INTO case_participants (case_id, user_id, role_in_case, added_by, added_at)
+                  VALUES (@case_id, @user_id, @role_in_case, @added_by, @added_at)`).run(p);
+      audit(row.id, 'PARTICIPANT_ADDED', { actor: p.added_by || req.actor, ts: p.added_at, target: p.user_id, detail: { roleInCase: role } });
+    })();
     res.status(201).json(participantWire(p));
   });
 
+  // M25: change a participant's case role in place (the alternative was a
+  // remove+re-add dance that briefly dropped access). Policy (who may call,
+  // last-lead demotion, global-lead targets) lives in the gateway.
+  app.patch('/cases/:caseId/participants/:userId', (req, res) => {
+    const p = getParticipant.get(req.params.caseId, req.params.userId);
+    if (!p) return notFound(res, 'participant not found');
+    const role = (req.body || {}).roleInCase;
+    if (!CASE_ROLES.includes(role)) return bad(res, `roleInCase must be one of: ${CASE_ROLES.join(', ')}`);
+    db.transaction(() => {
+      db.prepare('UPDATE case_participants SET role_in_case = ? WHERE case_id = ? AND user_id = ?').run(role, p.case_id, p.user_id);
+      if (role !== p.role_in_case) {
+        audit(p.case_id, 'PARTICIPANT_ROLE_CHANGED', { actor: req.actor, target: p.user_id, detail: { from: p.role_in_case, to: role } });
+      }
+    })();
+    res.json(participantWire(getParticipant.get(p.case_id, p.user_id)));
+  });
+
   app.delete('/cases/:caseId/participants/:userId', (req, res) => {
-    const out = db.prepare('DELETE FROM case_participants WHERE case_id = ? AND user_id = ?').run(req.params.caseId, req.params.userId);
-    if (out.changes === 0) return notFound(res, 'participant not found');
+    const p = getParticipant.get(req.params.caseId, req.params.userId);
+    if (!p) return notFound(res, 'participant not found');
+    db.transaction(() => {
+      db.prepare('DELETE FROM case_participants WHERE case_id = ? AND user_id = ?').run(p.case_id, p.user_id);
+      audit(p.case_id, 'PARTICIPANT_REMOVED', { actor: req.actor, target: p.user_id, detail: { roleInCase: p.role_in_case } });
+    })();
     res.status(204).end();
   });
 
@@ -303,7 +420,10 @@ function createApp(overrides) {
     if (typeof b.createdBy !== 'string' || !b.createdBy) return bad(res, 'createdBy is required');
     const row = { id: `cat-${crypto.randomUUID()}`, case_id: caseRow.id, name: b.name.trim(), created_by: b.createdBy, created_at: nowIso() };
     try {
-      db.prepare('INSERT INTO evidence_categories (id, case_id, name, created_by, created_at) VALUES (@id, @case_id, @name, @created_by, @created_at)').run(row);
+      db.transaction(() => {
+        db.prepare('INSERT INTO evidence_categories (id, case_id, name, created_by, created_at) VALUES (@id, @case_id, @name, @created_by, @created_at)').run(row);
+        audit(caseRow.id, 'CATEGORY_CREATED', { actor: b.createdBy, ts: row.created_at, target: row.id, detail: { name: row.name } });
+      })();
     } catch (err) {
       if (String(err.message).includes('UNIQUE')) return res.status(409).json({ error: 'a category with this name already exists in the case' });
       throw err;
@@ -313,7 +433,7 @@ function createApp(overrides) {
 
   app.get('/cases/:caseId/categories', (req, res) => {
     if (!getCase.get(req.params.caseId)) return notFound(res, 'case not found');
-    res.json(db.prepare('SELECT * FROM evidence_categories WHERE case_id = ? ORDER BY name').all(req.params.caseId).map(categoryWire));
+    res.json(db.prepare(`SELECT * FROM evidence_categories WHERE case_id = ? ORDER BY ${CATEGORY_ORDER}`).all(req.params.caseId).map(categoryWire));
   });
 
   app.patch('/cases/:caseId/categories/:categoryId', (req, res) => {
@@ -322,7 +442,10 @@ function createApp(overrides) {
     const b = req.body || {};
     if (typeof b.name !== 'string' || !b.name.trim()) return bad(res, 'name is required');
     try {
-      db.prepare('UPDATE evidence_categories SET name = ? WHERE id = ?').run(b.name.trim(), row.id);
+      db.transaction(() => {
+        db.prepare('UPDATE evidence_categories SET name = ? WHERE id = ?').run(b.name.trim(), row.id);
+        audit(row.case_id, 'CATEGORY_RENAMED', { actor: req.actor, target: row.id, detail: { from: row.name, to: b.name.trim() } });
+      })();
     } catch (err) {
       if (String(err.message).includes('UNIQUE')) return res.status(409).json({ error: 'a category with this name already exists in the case' });
       throw err;
@@ -335,7 +458,10 @@ function createApp(overrides) {
     if (!row || row.case_id !== req.params.caseId) return notFound(res, 'category not found');
     const inUse = db.prepare('SELECT COUNT(*) AS n FROM evidence_index WHERE category_id = ?').get(row.id).n;
     if (inUse > 0) return res.status(409).json({ error: 'category is referenced by evidence', count: inUse });
-    db.prepare('DELETE FROM evidence_categories WHERE id = ?').run(row.id);
+    db.transaction(() => {
+      db.prepare('DELETE FROM evidence_categories WHERE id = ?').run(row.id);
+      audit(row.case_id, 'CATEGORY_DELETED', { actor: req.actor, target: row.id, detail: { name: row.name } });
+    })();
     res.status(204).end();
   });
 
@@ -349,16 +475,23 @@ function createApp(overrides) {
     if (!ev) return notFound(res, 'evidence not found in index');
     if (ev.case_id === caseRow.id) return res.json(evidenceWire(ev)); // idempotent
     if (ev.case_id) return res.status(409).json({ error: 'evidence already assigned to another case', caseId: ev.case_id });
-    db.prepare('UPDATE evidence_index SET case_id = ?, last_synced_at = ? WHERE evidence_id = ?').run(caseRow.id, nowIso(), ev.evidence_id);
+    db.transaction(() => {
+      db.prepare('UPDATE evidence_index SET case_id = ?, last_synced_at = ? WHERE evidence_id = ?').run(caseRow.id, nowIso(), ev.evidence_id);
+      audit(caseRow.id, 'EVIDENCE_ASSIGNED', { actor: req.actor, evidenceId: ev.evidence_id, detail: { label: ev.label ?? null } });
+    })();
     res.status(201).json(evidenceWire(getEvidence.get(ev.evidence_id)));
   });
 
   app.delete('/cases/:caseId/evidence/:evidenceId', (req, res) => {
     // Uncategorizing also clears the case-scoped category (M19): a category
     // belongs to the case the evidence is leaving.
-    const out = db.prepare('UPDATE evidence_index SET case_id = NULL, category_id = NULL, last_synced_at = ? WHERE evidence_id = ? AND case_id = ?')
-      .run(nowIso(), req.params.evidenceId, req.params.caseId);
-    if (out.changes === 0) return notFound(res, 'evidence not found in this case');
+    const ev = getEvidence.get(req.params.evidenceId);
+    if (!ev || ev.case_id !== req.params.caseId) return notFound(res, 'evidence not found in this case');
+    db.transaction(() => {
+      db.prepare('UPDATE evidence_index SET case_id = NULL, category_id = NULL, last_synced_at = ? WHERE evidence_id = ?')
+        .run(nowIso(), ev.evidence_id);
+      audit(req.params.caseId, 'EVIDENCE_UNASSIGNED', { actor: req.actor, evidenceId: ev.evidence_id, detail: { label: ev.label ?? null } });
+    })();
     res.status(204).end();
   });
 
@@ -417,12 +550,17 @@ function createApp(overrides) {
       handed_over_by: null,
       ...meta,
     };
-    db.prepare(`INSERT INTO evidence_index (evidence_id, case_id, original_filename, mime_type, size_bytes,
-                  integrity_proof, uploaded_by, uploaded_at, status, last_synced_at,
-                  label, category_id, seized_at, acquisition_location, handed_over_by)
-                VALUES (@evidence_id, @case_id, @original_filename, @mime_type, @size_bytes,
-                  @integrity_proof, @uploaded_by, @uploaded_at, @status, @last_synced_at,
-                  @label, @category_id, @seized_at, @acquisition_location, @handed_over_by)`).run(row);
+    db.transaction(() => {
+      db.prepare(`INSERT INTO evidence_index (evidence_id, case_id, original_filename, mime_type, size_bytes,
+                    integrity_proof, uploaded_by, uploaded_at, status, last_synced_at,
+                    label, category_id, seized_at, acquisition_location, handed_over_by)
+                  VALUES (@evidence_id, @case_id, @original_filename, @mime_type, @size_bytes,
+                    @integrity_proof, @uploaded_by, @uploaded_at, @status, @last_synced_at,
+                    @label, @category_id, @seized_at, @acquisition_location, @handed_over_by)`).run(row);
+      if (row.case_id) {
+        audit(row.case_id, 'EVIDENCE_ADDED', { actor: row.uploaded_by || req.actor, ts: row.uploaded_at, evidenceId: row.evidence_id, detail: { label: row.label ?? null } });
+      }
+    })();
     return res.status(201).json(evidenceWire(row));
   });
 
@@ -467,6 +605,7 @@ function createApp(overrides) {
   app.patch('/evidence-index/:evidenceId', (req, res) => {
     const row = getEvidence.get(req.params.evidenceId);
     if (!row) return notFound(res, 'evidence not found in index');
+    const before = { status: row.status, flag: row.flag ?? null };
     const b = req.body || {};
     if (b.status !== undefined) {
       if (typeof b.status !== 'string' || !b.status) return bad(res, 'status must be a non-empty string');
@@ -482,11 +621,26 @@ function createApp(overrides) {
       row.flag = b.flag;
     }
     row.last_synced_at = nowIso();
-    db.prepare(`UPDATE evidence_index SET status = @status, last_synced_at = @last_synced_at,
-                  label = @label, category_id = @category_id, seized_at = @seized_at,
-                  acquisition_location = @acquisition_location, handed_over_by = @handed_over_by,
-                  flag = @flag
-                WHERE evidence_id = @evidence_id`).run(row);
+    db.transaction(() => {
+      db.prepare(`UPDATE evidence_index SET status = @status, last_synced_at = @last_synced_at,
+                    label = @label, category_id = @category_id, seized_at = @seized_at,
+                    acquisition_location = @acquisition_location, handed_over_by = @handed_over_by,
+                    flag = @flag
+                  WHERE evidence_id = @evidence_id`).run(row);
+      if (row.case_id) {
+        const opts = { actor: req.actor, evidenceId: row.evidence_id };
+        if (row.status === 'REMOVED' && before.status !== 'REMOVED') {
+          audit(row.case_id, 'EVIDENCE_REMOVED', { ...opts, detail: { label: row.label ?? null } });
+        }
+        if (b.flag !== undefined && (row.flag ?? null) !== before.flag) {
+          audit(row.case_id, 'FLAG_CHANGED', { ...opts, detail: { from: before.flag, to: row.flag ?? null } });
+        }
+        const metaKeys = Object.keys(meta);
+        if (metaKeys.length > 0) {
+          audit(row.case_id, 'EVIDENCE_DETAILS_UPDATED', { ...opts, detail: { fields: metaKeys.map((k) => k.replace(/_([a-z])/g, (_, c) => c.toUpperCase())) } });
+        }
+      }
+    })();
     return res.json(evidenceWire(row));
   });
 
@@ -499,7 +653,12 @@ function createApp(overrides) {
     if (typeof b.author !== 'string' || !b.author) return bad(res, 'author is required');
     if (typeof b.body !== 'string' || !b.body.trim()) return bad(res, 'body is required');
     const row = { id: `note-${crypto.randomUUID()}`, evidence_id: ev.evidence_id, author: b.author, body: b.body, created_at: nowIso() };
-    db.prepare('INSERT INTO evidence_notes (id, evidence_id, author, body, created_at) VALUES (@id, @evidence_id, @author, @body, @created_at)').run(row);
+    db.transaction(() => {
+      db.prepare('INSERT INTO evidence_notes (id, evidence_id, author, body, created_at) VALUES (@id, @evidence_id, @author, @body, @created_at)').run(row);
+      if (ev.case_id) {
+        audit(ev.case_id, 'NOTE_ADDED', { actor: b.author, ts: row.created_at, evidenceId: ev.evidence_id, detail: { noteId: row.id } });
+      }
+    })();
     res.status(201).json(noteWire(row));
   });
 
@@ -508,32 +667,23 @@ function createApp(overrides) {
     res.json(db.prepare('SELECT * FROM evidence_notes WHERE evidence_id = ? ORDER BY created_at, id').all(req.params.evidenceId).map(noteWire));
   });
 
-  // ---- case activity feed (M20): SYNTHESIZED from existing timestamped rows.
-  // Deliberately no event/log table — a per-change history mechanism is
-  // deferred scope; CASE_UPDATED therefore reflects only the latest update.
+  // ---- case activity feed. M20 synthesized this from timestamped rows;
+  // M25b reads the persistent append-only case_audit_log instead, so events
+  // with no surviving row (participant removals, category deletes, role
+  // changes) finally appear — and history survives the source rows changing.
+  const auditWire = (r) => ({
+    id: r.id, type: r.type, ts: r.ts, actor: r.actor || undefined,
+    ...(r.evidence_id ? { evidenceId: r.evidence_id } : {}),
+    ...(r.target ? { target: r.target } : {}),
+    ...(r.detail ? { detail: JSON.parse(r.detail) } : {}),
+  });
+
   app.get('/cases/:caseId/activity', (req, res) => {
     const row = getCase.get(req.params.caseId);
     if (!row) return notFound(res, 'case not found');
     const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
-    const events = [];
-    events.push({ type: 'CASE_CREATED', ts: row.created_at, actor: row.created_by });
-    if (row.updated_at !== row.created_at) {
-      events.push({ type: 'CASE_UPDATED', ts: row.updated_at, detail: { status: row.status } });
-    }
-    for (const p of db.prepare('SELECT * FROM case_participants WHERE case_id = ?').all(row.id)) {
-      events.push({ type: 'PARTICIPANT_ADDED', ts: p.added_at, actor: p.added_by, detail: { userId: p.user_id, roleInCase: p.role_in_case } });
-    }
-    for (const e of db.prepare('SELECT * FROM evidence_index WHERE case_id = ?').all(row.id)) {
-      events.push({ type: 'EVIDENCE_ADDED', ts: e.uploaded_at, actor: e.uploaded_by, evidenceId: e.evidence_id, detail: { label: e.label ?? null } });
-    }
-    const notes = db.prepare(`SELECT n.* FROM evidence_notes n
-                              JOIN evidence_index e ON e.evidence_id = n.evidence_id
-                              WHERE e.case_id = ?`).all(row.id);
-    for (const n of notes) {
-      events.push({ type: 'NOTE_ADDED', ts: n.created_at, actor: n.author, evidenceId: n.evidence_id, detail: { noteId: n.id } });
-    }
-    events.sort((a, b) => String(b.ts).localeCompare(String(a.ts)));
-    res.json(events.slice(0, limit));
+    const rows = db.prepare('SELECT * FROM case_audit_log WHERE case_id = ? ORDER BY ts DESC, id DESC LIMIT ?').all(row.id, limit);
+    res.json(rows.map(auditWire));
   });
 
   // ---- authz pre-flight (the gateway's per-evidence gate for user sessions) ----

@@ -29,9 +29,10 @@ so the runtime image stays lean). Same Node version pin, different libc.
 | `GET` | `/cases/:caseId` | case + `participants[]` + `evidence[]` roster; `404` |
 | `PATCH` | `/cases/:caseId` | update name/description/status (`OPEN\|CLOSED\|ARCHIVED`) |
 | `POST` | `/cases/:caseId/participants` | grant `{userId, roleInCase: viewer\|contributor\|lead}` (M18); `409` dup |
-| `POST`/`GET`/`PATCH`/`DELETE` | `/cases/:caseId/categories[/:categoryId]` | per-case taxonomy (M19); name unique per case (`409`); delete refused `409` while referenced |
+| `PATCH` | `/cases/:caseId/participants/:userId` | in-place role change (M25); enum-validated; `404` unknown; policy (caller, last-lead, global-lead targets) lives in the gateway |
+| `POST`/`GET`/`PATCH`/`DELETE` | `/cases/:caseId/categories[/:categoryId]` | per-case taxonomy (M19); name unique per case (`409`); delete refused `409` while referenced. New cases are seeded with the preset file-type categories (Image, Video, Audio, Text, Document, PDF, Spreadsheet, Archive, Other — M25), and boot backfills the presets into any zero-category case (curated taxonomies untouched); seeded rows are ordinary categories, fully lead-editable |
 | `POST`/`GET` | `/evidence-index/:evidenceId/notes` | examiner notes (M20) — append-only; deliberately NO update/delete routes |
-| `GET` | `/cases/:caseId/activity?limit=` | activity feed (M20) — synthesized ts-DESC from existing rows; no event table |
+| `GET` | `/cases/:caseId/activity?limit=` | activity feed — since M25b the persistent, append-only `case_audit_log` (ts-DESC): one actor-attributed row per management action (participants add/remove/role-change, categories CRUD, evidence add/assign/unassign/remove, details, flag, notes), written in the SAME transaction as the mutation; actor from the gateway's `X-Gleipnir-Actor` header (session-derived). Immutable-by-API — no update/delete routes. Pre-M25b history is backfilled once per case from derivable rows. Evidence ACCESS stays on-chain (never duplicated here) |
 | `DELETE` | `/cases/:caseId/participants/:userId` | revoke; `404` |
 | `POST` | `/cases/:caseId/evidence` | categorize `{evidenceId}`; idempotent same-case; `409` cross-case |
 | `DELETE` | `/cases/:caseId/evidence/:evidenceId` | uncategorize (`case_id -> NULL`) |

@@ -179,4 +179,13 @@ ACTIVITY="$(curl -fsS "${AUTH_IVY[@]}" "${GATEWAY}/api/v1/cases/${LEAD_CASE_ID}/
 [ "$(echo "${ACTIVITY}" | jq 'length')" -ge 4 ] || fail "activity feed too short: ${ACTIVITY}"
 echo "${ACTIVITY}" | jq -e '[.[] | select(.type=="NOTE_ADDED")] | length >= 1' >/dev/null || fail "activity missing NOTE_ADDED"
 
-echo "[smoke-library] PASS — login/3-tier roles, case scoping, lead-owned cases, categories + forensic ingest metadata, examiner notes/flags/activity, multipart ingest, search, the admin content restriction, and the synchronous auto-AccessLog all behave correctly"
+echo "[smoke-library] 17) M24: per-case CoC report (json + csv) — runs LAST: it appends one ACCESS per exhibit"
+REPORT="$(curl -fsS "${AUTH_IVY[@]}" "${GATEWAY}/api/v1/cases/${LEAD_CASE_ID}/coc-report")"
+[ "$(echo "${REPORT}" | jq -r '.caseId')" = "${LEAD_CASE_ID}" ] || fail "coc-report caseId: ${REPORT}"
+echo "${REPORT}" | jq -e '.evidence[0].auditTrail | length >= 1' >/dev/null || fail "coc-report missing trails"
+CSV_HEAD="$(curl -fsS "${AUTH_IVY[@]}" "${GATEWAY}/api/v1/cases/${LEAD_CASE_ID}/coc-report?format=csv" | head -1)"
+case "${CSV_HEAD}" in '"caseId","caseName","evidenceLabel",'*) ;; *) fail "coc-report csv header: ${CSV_HEAD}" ;; esac
+CSV_CREATE="$(curl -fsS "${AUTH_IVY[@]}" "${GATEWAY}/api/v1/cases/${LEAD_CASE_ID}/coc-report?format=csv" | grep -c '"CREATE"')"
+[ "${CSV_CREATE}" -ge 1 ] || fail "coc-report csv has no CREATE rows"
+
+echo "[smoke-library] PASS — login/3-tier roles, case scoping, lead-owned cases, categories + forensic ingest metadata, examiner notes/flags/activity, the CoC report, multipart ingest, search, the admin content restriction, and the synchronous auto-AccessLog all behave correctly"

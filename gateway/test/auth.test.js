@@ -337,6 +337,33 @@ test('M18: lead is a valid user role, but admin routes stay admin-only', async (
   assert.equal(junk.status, 400);
 });
 
+test('M25: /users/directory — admin and lead sessions see active users only; investigator and service token 403', async (t) => {
+  const { deps } = fakeDeps();
+  const { server, url } = await listen(createApp(deps));
+  t.after(() => server.close());
+
+  const admin = (await login(url, 'root', 'root-pw')).body.token;
+  await fetch(`${url}/api/v1/admin/users`, { method: 'POST', headers: asUser(admin), body: JSON.stringify({ username: 'lena', password: 'lena-pw', role: 'lead' }) });
+  await fetch(`${url}/api/v1/admin/users`, { method: 'POST', headers: asUser(admin), body: JSON.stringify({ username: 'ivy', password: 'ivy-pw', role: 'investigator' }) });
+  const ghost = await (await fetch(`${url}/api/v1/admin/users`, { method: 'POST', headers: asUser(admin), body: JSON.stringify({ username: 'ghost', password: 'ghost-pw' }) })).json();
+  await fetch(`${url}/api/v1/admin/users/${ghost.id}`, { method: 'PATCH', headers: asUser(admin), body: JSON.stringify({ active: false }) });
+
+  const lena = (await login(url, 'lena', 'lena-pw')).body.token;
+  const dir = await fetch(`${url}/api/v1/users/directory`, { headers: asUser(lena) });
+  assert.equal(dir.status, 200);
+  const listed = await dir.json();
+  // ghost is deactivated; root is an ADMIN — above a lead's access, hidden (M25b)
+  assert.deepEqual(listed.map((u) => u.username).sort(), ['ivy', 'lena']);
+  assert.ok(listed.every((u) => u.passwordHash === undefined));
+
+  // Admin sessions still see everyone active, admins included.
+  const adminDir = await (await fetch(`${url}/api/v1/users/directory`, { headers: asUser(admin) })).json();
+  assert.deepEqual(adminDir.map((u) => u.username).sort(), ['ivy', 'lena', 'root']);
+  const ivy = (await login(url, 'ivy', 'ivy-pw')).body.token;
+  assert.equal((await fetch(`${url}/api/v1/users/directory`, { headers: asUser(ivy) })).status, 403);
+  assert.equal((await fetch(`${url}/api/v1/users/directory`, { headers: asUser('secret-token') })).status, 403);
+});
+
 test('M17 upgrade: a pre-rename users.json (displayName) is migrated to name in place, once', async () => {
   const dir = tmpAuthDir();
   const legacy = [{

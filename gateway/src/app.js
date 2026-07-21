@@ -10,6 +10,7 @@ const crypto = require('node:crypto');
 const multer = require('multer');
 const { Readable } = require('node:stream');
 const { niUri } = require('./ni');
+const { toCsv } = require('./csv');
 const { routeWrite, routeRead, channelFor, RequestError } = require('./variantRouter');
 const { makeAuth, bearerOf } = require('./auth');
 
@@ -146,6 +147,9 @@ function createApp(deps) {
   // ignored for logging. The service-token path keeps client-supplied actors
   // (Caliper workloads and smoke scripts need them for load-test realism).
   const actorFor = (req, fallback) => (req.principal && req.principal.kind === 'user' ? req.principal.username : fallback);
+  // M25b: the actor forwarded to case-registry's audit log — session username,
+  // or undefined (header omitted) on the service-token path.
+  const sessionActor = (req) => (req.principal && req.principal.kind === 'user' ? req.principal.username : undefined);
 
   // ---- auth/session ----
   app.post('/api/v1/auth/logout', auth.requireUser, (req, res) => {
@@ -175,6 +179,19 @@ function createApp(deps) {
     res.json(users.resetPassword(req.params.id, (req.body || {}).password));
   }));
 
+  // ---- user directory (M25): a read-only roster picker for team management.
+  // Admin-or-lead SESSIONS only — the service token and investigator sessions
+  // get 403. Exposes active users in the public shape (no password hashes);
+  // deliberately no management surface, that stays under /admin/users.
+  app.get('/api/v1/users/directory', requireAdminOrLead, wrap(async (req, res) => {
+    const active = users.list().filter((u) => u.active);
+    // M25b: admin accounts sit above a lead's access scope — leads never see
+    // them in the roster picker (admins bypass roster authz anyway; only the
+    // M18 blob-content rule makes an admin roster entry meaningful, and that
+    // grant stays an admin-to-admin decision).
+    res.json(req.principal.role === 'admin' ? active : active.filter((u) => u.role !== 'admin'));
+  }));
+
   // ---- evidence library (M13c): case proxying, search, per-evidence authz ----
   // These need the case-registry / evidence-store clients. Deployments without
   // them (benchmark-only harnesses) answer 503 on the library routes, and the
@@ -193,7 +210,7 @@ function createApp(deps) {
   // CONTRACTS §12-8): downloading evidence bytes requires being a participant
   // of the evidence's case, even for admins. User identity in case-registry
   // is the immutable username.
-  async function ensureEvidenceAccess(req, evidenceId, { write = false, content = false } = {}) {
+  async function ensureEvidenceAccess(req, evidenceId, { write = false, remove = false, content = false } = {}) {
     if (!caseRegistry) return;
     if (!req.principal || req.principal.kind !== 'user') return;
     if (req.principal.role === 'admin' && !content) return;
@@ -205,6 +222,12 @@ function createApp(deps) {
     if (!body.allowed) {
       // Unknown-to-the-library evidence 404s so ids can't be probed.
       throw new RequestError(body.reason === 'unknown-evidence' ? 404 : 403, 'access to this evidence is denied');
+    }
+    // M25 role ladder: viewer = view/export, contributor = +write events and
+    // annotations, lead = +remove. The 'uploader' pseudo-role (own
+    // uncategorized evidence — no case, so no lead exists) keeps both.
+    if (remove && !['lead', 'uploader'].includes(body.roleInCase)) {
+      throw new RequestError(403, 'the case lead role is required to remove evidence');
     }
     if (write && !['contributor', 'lead', 'uploader'].includes(body.roleInCase)) {
       throw new RequestError(403, 'a contributor role in the case is required to write');
@@ -290,7 +313,7 @@ function createApp(deps) {
     const b = req.body || {};
     proxy(res, await caseRegistry.request('PATCH', `/cases/${encodeURIComponent(req.params.id)}`, {
       name: b.name, description: b.description, status: b.status,
-    }));
+    }, { actor: sessionActor(req) }));
   }));
 
   app.post('/api/v1/cases/:id/participants', requireLibrary, wrap(async (req, res) => {
@@ -311,6 +334,27 @@ function createApp(deps) {
     }));
   }));
 
+  // M25: change a participant's role in place. Same policy as grant/revoke:
+  // admin-or-case-lead caller, the case-lead role needs a global-lead target,
+  // and a lead cannot demote the case's last lead (an admin may).
+  app.patch('/api/v1/cases/:id/participants/:userId', requireLibrary, wrap(async (req, res) => {
+    const detail = await ensureCaseLead(req, req.params.id);
+    const role = (req.body || {}).roleInCase;
+    if (role === 'lead' && users) {
+      const target = users.getByUsername(req.params.userId);
+      if (!target || target.role !== 'lead') {
+        return res.status(400).json({ error: 'the case lead must be a user with the lead role' });
+      }
+    }
+    if (detail && role !== 'lead') {
+      const leads = (detail.participants || []).filter((p) => p.roleInCase === 'lead');
+      if (leads.length === 1 && leads[0].userId === req.params.userId) {
+        return res.status(409).json({ error: 'cannot demote the last case lead' });
+      }
+    }
+    proxy(res, await caseRegistry.request('PATCH', `/cases/${encodeURIComponent(req.params.id)}/participants/${encodeURIComponent(req.params.userId)}`, { roleInCase: role }, { actor: sessionActor(req) }));
+  }));
+
   app.delete('/api/v1/cases/:id/participants/:userId', requireLibrary, wrap(async (req, res) => {
     const detail = await ensureCaseLead(req, req.params.id);
     // A case must keep at least one lead once it has one; only an admin may
@@ -321,19 +365,19 @@ function createApp(deps) {
         return res.status(409).json({ error: 'cannot remove the last case lead' });
       }
     }
-    proxy(res, await caseRegistry.request('DELETE', `/cases/${encodeURIComponent(req.params.id)}/participants/${encodeURIComponent(req.params.userId)}`));
+    proxy(res, await caseRegistry.request('DELETE', `/cases/${encodeURIComponent(req.params.id)}/participants/${encodeURIComponent(req.params.userId)}`, undefined, { actor: sessionActor(req) }));
   }));
 
   app.post('/api/v1/cases/:id/evidence', requireLibrary, wrap(async (req, res) => {
     await ensureCaseLead(req, req.params.id);
     proxy(res, await caseRegistry.request('POST', `/cases/${encodeURIComponent(req.params.id)}/evidence`, {
       evidenceId: (req.body || {}).evidenceId,
-    }));
+    }, { actor: sessionActor(req) }));
   }));
 
   app.delete('/api/v1/cases/:id/evidence/:evidenceId', requireLibrary, wrap(async (req, res) => {
     await ensureCaseLead(req, req.params.id);
-    proxy(res, await caseRegistry.request('DELETE', `/cases/${encodeURIComponent(req.params.id)}/evidence/${encodeURIComponent(req.params.evidenceId)}`));
+    proxy(res, await caseRegistry.request('DELETE', `/cases/${encodeURIComponent(req.params.id)}/evidence/${encodeURIComponent(req.params.evidenceId)}`, undefined, { actor: sessionActor(req) }));
   }));
 
   // ---- evidence categories (M19): per-case taxonomy. Reading follows case
@@ -364,7 +408,7 @@ function createApp(deps) {
 
   app.delete('/api/v1/cases/:id/categories/:categoryId', requireLibrary, wrap(async (req, res) => {
     await ensureCaseLead(req, req.params.id);
-    proxy(res, await caseRegistry.request('DELETE', `/cases/${encodeURIComponent(req.params.id)}/categories/${encodeURIComponent(req.params.categoryId)}`));
+    proxy(res, await caseRegistry.request('DELETE', `/cases/${encodeURIComponent(req.params.id)}/categories/${encodeURIComponent(req.params.categoryId)}`, undefined, { actor: sessionActor(req) }));
   }));
 
   // Library-owned evidence metadata (M19): label, category, seizure context.
@@ -403,6 +447,74 @@ function createApp(deps) {
     proxy(res, await caseRegistry.request('PATCH', `/evidence-index/${encodeURIComponent(req.params.id)}`, {
       flag: (req.body || {}).flag ?? null,
     }));
+  }));
+
+  // ---- per-case Chain-of-Custody report (M24). Metadata + on-chain trails,
+  // no blob content — so the admin metadata bypass is legitimate here. For
+  // user sessions each included evidence gets ONE synchronous auto-
+  // AccessLog('coc-report') after assembly (same posture as /export: the
+  // reported trails are pre-export; the report's own ACCESS events land
+  // after). Never for the service token.
+  app.get('/api/v1/cases/:id/coc-report', requireLibrary, wrap(async (req, res) => {
+    const out = await caseRegistry.request('GET', `/cases/${encodeURIComponent(req.params.id)}`);
+    if (out.status !== 200 || !out.body) return res.status(404).json({ error: 'case not found' });
+    const detail = out.body;
+    if (isNonAdminUser(req)) {
+      const mine = (detail.participants || []).some((p) => p.userId === req.principal.username);
+      if (!mine) return res.status(404).json({ error: 'case not found' }); // don't leak existence
+    }
+
+    const parse = (s) => { try { return JSON.parse(s); } catch { return []; } };
+    const rows = detail.evidence || [];
+    // Bounded concurrency: chunks of 4 trail reads at a time.
+    const trails = new Map();
+    for (let i = 0; i < rows.length; i += 4) {
+      await Promise.all(rows.slice(i, i + 4).map(async (ev) => {
+        const trail = await routeRead({ variant: V, fn: 'GetAuditTrail', args: [ev.evidenceId] }, routerDeps);
+        trails.set(ev.evidenceId, parse(trail));
+      }));
+    }
+    for (const ev of rows) {
+      await logAccess(req, ev.evidenceId, 'coc-report');
+    }
+
+    const categoryName = (id) => ((detail.categories || []).find((c) => c.id === id) || {}).name || null;
+    const report = {
+      caseId: detail.id,
+      name: detail.name,
+      description: detail.description,
+      status: detail.status,
+      generatedAt: nowIso(),
+      participants: detail.participants || [],
+      evidence: rows.map((ev) => ({ ...ev, category: categoryName(ev.categoryId), auditTrail: trails.get(ev.evidenceId) || [] })),
+    };
+
+    if (req.query.format === 'csv') {
+      const columns = ['caseId', 'caseName', 'evidenceLabel', 'evidenceId', 'originalFilename', 'category', 'integrityProof', 'eventId', 'op', 'actor', 'ts', 'detail'];
+      const csvRows = [];
+      for (const ev of report.evidence) {
+        for (const e of ev.auditTrail) {
+          csvRows.push({
+            caseId: report.caseId,
+            caseName: report.name,
+            evidenceLabel: ev.label,
+            evidenceId: ev.evidenceId,
+            originalFilename: ev.originalFilename,
+            category: ev.category,
+            eventId: e.eventId || e.txId || '',
+            op: e.op,
+            actor: e.actor,
+            ts: e.ts,
+            integrityProof: ev.integrityProof,
+            detail: e.detail ? JSON.stringify(e.detail) : '',
+          });
+        }
+      }
+      res.set('content-type', 'text/csv; charset=utf-8');
+      res.set('content-disposition', `attachment; filename="coc-${report.caseId}.csv"`);
+      return res.send(toCsv(columns, csvRows));
+    }
+    return res.json(report);
   }));
 
   app.get('/api/v1/cases/:id/activity', requireLibrary, wrap(async (req, res) => {
@@ -561,7 +673,7 @@ function createApp(deps) {
   }));
 
   app.delete('/api/v1/evidence/:id', wrap(async (req, res) => {
-    await ensureEvidenceAccess(req, req.params.id, { write: true });
+    await ensureEvidenceAccess(req, req.params.id, { remove: true });
     const b = req.body || {};
     const caseId = b.caseId || req.query.caseId;
     const reason = b.reason || req.query.reason || '';

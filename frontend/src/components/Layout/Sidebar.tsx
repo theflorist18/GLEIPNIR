@@ -14,6 +14,12 @@ export function Sidebar() {
         <NavLink to="/cases" end className={cls}>My cases</NavLink>
         <NavLink to="/search" className={cls}>Search</NavLink>
       </div>
+      {user?.role === 'lead' && (
+        <div className="nav-group">
+          <div className="nav-title">Lead</div>
+          <NavLink to="/lead/dashboard" className={cls}>Dashboard</NavLink>
+        </div>
+      )}
       {user?.role === 'admin' && (
         <div className="nav-group">
           <div className="nav-title">Administration</div>

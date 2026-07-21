@@ -299,9 +299,9 @@ test('M19: category CRUD — dup 409, cross-case 400, in-use delete 409', async 
   assert.equal((await call(url, 'POST', '/cases/CASE-ghost/categories', { name: 'x', createdBy: 'lena' })).status, 404);
 
   const listed = await json(await call(url, 'GET', `/cases/${c1.id}/categories`));
-  assert.deepEqual(listed.map((x) => x.name), ['Mobile Devices']);
-  // ...and the case detail carries them too.
-  assert.equal((await json(await call(url, 'GET', `/cases/${c1.id}`))).categories.length, 1);
+  assert.ok(listed.some((x) => x.name === 'Mobile Devices'));
+  // ...and the case detail carries them too (9 seeded presets + the custom one).
+  assert.equal((await json(await call(url, 'GET', `/cases/${c1.id}`))).categories.length, 10);
 
   const renamed = await json(await call(url, 'PATCH', `/cases/${c1.id}/categories/${cat.id}`, { name: 'Network PCAP' }));
   assert.equal(renamed.name, 'Network PCAP');
@@ -317,6 +317,67 @@ test('M19: category CRUD — dup 409, cross-case 400, in-use delete 409', async 
   // A category from another case is refused on evidence rows.
   const catB = await json(await call(url, 'POST', `/cases/${c2.id}/categories`, { name: 'Cloud', createdBy: 'lena' }));
   assert.equal((await call(url, 'PATCH', '/evidence-index/ev-cat', { categoryId: catB.id })).status, 400);
+});
+
+const PRESETS = ['Archive', 'Audio', 'Document', 'Image', 'Other', 'PDF', 'Spreadsheet', 'Text', 'Video'];
+
+test('M25: new cases are seeded with the preset file-type categories', async (t) => {
+  const url = await start(t);
+  const c = await makeCase(url, 'preset case');
+  const cats = await json(await call(url, 'GET', `/cases/${c.id}/categories`));
+  assert.deepEqual(cats.map((x) => x.name).sort(), PRESETS);
+  assert.ok(cats.every((x) => x.createdBy === 'root'));
+  // Seeded rows are ordinary categories: unused ones delete cleanly.
+  const img = cats.find((x) => x.name === 'Image');
+  assert.equal((await call(url, 'DELETE', `/cases/${c.id}/categories/${img.id}`)).status, 204);
+});
+
+test("M25: category listings sort alphabetically with 'Other' pinned last", async (t) => {
+  const url = await start(t);
+  const c = await makeCase(url, 'order case');
+  await call(url, 'POST', `/cases/${c.id}/categories`, { name: 'Zip Bombs', createdBy: 'root' });
+  const names = (await json(await call(url, 'GET', `/cases/${c.id}/categories`))).map((x) => x.name);
+  assert.equal(names[names.length - 1], 'Other');
+  assert.ok(names.indexOf('Zip Bombs') < names.length - 1);
+  const detail = await json(await call(url, 'GET', `/cases/${c.id}`));
+  assert.equal(detail.categories[detail.categories.length - 1].name, 'Other');
+});
+
+test('M25: participant role PATCH — in place, enum-validated, 404 unknown', async (t) => {
+  const url = await start(t);
+  const c = await makeCase(url);
+  await call(url, 'POST', `/cases/${c.id}/participants`, { userId: 'ivy', roleInCase: 'viewer', addedBy: 'root' });
+
+  const up = await json(await call(url, 'PATCH', `/cases/${c.id}/participants/ivy`, { roleInCase: 'contributor' }));
+  assert.equal(up.roleInCase, 'contributor');
+  const detail = await json(await call(url, 'GET', `/cases/${c.id}`));
+  assert.equal(detail.participants.find((p) => p.userId === 'ivy').roleInCase, 'contributor');
+
+  assert.equal((await call(url, 'PATCH', `/cases/${c.id}/participants/ivy`, { roleInCase: 'boss' })).status, 400);
+  assert.equal((await call(url, 'PATCH', `/cases/${c.id}/participants/ghost`, { roleInCase: 'viewer' })).status, 404);
+});
+
+test('M25: boot backfills presets into zero-category cases only', async (t) => {
+  const dataDir = tmpDataDir();
+  const url = await start(t, dataDir);
+  const c = await makeCase(url, 'pre-M25 case');
+  // Strip the case back to zero categories (simulates a pre-seeding case),
+  // and set up a second case with a deliberate one-category taxonomy.
+  for (const cat of await json(await call(url, 'GET', `/cases/${c.id}/categories`))) {
+    assert.equal((await call(url, 'DELETE', `/cases/${c.id}/categories/${cat.id}`)).status, 204);
+  }
+  const curated = await makeCase(url, 'curated case');
+  for (const cat of await json(await call(url, 'GET', `/cases/${curated.id}/categories`))) {
+    if (cat.name !== 'Image') await call(url, 'DELETE', `/cases/${curated.id}/categories/${cat.id}`);
+  }
+
+  // A second boot on the same volume re-seeds the empty case, not the curated one.
+  const url2 = await start(t, dataDir);
+  const reseeded = await json(await call(url2, 'GET', `/cases/${c.id}/categories`));
+  assert.deepEqual(reseeded.map((x) => x.name).sort(), PRESETS);
+  assert.equal(reseeded[0].createdBy, 'root');
+  const kept = await json(await call(url2, 'GET', `/cases/${curated.id}/categories`));
+  assert.deepEqual(kept.map((x) => x.name), ['Image']);
 });
 
 test('M19: metadata fields set at registration and via PATCH; uncategorize clears the category', async (t) => {
@@ -420,27 +481,78 @@ test('M20: flag is a strict enum (or null) and searchable', async (t) => {
   assert.equal((await json(await call(url, 'GET', '/evidence-index?flag=HIGH_PRIORITY'))).length, 0);
 });
 
-test('M20: activity feed is synthesized, ts-DESC, and complete across all five event types', async (t) => {
+test('M25b: the activity feed is the persistent audit log — ts-DESC, actor-attributed, complete', async (t) => {
   const url = await start(t);
   const c = await makeCase(url, 'active case');
-  await call(url, 'POST', `/cases/${c.id}/participants`, { userId: 'ivy', roleInCase: 'contributor', addedBy: 'root' });
+  const actorHdr = { 'x-gleipnir-actor': 'root' };
+  const callAs = (method, p, body) => fetch(`${url}${p}`, {
+    method,
+    headers: { 'x-gleipnir-internal-token': TOKEN, ...actorHdr, ...(body !== undefined ? { 'content-type': 'application/json' } : {}) },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+
+  await call(url, 'POST', `/cases/${c.id}/participants`, { userId: 'ivy', roleInCase: 'viewer', addedBy: 'root' });
+  await callAs('PATCH', `/cases/${c.id}/participants/ivy`, { roleInCase: 'contributor' });
   await indexEvidence(url, 'ev-act', { caseId: c.id, label: 'ITEM-001' });
   await call(url, 'POST', '/evidence-index/ev-act/notes', { author: 'ivy', body: 'examined' });
-  await call(url, 'PATCH', `/cases/${c.id}`, { status: 'CLOSED' });
+  await callAs('PATCH', '/evidence-index/ev-act', { flag: 'PROCESSED' });
+  await callAs('PATCH', `/cases/${c.id}`, { status: 'CLOSED' });
+  const cat = await json(await call(url, 'POST', `/cases/${c.id}/categories`, { name: 'Ephemeral', createdBy: 'root' }));
+  await callAs('DELETE', `/cases/${c.id}/categories/${cat.id}`);
+  await callAs('DELETE', `/cases/${c.id}/participants/ivy`);
 
   const feed = await json(await call(url, 'GET', `/cases/${c.id}/activity`));
   const types = feed.map((e) => e.type);
-  for (const expect of ['CASE_CREATED', 'CASE_UPDATED', 'PARTICIPANT_ADDED', 'EVIDENCE_ADDED', 'NOTE_ADDED']) {
+  for (const expect of ['CASE_CREATED', 'CASE_UPDATED', 'PARTICIPANT_ADDED', 'PARTICIPANT_ROLE_CHANGED',
+    'PARTICIPANT_REMOVED', 'EVIDENCE_ADDED', 'NOTE_ADDED', 'FLAG_CHANGED', 'CATEGORY_CREATED', 'CATEGORY_DELETED']) {
     assert.ok(types.includes(expect), `missing ${expect} in ${types}`);
   }
-  // ts-DESC ordering.
+  // ts-DESC ordering; every row has an id (persistent, not synthesized).
   for (let i = 1; i < feed.length; i += 1) {
     assert.ok(feed[i - 1].ts >= feed[i].ts, 'feed not ts-DESC');
   }
+  assert.ok(feed.every((e) => /^evt-/.test(e.id)));
+
+  const roleChange = feed.find((e) => e.type === 'PARTICIPANT_ROLE_CHANGED');
+  assert.equal(roleChange.actor, 'root');
+  assert.equal(roleChange.target, 'ivy');
+  assert.deepEqual(roleChange.detail, { from: 'viewer', to: 'contributor' });
+  const removed = feed.find((e) => e.type === 'PARTICIPANT_REMOVED');
+  assert.equal(removed.target, 'ivy');
   const note = feed.find((e) => e.type === 'NOTE_ADDED');
   assert.equal(note.actor, 'ivy');
   assert.equal(note.evidenceId, 'ev-act');
   // limit applies; unknown case 404s.
   assert.equal((await json(await call(url, 'GET', `/cases/${c.id}/activity?limit=2`))).length, 2);
   assert.equal((await call(url, 'GET', '/cases/CASE-ghost/activity')).status, 404);
+});
+
+test('M25b: audit history backfill materializes derivable events once, idempotently', async (t) => {
+  const dataDir = tmpDataDir();
+  // Boot 1: create history the old-fashioned way (rows only), then wipe the
+  // audit table to simulate a pre-M25b volume.
+  const app1 = createApp({ dataDir, internalToken: TOKEN, logLevel: 'silent' });
+  const { server: s1, url: u1 } = await listen(app1);
+  const c = await makeCase(u1, 'historic case');
+  await call(u1, 'POST', `/cases/${c.id}/participants`, { userId: 'ivy', roleInCase: 'contributor', addedBy: 'root' });
+  await indexEvidence(u1, 'ev-hist', { caseId: c.id });
+  app1.locals.db.prepare('DELETE FROM case_audit_log').run();
+  s1.close();
+  app1.locals.db.close();
+
+  // Boot 2: backfill materializes CASE_CREATED + PARTICIPANT_ADDED + EVIDENCE_ADDED.
+  const app2 = createApp({ dataDir, internalToken: TOKEN, logLevel: 'silent' });
+  const { server: s2, url: u2 } = await listen(app2);
+  const feed = await json(await call(u2, 'GET', `/cases/${c.id}/activity`));
+  assert.deepEqual(feed.map((e) => e.type).sort(), ['CASE_CREATED', 'EVIDENCE_ADDED', 'PARTICIPANT_ADDED']);
+  assert.equal(feed.find((e) => e.type === 'PARTICIPANT_ADDED').target, 'ivy');
+  s2.close();
+  app2.locals.db.close();
+
+  // Boot 3: the case now has audit rows — no duplication.
+  const app3 = createApp({ dataDir, internalToken: TOKEN, logLevel: 'silent' });
+  const { server: s3, url: u3 } = await listen(app3);
+  assert.equal((await json(await call(u3, 'GET', `/cases/${c.id}/activity`))).length, 3);
+  s3.close();
+  app3.locals.db.close();
 });

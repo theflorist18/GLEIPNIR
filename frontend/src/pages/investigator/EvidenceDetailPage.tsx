@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { useSettings } from '../../settings';
@@ -24,6 +24,84 @@ const FLAG_LABEL: Record<Exclude<EvidenceFlag, null>, string> = {
   PROCESSED: 'Processed',
   NEEDS_LEAD_REVIEW: 'Needs lead review',
 };
+
+// M25: which simple file types the browser can render inline. Anything else
+// stays download-only. Text previews are capped so a huge log file cannot
+// freeze the page.
+export type PreviewKind = 'image' | 'video' | 'audio' | 'pdf' | 'text' | null;
+export function previewKind(mime: string | null | undefined): PreviewKind {
+  if (!mime) return null;
+  if (mime.startsWith('image/')) return 'image';
+  if (mime.startsWith('video/')) return 'video';
+  if (mime.startsWith('audio/')) return 'audio';
+  if (mime === 'application/pdf') return 'pdf';
+  if (mime.startsWith('text/') || mime === 'application/json' || mime === 'application/xml') return 'text';
+  return null;
+}
+
+const TEXT_PREVIEW_CAP = 64 * 1024; // bytes shown of a text file
+
+// Loads the blob through the same authed download route as the Download
+// button — so previewing IS a download and is auto-logged as one on the
+// chain (the trail refresh after load makes that visible, not hidden).
+function EvidencePreview({ id, mime, onLogged }: { id: string; mime: string | null; onLogged: () => Promise<void> | void }) {
+  const { client } = useAuth();
+  const { msg, run } = useErr();
+  const kind = previewKind(mime);
+  const [busy, setBusy] = useState(false);
+  const [url, setUrl] = useState('');
+  const [text, setText] = useState<string | null>(null);
+  const [truncated, setTruncated] = useState(false);
+  const urlRef = useRef('');
+
+  useEffect(() => () => { if (urlRef.current) URL.revokeObjectURL(urlRef.current); }, []);
+
+  if (!kind) return null;
+
+  const load = () =>
+    run(async () => {
+      setBusy(true);
+      try {
+        const { blob } = await client.downloadEvidence(id);
+        if (kind === 'text') {
+          setTruncated(blob.size > TEXT_PREVIEW_CAP);
+          setText(await blob.slice(0, TEXT_PREVIEW_CAP).text());
+        } else {
+          const u = URL.createObjectURL(blob.type ? blob : new Blob([blob], { type: mime ?? '' }));
+          urlRef.current = u;
+          setUrl(u);
+        }
+        await onLogged();
+      } finally {
+        setBusy(false);
+      }
+    });
+
+  return (
+    <div>
+      <h4>Preview</h4>
+      {!url && text === null && (
+        <div className="btn-row">
+          <button className="small" disabled={busy} onClick={load}>
+            {busy ? 'Loading…' : 'Load preview'}
+          </button>
+          <span className="hint">logged on the chain as a download access</span>
+        </div>
+      )}
+      {kind === 'image' && url && <img className="preview-media" src={url} alt={id} />}
+      {kind === 'video' && url && <video className="preview-media" controls src={url} />}
+      {kind === 'audio' && url && <audio controls src={url} />}
+      {kind === 'pdf' && url && <iframe className="preview-frame" src={url} title={`${id} PDF preview`} />}
+      {kind === 'text' && text !== null && (
+        <div>
+          <pre className="preview-text">{text}</pre>
+          {truncated && <p className="hint">showing the first 64 KiB — download for the full file</p>}
+        </div>
+      )}
+      {msg && <div className="err">{msg}</div>}
+    </div>
+  );
+}
 
 function reasonOf(body: string): string {
   try {
@@ -293,6 +371,9 @@ export function EvidenceDetailPage() {
                     : <span className="muted">uncategorized</span>}
                 </dd>
               </dl>
+            )}
+            {canDownload && indexRow && (
+              <EvidencePreview id={evidenceId} mime={indexRow.mimeType} onLogged={refresh} />
             )}
             {canWrite && (
               <div>

@@ -278,12 +278,37 @@ export interface EvidenceNote {
   createdAt: string;
 }
 
-/** M20: one entry of the synthesized case activity feed. */
+/** M24: the per-case Chain-of-Custody report bundle (json format). */
+export interface CocReport {
+  caseId: string;
+  name: string;
+  description: string;
+  status: CaseStatus;
+  generatedAt: string;
+  participants: CaseParticipant[];
+  evidence: Array<EvidenceIndexRow & { category: string | null; auditTrail: CoCEvent[] }>;
+}
+
+/** M25b: the case audit-log event types (append-only, actor-attributed).
+ * Management actions only — evidence ACCESS stays on-chain per evidence. */
+export type CaseActivityType =
+  | 'CASE_CREATED' | 'CASE_UPDATED'
+  | 'PARTICIPANT_ADDED' | 'PARTICIPANT_REMOVED' | 'PARTICIPANT_ROLE_CHANGED'
+  | 'CATEGORY_CREATED' | 'CATEGORY_RENAMED' | 'CATEGORY_DELETED'
+  | 'EVIDENCE_ADDED' | 'EVIDENCE_ASSIGNED' | 'EVIDENCE_UNASSIGNED' | 'EVIDENCE_REMOVED'
+  | 'EVIDENCE_DETAILS_UPDATED' | 'FLAG_CHANGED' | 'NOTE_ADDED';
+
+/** One entry of the case activity feed (M20; persistent audit log since M25b). */
 export interface CaseActivityEvent {
-  type: 'CASE_CREATED' | 'CASE_UPDATED' | 'PARTICIPANT_ADDED' | 'EVIDENCE_ADDED' | 'NOTE_ADDED';
+  /** Audit-log row id (evt-<uuid>). */
+  id?: string;
+  /** Render defensively: the enum can grow. */
+  type: CaseActivityType | (string & {});
   ts: string;
   actor?: string;
   evidenceId?: string;
+  /** The acted-on entity: a userId for participant events, a categoryId for category events. */
+  target?: string;
   detail?: Record<string, unknown>;
 }
 

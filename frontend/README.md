@@ -30,12 +30,30 @@ only).
   category, forensic metadata with ITEM-NNN auto-suggest, file + LOCAL
   WebCrypto ni-URI hash, review; the server's `integrityProof` is compared
   against the local hash after upload), `MyCasesPage`, `CaseDetailPage`
-  (M23 tabs: Overview / Evidence with category+flag columns / Activity feed /
-  Team — admin-or-case-lead only), `EvidenceDetailPage` (M23 tabs: Overview
+  (M23 tabs: Overview / Evidence / Activity; M25: the Team tab dissolved
+  into Overview — Categories and Team are press-to-expand sections there;
+  Team shows the roster to every participant, with add/remove/role-change
+  (directory picker, in-place role select) for admin/case-lead; Categories
+  gets one-click preset adds, custom add, delete for the same gate; the
+  Evidence tab gains text/category/flag/status filters plus a client-side
+  CSV export of exactly the filtered rows — metadata only, not auto-logged),
+  `EvidenceDetailPage` (M23 tabs: Overview
   with metadata + flag control / Chain of Custody timeline + verify +
   transfer/access forms / Examiner Notes composer; admin Download hidden
-  off-case per M18), `SearchPage` (evidence + case search,
-  participant-scoped server-side).
+  off-case per M18; M25: inline Preview for image/video/audio/PDF/text via
+  the authed download route — explicit load, auto-logged as a download),
+  `SearchPage` (evidence + case search,
+  participant-scoped server-side), `CoCReportPage` (M24:
+  `/cases/:caseId/report`, rendered OUTSIDE the shell and print-optimized —
+  browser print is the PDF path; CSV download alongside; fetching it
+  auto-logs one ACCESS per exhibit server-side).
+- `src/pages/lead/` — `LeadDashboardPage` (M24, `/lead/dashboard`,
+  lead+admin): the caller's lead cases, flagged evidence
+  (NEEDS_LEAD_REVIEW / HIGH_PRIORITY, server-scoped), merged recent team
+  activity; M25: a My-team card — per-led-case roster with add/remove
+  member picked from the user directory (`GET /users/directory`; the
+  case-lead role offers only global leads; server enforces the last-lead
+  409).
 - `src/pages/admin/` — `UsersPage`, `CasesAdminPage` (roster + categorize),
   `DashboardPage` (the old operator dashboard, now admin-gated: variant/sweep
   config, run control, charts, history/compare — execution stays host-side,

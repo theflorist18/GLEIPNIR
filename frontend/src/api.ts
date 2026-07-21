@@ -12,10 +12,12 @@ import type {
   AccessLogRequest,
   CaseActivityEvent,
   CaseDetail,
+  CaseParticipant,
   CaseRole,
   CaseStatus,
   CaseSummary,
   CoCEvent,
+  CocReport,
   CreateEvidenceRequest,
   EvidenceCategory,
   EvidenceDetailsPatch,
@@ -243,6 +245,11 @@ export class GatewayClient {
     return this.request<User>('POST', `/admin/users/${encodeURIComponent(id)}/reset-password`, { password });
   }
 
+  /** M25: read-only roster picker (active users) — admin or lead sessions only. */
+  listUserDirectory(): Promise<User[]> {
+    return this.request<User[]>('GET', '/users/directory');
+  }
+
   // ---- Cases (M14; proxied to case-registry, scoped server-side) ----
 
   listCases(params?: { q?: string; status?: CaseStatus }): Promise<CaseSummary[]> {
@@ -277,6 +284,11 @@ export class GatewayClient {
 
   removeParticipant(caseId: string, userId: string): Promise<void> {
     return this.request<void>('DELETE', `/cases/${encodeURIComponent(caseId)}/participants/${encodeURIComponent(userId)}`);
+  }
+
+  /** M25: change a participant's case role in place (admin-or-case-lead). */
+  updateParticipantRole(caseId: string, userId: string, roleInCase: CaseRole): Promise<CaseParticipant> {
+    return this.request<CaseParticipant>('PATCH', `/cases/${encodeURIComponent(caseId)}/participants/${encodeURIComponent(userId)}`, { roleInCase });
   }
 
   // ---- evidence categories (M19): per-case taxonomy, lead-managed ----
@@ -350,6 +362,22 @@ export class GatewayClient {
   getCaseActivity(caseId: string, limit?: number): Promise<CaseActivityEvent[]> {
     const qs = limit ? `?limit=${limit}` : '';
     return this.request<CaseActivityEvent[]>('GET', `/cases/${encodeURIComponent(caseId)}/activity${qs}`);
+  }
+
+  // ---- per-case CoC report (M24). Fetching it auto-logs one ACCESS per
+  // included evidence under the session username (server-side, synchronous).
+  getCocReport(caseId: string): Promise<CocReport> {
+    return this.request<CocReport>('GET', `/cases/${encodeURIComponent(caseId)}/coc-report`);
+  }
+
+  async downloadCocReportCsv(caseId: string): Promise<{ blob: Blob; filename: string }> {
+    const res = await this.fetchImpl(this.url(`/cases/${encodeURIComponent(caseId)}/coc-report?format=csv`), {
+      headers: this.authHeaders(),
+    });
+    if (!res.ok) throw this.failed(res, await res.text());
+    const disposition = res.headers.get('content-disposition') ?? '';
+    const match = /filename="([^"]*)"/.exec(disposition);
+    return { blob: await res.blob(), filename: match?.[1] || `coc-${caseId}.csv` };
   }
 
   // Streams the blob back; the caller turns it into a browser download.
