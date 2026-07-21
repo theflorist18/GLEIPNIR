@@ -9,6 +9,7 @@ import { Modal } from '../../components/ui/Modal';
 import { Tabs } from '../../components/ui/Tabs';
 import { Timeline } from '../../components/ui/Timeline';
 import { activityLine, activityTone } from '../../lib/activity';
+import { formatTs } from '../../lib/format';
 import type { CaseActivityEvent, CaseDetail, CaseRole, EvidenceFlag, EvidenceIndexRow, User } from '../../types';
 
 const fmtBytes = (n: number | null) => (n == null ? '—' : n >= 1048576 ? `${(n / 1048576).toFixed(1)} MiB` : n >= 1024 ? `${(n / 1024).toFixed(1)} KiB` : `${n} B`);
@@ -174,7 +175,7 @@ export function CaseDetailPage() {
           <span className={`pill ${detail.status === 'OPEN' ? 'active' : ''}`}>{detail.status}</span>
         </div>
         <p className="hint">
-          <span className="mono small">{detail.id}</span> · created by {detail.createdBy} · {detail.createdAt}
+          <span className="mono small">{detail.id}</span> · created by {detail.createdBy} · <span title={detail.createdAt}>{formatTs(detail.createdAt)}</span>
         </p>
         <Tabs
           tabs={[
@@ -341,7 +342,7 @@ export function CaseDetailPage() {
                     <div className="tl-row">
                       <span>{activityLine(e)}</span>
                       {e.evidenceId && <Link className="mono small" to={`/evidence/${encodeURIComponent(e.evidenceId)}`}>{e.evidenceId}</Link>}
-                      <span className="ts small muted">{e.ts}</span>
+                      <span className="ts small muted" title={e.ts}>{formatTs(e.ts)}</span>
                     </div>
                   </div>
                 ),

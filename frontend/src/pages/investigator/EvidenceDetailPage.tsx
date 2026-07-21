@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { formatTs } from '../../lib/format';
 import { Link, useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { useSettings } from '../../settings';
@@ -194,7 +195,7 @@ function NotesTab({ id, canWrite }: { id: string; canWrite: boolean }) {
               <li key={n.id} className="note">
                 <div className="tl-row">
                   <strong>{n.author}</strong>
-                  <span className="ts small muted">{n.createdAt}</span>
+                  <span className="ts small muted" title={n.createdAt}>{formatTs(n.createdAt)}</span>
                 </div>
                 <div>{n.body}</div>
               </li>

@@ -1,6 +1,7 @@
 import type { CoCEvent, Op } from '../types';
 import { Timeline } from './ui/Timeline';
 import type { TimelineItem } from './ui/Timeline';
+import { formatTs } from '../lib/format';
 
 const OP_TONE: Record<Op, TimelineItem['tone']> = {
   CREATE: 'ok',
@@ -36,7 +37,7 @@ export function AuditTrailTimeline({ events }: { events: CoCEvent[] }) {
                 <div className="tl-row">
                   <span className={`op op-${op.toLowerCase()}`}>{op}</span>
                   <span className="actor">{e.actor}</span>
-                  <span className="ts small muted">{e.ts}</span>
+                  <span className="ts small muted" title={e.ts}>{formatTs(e.ts)}</span>
                 </div>
                 {line && <div className="small muted">{line}</div>}
               </div>

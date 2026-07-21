@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { formatTs } from '../../lib/format';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { useErr } from '../../hooks/useErr';
@@ -82,7 +83,7 @@ export function MyCasesPage() {
                     : <span className="muted small">—</span>}
                   </td>
                   <td>{c.createdBy}</td>
-                  <td className="small muted">{c.updatedAt}</td>
+                  <td className="small muted" title={c.updatedAt}>{formatTs(c.updatedAt)}</td>
                 </tr>
               ))}
             </tbody>

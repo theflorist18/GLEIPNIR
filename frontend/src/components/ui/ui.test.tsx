@@ -23,6 +23,19 @@ describe('Tabs', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Notes' }));
     expect(onChange).toHaveBeenCalledWith('b');
   });
+
+  it('roving tabIndex: only the active tab is a tab stop', () => {
+    render(<Tabs tabs={tabs} active="a" onChange={vi.fn()} />);
+    expect(screen.getByRole('tab', { name: 'Overview' }).getAttribute('tabindex')).toBe('0');
+    expect(screen.getByRole('tab', { name: 'Notes' }).getAttribute('tabindex')).toBe('-1');
+  });
+
+  it('ArrowRight moves selection to the next visible tab (wrapping)', () => {
+    const onChange = vi.fn();
+    render(<Tabs tabs={tabs} active="a" onChange={onChange} />);
+    fireEvent.keyDown(screen.getByRole('tab', { name: 'Overview' }), { key: 'ArrowRight' });
+    expect(onChange).toHaveBeenCalledWith('b'); // 'c' is hidden, so next after 'a' is 'b'
+  });
 });
 
 describe('Stepper', () => {
@@ -35,6 +48,9 @@ describe('Stepper', () => {
     expect(steps[2].className).toContain('active');
     expect(steps[3].className).not.toContain('active');
     expect(steps[0].textContent).toContain('✓');
+    // a11y: the active step is marked aria-current
+    expect(steps[2].getAttribute('aria-current')).toBe('step');
+    expect(steps[0].getAttribute('aria-current')).toBeNull();
   });
 });
 

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { formatTs } from '../../lib/format';
 import { Link, useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { GatewayError } from '../../api';
@@ -59,7 +60,7 @@ export function CoCReportPage() {
           <dt>case</dt><dd>{report.name} <span className="mono small">({report.caseId})</span></dd>
           <dt>status</dt><dd>{report.status}</dd>
           {report.description && (<><dt>description</dt><dd>{report.description}</dd></>)}
-          <dt>generated</dt><dd>{report.generatedAt}</dd>
+          <dt>generated</dt><dd title={report.generatedAt}>{formatTs(report.generatedAt)}</dd>
           <dt>participants</dt>
           <dd>{report.participants.map((p) => `${p.userId} (${CASE_ROLE_LABELS[p.roleInCase]})`).join(', ') || '—'}</dd>
         </dl>

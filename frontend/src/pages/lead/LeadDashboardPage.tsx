@@ -4,6 +4,7 @@ import { useAuth } from '../../auth/AuthContext';
 import { useErr } from '../../hooks/useErr';
 import { ALL_CASE_ROLES, CASE_ROLE_LABELS } from '../../roles';
 import { activityLine, activityTone } from '../../lib/activity';
+import { formatTs } from '../../lib/format';
 import { Badge } from '../../components/ui/Badge';
 import { Modal } from '../../components/ui/Modal';
 import { Timeline } from '../../components/ui/Timeline';
@@ -193,7 +194,7 @@ export function LeadDashboardPage() {
                   <div className="tl-row">
                     <span className="small">{e.caseName}</span>
                     <span>{activityLine(e)}</span>
-                    <span className="ts small muted">{e.ts}</span>
+                    <span className="ts small muted" title={e.ts}>{formatTs(e.ts)}</span>
                   </div>
                 ),
               }))}

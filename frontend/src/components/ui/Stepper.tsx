@@ -4,7 +4,11 @@ export function Stepper({ steps, current }: { steps: string[]; current: number }
   return (
     <ol className="stepper">
       {steps.map((label, i) => (
-        <li key={label} className={`step ${i === current ? 'active' : ''} ${i < current ? 'done' : ''}`}>
+        <li
+          key={label}
+          className={`step ${i === current ? 'active' : ''} ${i < current ? 'done' : ''}`}
+          aria-current={i === current ? 'step' : undefined}
+        >
           <span className="step-dot">{i < current ? '✓' : i + 1}</span>
           <span className="step-label">{label}</span>
         </li>

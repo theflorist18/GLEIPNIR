@@ -1,4 +1,5 @@
 import type { Op } from '../types';
+import { formatTs } from '../lib/format';
 
 // One write this session, as returned by the gateway. Merkle verification is
 // keyed by these eventIds (F33/F49): in batched variants CoC events live
@@ -28,7 +29,7 @@ export function SessionTrail({ events, anchoring, onVerify }: {
           <li key={e.eventId}>
             <span className={`op op-${e.op.toLowerCase()}`}>{e.op}</span>
             <span className="mono small">{e.eventId}</span>
-            <span className="ts">{e.ts}</span>
+            <span className="ts" title={e.ts}>{formatTs(e.ts)}</span>
             {anchoring && (
               <button className="small" onClick={() => onVerify(e.eventId)}>Verify</button>
             )}
