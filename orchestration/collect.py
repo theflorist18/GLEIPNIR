@@ -268,18 +268,33 @@ def storage_metrics(run_dir, rounds):
         for ch in t1["ledgerBytes"]
     }
     app_delta = sum(v for ch, v in per_channel.items() if ch != "anchor-main")
+    anchor_delta = per_channel.get("anchor-main", 0)
+    # On-chain event storage = ALL committed blockstore for the run's events.
+    # For standard/anchoring the events (or their roots) land on the app channel
+    # (coc-main) and there is no anchor-main; for parallel they land on the case
+    # channels. For PARALLEL-ANCHORED the events are batched off-chain and only
+    # the Merkle roots are committed — to anchor-main, NOT the (empty) case
+    # channels. bytesPerEventBlockstore must therefore include anchor-main, else
+    # it reads 0 for parallel-anchored and the compression-vs-baseline metric is
+    # meaningless. app-only and anchor-only deltas are kept separately for the
+    # per-variant breakdown.
+    on_chain_delta = app_delta + anchor_delta
     storage = {
         "blockstoreDeltaPerChannel": per_channel,
         "blockstoreDeltaAppChannels": app_delta,
+        "blockstoreDeltaAnchorChannel": anchor_delta,
+        "blockstoreDeltaOnChain": on_chain_delta,
         "stateDeltaBytes": t1["stateBytes"] - t0["stateBytes"],
         "receiptStoreDeltaBytes": (
             t1["receiptBytes"] - t0["receiptBytes"]
             if t1.get("receiptBytes") is not None and t0.get("receiptBytes") is not None else None
         ),
         "successfulEvents": events,
-        "bytesPerEventBlockstore": round(app_delta / events, 3) if events else None,
-        "policy": ("per-channel blockstore from its hosting peer (org1 app channels, anchor peer "
-                   "anchor-main); world state once per container; receipt store separate (F9/F70)"),
+        "bytesPerEventBlockstore": round(on_chain_delta / events, 3) if events else None,
+        "policy": ("on-chain bytes/event = TOTAL blockstore delta across all channels "
+                   "(app channels + anchor-main root sink) / successful events; per-channel "
+                   "from its hosting peer; world state once per container; receipt store "
+                   "separate (F9/F70)"),
     }
     return checkpoints, storage
 
