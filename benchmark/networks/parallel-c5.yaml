@@ -10,18 +10,23 @@ channels:
   - channelName: case-001
     contracts:
       - id: evidence
+        contractID: evidence-case-001
   - channelName: case-002
     contracts:
       - id: evidence
+        contractID: evidence-case-002
   - channelName: case-003
     contracts:
       - id: evidence
+        contractID: evidence-case-003
   - channelName: case-004
     contracts:
       - id: evidence
+        contractID: evidence-case-004
   - channelName: case-005
     contracts:
       - id: evidence
+        contractID: evidence-case-005
 
 organizations:
   - mspid: Org1MSP

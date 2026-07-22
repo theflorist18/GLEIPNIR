@@ -22,7 +22,15 @@ else
   wait_raft_leader org1 "${CASE_ID}"
 
   pkg_host="ccaas-evidence"
-  pkgid="$(package_ccaas "${pkg_host}" "" | tail -1 | tr -d '\r')"
+  # REUSE the package id up.sh computed and the ccaas container ACTUALLY serves
+  # (CCAAS_ID_APP). Re-packaging here would embed a fresh gzip timestamp
+  # (package_ccaas is non-deterministic) and yield a DIFFERENT package id that no
+  # running ccaas serves — so this channel's endorsements time out
+  # (DEADLINE_EXCEEDED), the c>1 Parallel bug. up.sh already wrote the matching
+  # tar to channel-artifacts and installed it on both peers, so we only re-install
+  # (idempotent) and approve/commit with the served id.
+  pkgid="$(grep -E '^CCAAS_ID_APP=' "${COMPOSE_DIR}/.env" | cut -d= -f2 | tr -d '\r')"
+  [ -n "${pkgid}" ] || { echo "CCAAS_ID_APP not set in ${COMPOSE_DIR}/.env — run up.sh --variant parallel first" >&2; exit 1; }
   cli "$(peer_env org1)
 peer lifecycle chaincode install ${CTN_ARTIFACTS}/${CC_NAME}-${pkg_host}.tar.gz" || true
   cli "$(peer_env org2)

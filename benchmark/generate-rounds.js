@@ -223,11 +223,24 @@ write('benchmarks/smoke-parallel-anchored.yaml', benchFile(
 // static; the channels must be provisioned (provision-channel.sh) before use.
 
 for (const c of channelCounts) {
-  const channelBlocks = Array.from({ length: c }, (_, i) => [
-    `  - channelName: case-${String(i + 1).padStart(3, '0')}`,
-    '    contracts:',
-    '      - id: evidence',
-  ].join('\n')).join('\n');
+  const channelBlocks = Array.from({ length: c }, (_, i) => {
+    const name = `case-${String(i + 1).padStart(3, '0')}`;
+    // `id` is the real chaincode name ('evidence') deployed on every channel;
+    // `contractID` is a per-channel UNIQUE alias. caliper-fabric 0.6.0 keys its
+    // contractDetailsById map by contractID and throws at config-parse time if
+    // two channels share one (both channels host 'evidence'), so a bare
+    // `id: evidence` on >1 channel aborts the run with error code 6 before any
+    // transaction (audit: the c>1 spread path, untested until the steady sweep).
+    // The workloads always pass an explicit `channel`, so the connector routes
+    // by channel + id at runtime and never consults contractID — the alias only
+    // has to be unique, it is never referenced by the workload.
+    return [
+      `  - channelName: ${name}`,
+      '    contracts:',
+      '      - id: evidence',
+      `        contractID: evidence-${name}`,
+    ].join('\n');
+  }).join('\n');
   write(`networks/parallel-c${c}.yaml`, [
     GEN,
     `# Multi-channel Caliper network config — Parallel variant, ${c}-channel cell.`,

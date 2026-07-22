@@ -10,6 +10,7 @@ channels:
   - channelName: case-001
     contracts:
       - id: evidence
+        contractID: evidence-case-001
 
 organizations:
   - mspid: Org1MSP
