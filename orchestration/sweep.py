@@ -220,10 +220,39 @@ def cells_for(variant, sweeps, regime):
             yield {"K": k, "channels": ch}
 
 
+def _load_manifest(run_id):
+    path = os.path.join(BENCH_DIR, "results", run_id, "manifest.json")
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def write_collected(run_id):
+    """A write run is complete iff its manifest has parsed rounds AND storage —
+    i.e. collect.py ran to completion (a crash mid-run leaves a seeded manifest
+    with neither)."""
+    m = _load_manifest(run_id)
+    return bool(m and (m.get("rounds") or []) and m.get("storage")
+                and m["storage"].get("bytesPerEventBlockstore") is not None)
+
+
+def verify_collected(verify_id):
+    m = _load_manifest(verify_id)
+    vs = m.get("verifySteps") if m else None
+    return bool(vs and vs.get("count", 0) > 0)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--variant", required=True, choices=VARIANTS)
     ap.add_argument("--regime", default="steady", choices=["steady", "smoke"])
+    ap.add_argument("--resume", action="store_true",
+                    help="skip cells/reps already fully collected (idempotent restart "
+                         "after a crash); only the missing runs execute")
     args = ap.parse_args()
 
     sweeps = load_sweeps()
@@ -232,6 +261,18 @@ def main():
 
     for cell in cells_for(args.variant, sweeps, args.regime):
         tag = "-".join([f"{k}{v}" for k, v in cell.items()]) or "base"
+        benchconfig, netcfg, verifycfg = configs_for(args.variant, args.regime, cell)
+        run_ids = [f"{prefix}-{args.variant}-{tag}-r{rep}" for rep in range(reps)]
+
+        # --resume: if EVERY rep of this cell is already collected, skip the whole
+        # cell — no batcher recreate, no channel provision (F44 epoch untouched).
+        if args.resume and all(
+            write_collected(rid) and (verify_collected(f"{rid}-verify") if verifycfg else True)
+            for rid in run_ids
+        ):
+            print(f"[resume] cell {tag}: all {reps} rep(s) already collected — skipping")
+            continue
+
         needs_batcher = "N" in cell or "K" in cell
         if "N" in cell:
             set_env_var("BATCH_N", cell["N"])
@@ -246,24 +287,28 @@ def main():
         if "channels" in cell:
             ensure_channels(cell["channels"])
 
-        benchconfig, netcfg, verifycfg = configs_for(args.variant, args.regime, cell)
-
         for rep in range(reps):
-            run_id = f"{prefix}-{args.variant}-{tag}-r{rep}"
-            print(f"\n===== cell {run_id} =====")
+            run_id = run_ids[rep]
 
-            seed_manifest(run_id, args.variant, args.regime, cell, rep, sweeps, "write")
-            run([sys.executable, os.path.join(ORCH, "checkpoint.py"), run_id, "--label", "t0"], check=True)
-            caliper(run_id, benchconfig, netcfg)
-            run([sys.executable, os.path.join(ORCH, "checkpoint.py"), run_id, "--label", "t1"], check=True)
-            run([sys.executable, os.path.join(ORCH, "collect.py"), run_id], check=True)
-            assert_collected(run_id)
+            if args.resume and write_collected(run_id):
+                print(f"[resume] {run_id}: write already collected — skipping")
+            else:
+                print(f"\n===== cell {run_id} =====")
+                seed_manifest(run_id, args.variant, args.regime, cell, rep, sweeps, "write")
+                run([sys.executable, os.path.join(ORCH, "checkpoint.py"), run_id, "--label", "t0"], check=True)
+                caliper(run_id, benchconfig, netcfg)
+                run([sys.executable, os.path.join(ORCH, "checkpoint.py"), run_id, "--label", "t1"], check=True)
+                run([sys.executable, os.path.join(ORCH, "collect.py"), run_id], check=True)
+                assert_collected(run_id)
 
             if verifycfg:
                 # Verification/audit latency for the SAME cell (thesis RQ2,
                 # audit F8) — its own runId so write and verify artifacts never
                 # mix; storage checkpoints belong to the write phase only.
                 verify_id = f"{run_id}-verify"
+                if args.resume and verify_collected(verify_id):
+                    print(f"[resume] {verify_id}: already collected — skipping")
+                    continue
                 print(f"===== cell {verify_id} (RQ2) =====")
                 seed_manifest(verify_id, args.variant, args.regime, cell, rep, sweeps, "verify")
                 # Reset the per-request step log so the verify manifest summarises
