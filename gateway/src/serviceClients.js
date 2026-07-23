@@ -59,8 +59,13 @@ function makeEvidenceStoreClient(baseUrl, internalToken) {
     return fetch(`${baseUrl}/blobs/${encodeURIComponent(evidenceId)}`, { headers });
   }
 
-  async function del(evidenceId) {
-    const resp = await fetch(`${baseUrl}/blobs/${encodeURIComponent(evidenceId)}`, { method: 'DELETE', headers });
+  // rollbackToken (from the blob's PUT response) is required by evidence-store's
+  // DELETE (S9, rollback-only). Orphan cleanup has it from the just-completed PUT.
+  async function del(evidenceId, rollbackToken) {
+    const resp = await fetch(`${baseUrl}/blobs/${encodeURIComponent(evidenceId)}`, {
+      method: 'DELETE',
+      headers: { ...headers, ...(rollbackToken ? { 'x-gleipnir-rollback-token': rollbackToken } : {}) },
+    });
     return { status: resp.status };
   }
 

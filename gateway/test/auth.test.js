@@ -14,11 +14,11 @@ function tmpAuthDir() {
 }
 
 // Real users/sessions stores (tmp dir), fake Fabric — mirrors app.test.js.
-function fakeDeps(overrides) {
+async function fakeDeps(overrides) {
   const submits = [];
   const users = makeUsersStore(tmpAuthDir());
   const sessions = makeSessions({ ttlSeconds: 3600 });
-  users.seedAdmin({ username: 'root', password: 'root-pw' });
+  await users.seedAdmin({ username: 'root', password: 'root-pw' });
   return {
     submits,
     users,
@@ -55,7 +55,7 @@ async function login(url, username, password) {
 const asUser = (token) => ({ authorization: `Bearer ${token}`, 'content-type': 'application/json' });
 
 test('login: valid credentials -> token + user (no passwordHash); bad -> 401', async (t) => {
-  const { deps } = fakeDeps();
+  const { deps } = await fakeDeps();
   const { server, url } = await listen(createApp(deps));
   t.after(() => server.close());
 
@@ -71,7 +71,7 @@ test('login: valid credentials -> token + user (no passwordHash); bad -> 401', a
 });
 
 test('login without a users store -> 503; service token unaffected', async (t) => {
-  const { deps } = fakeDeps();
+  const { deps } = await fakeDeps();
   delete deps.users;
   delete deps.sessions;
   const { server, url } = await listen(createApp(deps));
@@ -83,7 +83,7 @@ test('login without a users store -> 503; service token unaffected', async (t) =
 });
 
 test('session token authenticates /auth/me; service token gets 403 there', async (t) => {
-  const { deps } = fakeDeps();
+  const { deps } = await fakeDeps();
   const { server, url } = await listen(createApp(deps));
   t.after(() => server.close());
 
@@ -100,7 +100,7 @@ test('session token authenticates /auth/me; service token gets 403 there', async
 });
 
 test('logout invalidates the session token', async (t) => {
-  const { deps } = fakeDeps();
+  const { deps } = await fakeDeps();
   const { server, url } = await listen(createApp(deps));
   t.after(() => server.close());
 
@@ -112,7 +112,7 @@ test('logout invalidates the session token', async (t) => {
 });
 
 test('expired session -> 401', async (t) => {
-  const { deps, users } = fakeDeps();
+  const { deps, users } = await fakeDeps();
   const sessions = makeSessions({ ttlSeconds: 0 });
   deps.sessions = sessions;
   const { server, url } = await listen(createApp(deps));
@@ -124,7 +124,7 @@ test('expired session -> 401', async (t) => {
 });
 
 test('admin gating: user management requires an admin SESSION — investigator and service token both 403', async (t) => {
-  const { deps } = fakeDeps();
+  const { deps } = await fakeDeps();
   const { server, url } = await listen(createApp(deps));
   t.after(() => server.close());
 
@@ -169,7 +169,7 @@ test('admin gating: user management requires an admin SESSION — investigator a
 });
 
 test('POST /runs is admin-only; GET /runs stays open to the service token', async (t) => {
-  const { deps } = fakeDeps();
+  const { deps } = await fakeDeps();
   const { server, url } = await listen(createApp(deps));
   t.after(() => server.close());
 
@@ -188,7 +188,7 @@ test('POST /runs is admin-only; GET /runs stays open to the service token', asyn
 });
 
 test('deactivation kills live sessions and future logins', async (t) => {
-  const { deps } = fakeDeps();
+  const { deps } = await fakeDeps();
   const { server, url } = await listen(createApp(deps));
   t.after(() => server.close());
 
@@ -211,7 +211,7 @@ test('deactivation kills live sessions and future logins', async (t) => {
 });
 
 test('reset-password: old credential stops working, new one logs in', async (t) => {
-  const { deps } = fakeDeps();
+  const { deps } = await fakeDeps();
   const { server, url } = await listen(createApp(deps));
   t.after(() => server.close());
 
@@ -229,7 +229,7 @@ test('reset-password: old credential stops working, new one logs in', async (t) 
 });
 
 test('actor attribution: user sessions log the authenticated username; service token keeps client actors', async (t) => {
-  const { deps, submits } = fakeDeps();
+  const { deps, submits } = await fakeDeps();
   const { server, url } = await listen(createApp(deps));
   t.after(() => server.close());
 
@@ -253,7 +253,7 @@ test('actor attribution: user sessions log the authenticated username; service t
 });
 
 test('login throttle: lockout after max failures (even for correct creds), window expiry, success resets', async (t) => {
-  const { deps } = fakeDeps({ loginMaxAttempts: 3, loginWindowSeconds: 1 });
+  const { deps } = await fakeDeps({ loginMaxAttempts: 3, loginWindowSeconds: 1 });
   const { server, url } = await listen(createApp(deps));
   t.after(() => server.close());
 
@@ -283,7 +283,7 @@ test('login throttle: lockout after max failures (even for correct creds), windo
 });
 
 test('unknown-username login still does password verification work (timing equalization)', async (t) => {
-  const { deps } = fakeDeps();
+  const { deps } = await fakeDeps();
   const { server, url } = await listen(createApp(deps));
   t.after(() => server.close());
 
@@ -300,18 +300,18 @@ test('unknown-username login still does password verification work (timing equal
 test('users store persists across reopen from the same dir', async () => {
   const dir = tmpAuthDir();
   const a = makeUsersStore(dir);
-  a.seedAdmin({ username: 'root', password: 'root-pw' });
-  a.create({ username: 'ivy', password: 'ivy-pw' });
+  await a.seedAdmin({ username: 'root', password: 'root-pw' });
+  await a.create({ username: 'ivy', password: 'ivy-pw' });
 
   const b = makeUsersStore(dir);
   assert.equal(b.list().length, 2);
-  assert.equal(b.verifyPassword('ivy', 'ivy-pw').username, 'ivy');
+  assert.equal((await b.verifyPassword('ivy', 'ivy-pw')).username, 'ivy');
   // seedAdmin is first-boot-only: a non-empty store is never reseeded.
-  assert.equal(b.seedAdmin({ username: 'other', password: 'x' }), null);
+  assert.equal(await b.seedAdmin({ username: 'other', password: 'x' }), null);
 });
 
 test('M18: lead is a valid user role, but admin routes stay admin-only', async (t) => {
-  const { deps } = fakeDeps();
+  const { deps } = await fakeDeps();
   const { server, url } = await listen(createApp(deps));
   t.after(() => server.close());
 
@@ -338,7 +338,7 @@ test('M18: lead is a valid user role, but admin routes stay admin-only', async (
 });
 
 test('M25: /users/directory — admin and lead sessions see active users only; investigator and service token 403', async (t) => {
-  const { deps } = fakeDeps();
+  const { deps } = await fakeDeps();
   const { server, url } = await listen(createApp(deps));
   t.after(() => server.close());
 
@@ -396,7 +396,7 @@ test('M17 upgrade: a pre-rename users.json (displayName) is migrated to name in 
 // alone admitted any user session; an investigator (or anyone with a session)
 // could commit or squat Merkle roots on coc-main.
 test('S1: /internal/anchor-root requires the service principal', async (t) => {
-  const { deps, submits } = fakeDeps({ variant: 'anchoring' });
+  const { deps, submits } = await fakeDeps({ variant: 'anchoring' });
   const { server, url } = await listen(createApp(deps));
   t.after(() => server.close());
 
@@ -427,7 +427,7 @@ test('S1: /internal/anchor-root requires the service principal', async (t) => {
 // S5: an admin password reset invalidates the target's live sessions, so a
 // stolen token cannot outlive the response to a compromise.
 test('S5: password reset invalidates the target user\'s live sessions', async (t) => {
-  const { deps } = fakeDeps();
+  const { deps } = await fakeDeps();
   const { server, url } = await listen(createApp(deps));
   t.after(() => server.close());
 
@@ -450,7 +450,7 @@ test('S5: password reset invalidates the target user\'s live sessions', async (t
 // (X-Forwarded-For), so locking one client out does not lock a named account
 // out for everyone.
 test('S7: login throttle keys per client IP, not globally per username', async (t) => {
-  const { deps } = fakeDeps({ loginMaxAttempts: 3, loginWindowSeconds: 60 });
+  const { deps } = await fakeDeps({ loginMaxAttempts: 3, loginWindowSeconds: 60 });
   const { server, url } = await listen(createApp(deps));
   t.after(() => server.close());
 
@@ -474,4 +474,26 @@ test('S7: login throttle keys per client IP, not globally per username', async (
     body: JSON.stringify({ username: 'root', password: 'root-pw' }),
   });
   assert.equal(ok.status, 200);
+});
+
+// S17: the auto-logging read routes are rate-limited per user session (each is
+// an on-chain AccessLog write); the service token is exempt.
+test('S17: auto-log read routes are rate-limited per session, service token exempt', async (t) => {
+  const { deps } = await fakeDeps({ autoLogMaxPerWindow: 3, autoLogWindowSeconds: 60 });
+  const { server, url } = await listen(createApp(deps));
+  t.after(() => server.close());
+
+  const admin = (await login(url, 'root', 'root-pw')).body.token;
+  const hit = (tok) => fetch(`${url}/api/v1/evidence/ev-x`, { headers: { authorization: `Bearer ${tok}` } });
+
+  // As a user: the 4th request within the window is refused with 429 (the first
+  // three reach the handler; the limiter runs before it).
+  let sawUserLimit = false;
+  for (let i = 0; i < 4; i += 1) { if ((await hit(admin)).status === 429) sawUserLimit = true; }
+  assert.ok(sawUserLimit, 'a user session should hit the auto-log rate limit');
+
+  // The service token is exempt — never 429 no matter how many requests.
+  for (let i = 0; i < 6; i += 1) {
+    assert.notEqual((await hit('secret-token')).status, 429, 'service token must never be auto-log-rate-limited');
+  }
 });

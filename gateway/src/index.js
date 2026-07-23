@@ -14,7 +14,7 @@ const { makeCaseRegistryClient, makeEvidenceStoreClient } = require('./serviceCl
 // User-session auth (M12) is additive: if the auth data dir is unavailable
 // (e.g. a container without the gateway-auth-data volume), the gateway still
 // starts and the service-token path works — only user login is disabled.
-function makeAuthStores(env) {
+async function makeAuthStores(env) {
   const authDataDir = env.AUTH_DATA_DIR || '/data/auth';
   let users;
   try {
@@ -25,7 +25,7 @@ function makeAuthStores(env) {
   }
   const sessions = makeSessions({ ttlSeconds: parseInt(env.SESSION_TTL_SECONDS, 10) || 28800 });
   if (env.ADMIN_USERNAME && env.ADMIN_PASSWORD) {
-    const seeded = users.seedAdmin({ username: env.ADMIN_USERNAME, password: env.ADMIN_PASSWORD });
+    const seeded = await users.seedAdmin({ username: env.ADMIN_USERNAME, password: env.ADMIN_PASSWORD });
     if (seeded) console.log(`[gateway] seeded first admin user '${seeded.username}'`);
   } else if (users.list().length === 0) {
     console.warn('[gateway] no users exist and ADMIN_USERNAME/ADMIN_PASSWORD are unset — user login impossible until seeded');
@@ -38,7 +38,7 @@ async function main() {
   const { fabric, close } = await connectFabric(process.env);
   const batcher = makeBatcherClient(process.env.BATCHER_URL || 'http://merkle-batcher:4001');
   const runsStore = makeRunsStore(process.env.RESULTS_DIR || '/results');
-  const { users, sessions } = makeAuthStores(process.env);
+  const { users, sessions } = await makeAuthStores(process.env);
   const internalToken = process.env.GLEIPNIR_INTERNAL_TOKEN || 'internal-dev-token';
   const caseRegistry = makeCaseRegistryClient(process.env.CASE_REGISTRY_URL || 'http://case-registry:4005', internalToken);
   const evidenceStore = makeEvidenceStoreClient(process.env.EVIDENCE_STORE_URL || 'http://evidence-store:4006', internalToken);

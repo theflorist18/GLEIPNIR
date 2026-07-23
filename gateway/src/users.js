@@ -11,6 +11,12 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { promisify } = require('node:util');
+
+// ASYNC scrypt (S6): the KDF runs on the libuv threadpool instead of the event
+// loop, so a burst of logins (each doing full scrypt work, even for unknown
+// usernames — see DUMMY_HASH) can no longer stall the whole gateway.
+const scrypt = promisify(crypto.scrypt);
 
 const USERNAME_RE = /^[A-Za-z0-9._-]{1,64}$/;
 // M18 (CONTRACTS §12-8): 3-tier RBAC. 'lead' sits between admin and
@@ -24,20 +30,20 @@ class UserError extends Error {
   }
 }
 
-function hashPassword(password) {
+async function hashPassword(password) {
   const salt = crypto.randomBytes(16);
-  const hash = crypto.scryptSync(password, salt, 64);
+  const hash = await scrypt(password, salt, 64);
   return `scrypt:${salt.toString('hex')}:${hash.toString('hex')}`;
 }
 
-function verifyHash(password, stored) {
+async function verifyHash(password, stored) {
   const parts = String(stored || '').split(':');
   if (parts.length !== 3 || parts[0] !== 'scrypt') return false;
   const salt = Buffer.from(parts[1], 'hex');
   const expected = Buffer.from(parts[2], 'hex');
   // A corrupted/truncated hash must fail closed — never compare empty buffers.
   if (salt.length !== 16 || expected.length !== 64) return false;
-  const actual = crypto.scryptSync(password, salt, expected.length);
+  const actual = await scrypt(password, salt, expected.length);
   return crypto.timingSafeEqual(actual, expected);
 }
 
@@ -56,7 +62,8 @@ function toPublic(user) {
 
 // Verifying against this dummy hash keeps an unknown-username login doing the
 // same scrypt work as a real mismatch, so response timing cannot be used to
-// enumerate which usernames exist.
+// enumerate which usernames exist. Computed once as a promise (hashPassword is
+// now async) and awaited in verifyPassword; boot never blocks on it.
 const DUMMY_HASH = hashPassword('gleipnir-timing-equalizer');
 
 function makeUsersStore(authDataDir) {
@@ -95,7 +102,7 @@ function makeUsersStore(authDataDir) {
     return users.find((u) => u.username === username) || null;
   }
 
-  function create({ username, password, name, role }) {
+  async function create({ username, password, name, role }) {
     if (typeof username !== 'string' || !USERNAME_RE.test(username)) {
       throw new UserError(400, 'username must match ^[A-Za-z0-9._-]{1,64}$');
     }
@@ -103,11 +110,12 @@ function makeUsersStore(authDataDir) {
     const r = role === undefined ? 'investigator' : role;
     if (!ROLES.includes(r)) throw new UserError(400, `role must be one of: ${ROLES.join(', ')}`);
     if (findByUsername(username)) throw new UserError(409, 'username already exists');
+    const passwordHash = await hashPassword(password);
     const now = new Date().toISOString();
     const user = {
       id: `usr-${crypto.randomUUID()}`,
       username,
-      passwordHash: hashPassword(password),
+      passwordHash,
       name: typeof name === 'string' && name ? name : username,
       role: r,
       active: true,
@@ -121,19 +129,19 @@ function makeUsersStore(authDataDir) {
 
   // Seeds the first admin only when the store is EMPTY (first boot); returns
   // null otherwise so a restart never resets a live user database.
-  function seedAdmin({ username, password, name }) {
+  async function seedAdmin({ username, password, name }) {
     if (users.length > 0) return null;
     return create({ username, password, name, role: 'admin' });
   }
 
-  function verifyPassword(username, password) {
+  async function verifyPassword(username, password) {
     if (typeof password !== 'string') return null;
     const user = findByUsername(username);
     if (!user) {
-      verifyHash(password, DUMMY_HASH); // equalize timing; result discarded
+      await verifyHash(password, await DUMMY_HASH); // equalize timing; result discarded
       return null;
     }
-    return verifyHash(password, user.passwordHash) ? toPublic(user) : null;
+    return (await verifyHash(password, user.passwordHash)) ? toPublic(user) : null;
   }
 
   function get(id) {
@@ -165,11 +173,11 @@ function makeUsersStore(authDataDir) {
     return toPublic(user);
   }
 
-  function resetPassword(id, newPassword) {
+  async function resetPassword(id, newPassword) {
     const user = findById(id);
     if (!user) throw new UserError(404, 'user not found');
     requirePassword(newPassword);
-    user.passwordHash = hashPassword(newPassword);
+    user.passwordHash = await hashPassword(newPassword);
     user.updatedAt = new Date().toISOString();
     persist();
     return toPublic(user);

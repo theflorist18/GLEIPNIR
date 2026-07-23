@@ -556,3 +556,18 @@ test('M25b: audit history backfill materializes derivable events once, idempoten
   s3.close();
   app3.locals.db.close();
 });
+
+// S19: list/search results are bounded. Default cap plus an optional ?limit
+// override (itself capped) so a query can never return an unbounded set.
+test('S19: /cases and /evidence-index bound their result sets via ?limit', async (t) => {
+  const url = await start(t);
+  for (let i = 0; i < 5; i += 1) await makeCase(url, `Case ${i}`);
+  const one = await json(await call(url, 'GET', '/cases?limit=1'));
+  assert.equal(one.length, 1, '?limit=1 must return at most one case');
+  const all = await json(await call(url, 'GET', '/cases'));
+  assert.equal(all.length, 5, 'default cap (500) does not clip a small store');
+
+  for (let i = 0; i < 4; i += 1) await indexEvidence(url, `ev-${i}`);
+  const ev1 = await json(await call(url, 'GET', '/evidence-index?q=ev-&limit=2'));
+  assert.equal(ev1.length, 2, '?limit=2 must cap evidence search');
+});

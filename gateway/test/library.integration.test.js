@@ -73,10 +73,10 @@ async function bootStack(t) {
 
   const users = makeUsersStore(tmp('gleipnir-lib-auth-'));
   const sessions = makeSessions({ ttlSeconds: 3600 });
-  users.seedAdmin({ username: 'root', password: 'pw' });
-  users.create({ username: 'lena', password: 'pw', role: 'lead' });
-  users.create({ username: 'ivy', password: 'pw' });
-  users.create({ username: 'mallory', password: 'pw' });
+  await users.seedAdmin({ username: 'root', password: 'pw' });
+  await users.create({ username: 'lena', password: 'pw', role: 'lead' });
+  await users.create({ username: 'ivy', password: 'pw' });
+  await users.create({ username: 'mallory', password: 'pw' });
 
   const fabric = fakeFabric();
   const app = createApp({
@@ -608,6 +608,22 @@ test('B1: a Unicode evidence filename is stored intact, not mojibake', SKIP, asy
   const row = rows.find((r) => r.evidenceId === 'ev-uni');
   assert.ok(row, 'evidence row not found');
   assert.equal(row.originalFilename, name);
+});
+
+// S20: the declared multipart mimetype is attacker-controlled and drives the
+// SPA's render decision (application/pdf -> sandboxed iframe). A non-PDF
+// masquerading as application/pdf is stored/indexed as application/octet-stream
+// (download-only) via server-side magic-byte sniffing; a real PDF keeps its type.
+test('S20: a non-PDF declared application/pdf is downgraded to octet-stream', async (t) => {
+  const s = await bootStack(t);
+  await s.upload('ivy', Buffer.from('<html>not a pdf</html>'), { evidenceId: 'ev-fakepdf' }, 'evil.pdf', 'application/pdf');
+  await s.upload('ivy', Buffer.from('%PDF-1.4\n%real pdf bytes'), { evidenceId: 'ev-realpdf' }, 'ok.pdf', 'application/pdf');
+
+  const rows = await (await fetch(`${s.url}/api/v1/evidence/search?q=ev-`, { headers: s.as('ivy') })).json();
+  const fake = rows.find((r) => r.evidenceId === 'ev-fakepdf');
+  const real = rows.find((r) => r.evidenceId === 'ev-realpdf');
+  assert.equal(fake.mimeType, 'application/octet-stream', 'fake pdf must be downgraded');
+  assert.equal(real.mimeType, 'application/pdf', 'real pdf keeps its type');
 });
 
 // Regression: both of these reach the registry through PATCH /evidence-index/:id,

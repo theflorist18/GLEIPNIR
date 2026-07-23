@@ -110,6 +110,11 @@ function createApp(overrides) {
       sizeBytes: bytes.length,
       integrityProof: niUri(bytes),
       storedAt: new Date().toISOString(),
+      // S9: DELETE is ingest-rollback-only (CONTRACTS §6). Enforce that server-
+      // side — the caller must present THIS token, returned only to whoever did
+      // the PUT, so holding the internal token alone cannot delete committed
+      // evidence. Stored in the sidecar, never served on GET /meta.
+      rollbackToken: crypto.randomBytes(16).toString('hex'),
     };
     try {
       // 'wx' = exclusive create: immutability is enforced at the filesystem,
@@ -124,7 +129,10 @@ function createApp(overrides) {
     } catch (err) {
       return serverError(res, 'meta write failed', err);
     }
-    return res.status(201).json({ integrityProof: meta.integrityProof, sizeBytes: meta.sizeBytes, storedAt: meta.storedAt });
+    return res.status(201).json({
+      integrityProof: meta.integrityProof, sizeBytes: meta.sizeBytes, storedAt: meta.storedAt,
+      rollbackToken: meta.rollbackToken,
+    });
   });
 
   app.get('/blobs/:evidenceId', async (req, res) => {
@@ -149,7 +157,8 @@ function createApp(overrides) {
 
   app.get('/blobs/:evidenceId/meta', async (req, res) => {
     try {
-      res.json(await readMeta(req.params.evidenceId));
+      const { rollbackToken, ...pub } = await readMeta(req.params.evidenceId); // never leak the token (S9)
+      res.json(pub);
     } catch (err) {
       if (err.code === 'ENOENT') return res.status(404).json({ error: 'blob not found', evidenceId: req.params.evidenceId });
       return serverError(res, 'read failed', err);
@@ -175,10 +184,25 @@ function createApp(overrides) {
     res.json({ ok: actual === expected, expected, actual, sizeBytes: bytes.length });
   });
 
-  // Orphan cleanup only: the gateway calls this when an on-chain CreateEvidence
+  // Orphan cleanup ONLY: the gateway calls this when an on-chain CreateEvidence
   // fails AFTER the blob write succeeded. Committed evidence is never deleted.
+  // S9: enforce the rollback-only contract server-side — the caller must present
+  // the rollbackToken returned by THIS blob's PUT (?rollbackToken=...). So even
+  // with the internal token, a caller who did not perform the ingest cannot
+  // delete existing evidence. Read the sidecar first to compare.
   app.delete('/blobs/:evidenceId', async (req, res) => {
     const { evidenceId } = req.params;
+    let meta;
+    try {
+      meta = await readMeta(evidenceId);
+    } catch (err) {
+      if (err.code === 'ENOENT') return res.status(404).json({ error: 'blob not found', evidenceId });
+      return serverError(res, 'read failed', err);
+    }
+    const presented = req.get('x-gleipnir-rollback-token') || req.query.rollbackToken || '';
+    if (!meta.rollbackToken || presented !== meta.rollbackToken) {
+      return res.status(403).json({ error: 'delete requires the ingest rollback token (rollback-only)' });
+    }
     try {
       await fsp.unlink(blobFor(evidenceId));
     } catch (err) {

@@ -135,13 +135,23 @@ test('verify: ok against stored proof and explicit expected; detects mismatch an
   assert.equal(tampered.ok, false);
 });
 
-test('DELETE removes blob + sidecar (orphan cleanup); 404 when missing', async (t) => {
+test('DELETE is rollback-token-gated (S9); with the token removes blob + sidecar', async (t) => {
   const url = await start(t);
-  await putBlob(url, 'ev-d', Buffer.from('orphan'));
-  assert.equal((await fetch(`${url}/blobs/ev-d`, { method: 'DELETE', headers: HDR })).status, 204);
+  const { rollbackToken } = await (await putBlob(url, 'ev-d', Buffer.from('orphan'))).json();
+  assert.match(rollbackToken, /^[0-9a-f]{32}$/);
+
+  // Without the token: 403, blob survives. The token is not leaked via /meta.
+  assert.equal((await fetch(`${url}/blobs/ev-d`, { method: 'DELETE', headers: HDR })).status, 403);
+  assert.equal((await fetch(`${url}/blobs/ev-d`, { method: 'DELETE', headers: { ...HDR, 'x-gleipnir-rollback-token': 'wrong' } })).status, 403);
+  assert.equal((await fetch(`${url}/blobs/ev-d`, { headers: HDR })).status, 200, 'blob must survive a tokenless delete');
+  assert.equal((await (await fetch(`${url}/blobs/ev-d/meta`, { headers: HDR })).json()).rollbackToken, undefined);
+
+  // With the token: 204, and the blob + sidecar are gone.
+  assert.equal((await fetch(`${url}/blobs/ev-d`, { method: 'DELETE', headers: { ...HDR, 'x-gleipnir-rollback-token': rollbackToken } })).status, 204);
   assert.equal((await fetch(`${url}/blobs/ev-d`, { headers: HDR })).status, 404);
   assert.equal((await fetch(`${url}/blobs/ev-d/meta`, { headers: HDR })).status, 404);
-  assert.equal((await fetch(`${url}/blobs/ev-d`, { method: 'DELETE', headers: HDR })).status, 404);
+  // A repeat delete of a now-missing blob is 404.
+  assert.equal((await fetch(`${url}/blobs/ev-d`, { method: 'DELETE', headers: { ...HDR, 'x-gleipnir-rollback-token': rollbackToken } })).status, 404);
 });
 
 test('path traversal and sidecar-collision ids are rejected with 400', async (t) => {

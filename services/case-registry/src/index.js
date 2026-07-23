@@ -187,6 +187,16 @@ const categoryWire = (r) => r && ({
 // LIKE-escape so a search term containing % or _ matches literally.
 const likeOf = (q) => `%${String(q).replace(/([\\%_])/g, '\\$1')}%`;
 
+// S19: bound list/search result sets so a query can never return an unbounded
+// set. Optional ?limit override, itself capped. (The activity feed already caps
+// its own results; this covers /cases and /evidence-index search.)
+const DEFAULT_LIST_LIMIT = 500;
+const MAX_LIST_LIMIT = 1000;
+const boundedLimit = (q) => {
+  const n = parseInt(q, 10);
+  return Number.isFinite(n) && n > 0 ? Math.min(n, MAX_LIST_LIMIT) : DEFAULT_LIST_LIMIT;
+};
+
 function createApp(overrides) {
   const cfg = { ...loadConfig(), ...(overrides || {}) };
   fs.mkdirSync(cfg.dataDir, { recursive: true });
@@ -320,9 +330,10 @@ function createApp(overrides) {
     }
     // Participant-filtered listings join the roster so each row carries the
     // caller's own role (myRoleInCase); unfiltered listings stay role-free.
+    params.__limit = boundedLimit(req.query.limit);
     const sql = participant
-      ? `SELECT c.*, cp.role_in_case AS my_role FROM cases c JOIN case_participants cp ON cp.case_id = c.id ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY c.created_at DESC`
-      : `SELECT c.* FROM cases c ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY c.created_at DESC`;
+      ? `SELECT c.*, cp.role_in_case AS my_role FROM cases c JOIN case_participants cp ON cp.case_id = c.id ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY c.created_at DESC LIMIT @__limit`
+      : `SELECT c.* FROM cases c ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY c.created_at DESC LIMIT @__limit`;
     res.json(db.prepare(sql).all(params).map(caseWire));
   });
 
@@ -589,7 +600,8 @@ function createApp(overrides) {
                    OR (case_id IS NULL AND uploaded_by = @vis))`);
       params.vis = visibleToUserId;
     }
-    const sql = `SELECT * FROM evidence_index ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY uploaded_at DESC`;
+    params.__limit = boundedLimit(req.query.limit);
+    const sql = `SELECT * FROM evidence_index ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY uploaded_at DESC LIMIT @__limit`;
     res.json(db.prepare(sql).all(params).map(evidenceWire));
   });
 

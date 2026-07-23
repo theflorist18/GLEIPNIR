@@ -33,6 +33,23 @@ function decodeUploadFilename(name) {
   try { return Buffer.from(name, 'latin1').toString('utf8'); } catch { return name; }
 }
 
+// Content-type the SPA can trust for its render decision (S20). The declared
+// multipart mimetype is attacker-controlled, and the only type the SPA renders
+// as ACTIVE content is application/pdf (in a sandboxed iframe, S11). Verify the
+// PDF magic bytes; a non-PDF masquerading as application/pdf is stored as
+// application/octet-stream so it downloads instead of framing. Defence-in-depth
+// behind the sandbox; other previewable types (image/video/audio/text) render
+// in inert elements and are left as declared.
+function safeContentType(buffer, declared) {
+  const d = String(declared || 'application/octet-stream');
+  if (d === 'application/pdf') {
+    const isPdf = Buffer.isBuffer(buffer) && buffer.length >= 5
+      && buffer.slice(0, 5).toString('latin1') === '%PDF-';
+    if (!isPdf) return 'application/octet-stream';
+  }
+  return d;
+}
+
 function isNotFound(err) {
   return /not[\s-]?found|does not exist|no such key/i.test(String((err && err.message) || ''));
 }
@@ -112,7 +129,7 @@ function createApp(deps) {
   const loginMaxAttempts = cfg.loginMaxAttempts || 5;
   const loginWindowMs = (cfg.loginWindowSeconds || 60) * 1000;
 
-  app.post('/api/v1/auth/login', (req, res) => {
+  app.post('/api/v1/auth/login', async (req, res) => {
     if (!users || !sessions) return res.status(503).json({ error: 'user auth not configured' });
     const { username, password } = req.body || {};
     if (typeof username !== 'string' || typeof password !== 'string') {
@@ -132,7 +149,7 @@ function createApp(deps) {
       return res.status(429).json({ error: 'too many failed attempts — try again later' });
     }
 
-    const user = users.verifyPassword(username, password);
+    const user = await users.verifyPassword(username, password);
     if (!user || !user.active) {
       if (rec && now - rec.windowStart < loginWindowMs) {
         rec.count += 1;
@@ -192,7 +209,7 @@ function createApp(deps) {
   }));
 
   app.post('/api/v1/admin/users', requireAdmin, wrap(async (req, res) => {
-    res.status(201).json(users.create(req.body || {}));
+    res.status(201).json(await users.create(req.body || {}));
   }));
 
   app.patch('/api/v1/admin/users/:id', requireAdmin, wrap(async (req, res) => {
@@ -200,7 +217,7 @@ function createApp(deps) {
   }));
 
   app.post('/api/v1/admin/users/:id/reset-password', requireAdmin, wrap(async (req, res) => {
-    const updated = users.resetPassword(req.params.id, (req.body || {}).password);
+    const updated = await users.resetPassword(req.params.id, (req.body || {}).password);
     // A reset is the response to a suspected compromise — kill the target's
     // live sessions so a stolen token cannot outlive it (S5).
     if (sessions && sessions.destroyForUser) sessions.destroyForUser(req.params.id);
@@ -231,6 +248,35 @@ function createApp(deps) {
 
   const proxy = (res, out) => res.status(out.status).json(out.body);
   const isNonAdminUser = (req) => req.principal && req.principal.kind === 'user' && req.principal.role !== 'admin';
+
+  // Per-session rate limit for the auto-logging read routes (S17). view /
+  // download / export / coc-report each append an on-chain AccessLog, so an
+  // authenticated user can otherwise drive unbounded ledger writes from GETs.
+  // Fixed window per username; the service token is exempt (it never auto-logs
+  // and the benchmark drives it hard). Generous enough for a human examiner
+  // (default 120/min); tunable via config.
+  const autoLogHits = new Map(); // username -> { count, windowStart }
+  const autoLogMax = cfg.autoLogMaxPerWindow || 120;
+  const autoLogWindowMs = (cfg.autoLogWindowSeconds || 60) * 1000;
+  const limitAutoLog = (req, res, next) => {
+    if (!req.principal || req.principal.kind !== 'user') return next(); // service token exempt
+    const key = req.principal.username;
+    const now = Date.now();
+    if (autoLogHits.size > 10000) {
+      for (const [k, v] of autoLogHits) if (now - v.windowStart >= autoLogWindowMs) autoLogHits.delete(k);
+    }
+    const rec = autoLogHits.get(key);
+    if (rec && now - rec.windowStart < autoLogWindowMs) {
+      if (rec.count >= autoLogMax) {
+        res.set('retry-after', String(Math.ceil((rec.windowStart + autoLogWindowMs - now) / 1000)));
+        return res.status(429).json({ error: 'too many evidence reads — slow down' });
+      }
+      rec.count += 1;
+    } else {
+      autoLogHits.set(key, { count: 1, windowStart: now });
+    }
+    return next();
+  };
 
   // Per-evidence access gate. The service token always bypasses (the
   // benchmark/infra path; case scoping is a library concern). Admins bypass
@@ -507,7 +553,7 @@ function createApp(deps) {
   // AccessLog('coc-report') after assembly (same posture as /export: the
   // reported trails are pre-export; the report's own ACCESS events land
   // after). Never for the service token.
-  app.get('/api/v1/cases/:id/coc-report', requireLibrary, wrap(async (req, res) => {
+  app.get('/api/v1/cases/:id/coc-report', requireLibrary, limitAutoLog, wrap(async (req, res) => {
     const out = await caseRegistry.request('GET', `/cases/${encodeURIComponent(req.params.id)}`);
     if (out.status !== 200 || !out.body) return res.status(404).json({ error: 'case not found' });
     const detail = out.body;
@@ -643,8 +689,9 @@ function createApp(deps) {
     }
 
     const originalFilename = decodeUploadFilename(req.file.originalname);
+    const contentType = safeContentType(req.file.buffer, req.file.mimetype);
     const stored = await evidenceStore.put(evidenceId, req.file.buffer, {
-      contentType: req.file.mimetype || 'application/octet-stream',
+      contentType,
       originalFilename,
     });
     if (stored.status === 409) throw new RequestError(409, 'evidence already exists');
@@ -669,7 +716,9 @@ function createApp(deps) {
       r = await routeWrite({ variant: V, fn: 'CreateEvidence', ccArgs: [evidenceId, JSON.stringify(head)], event, caseId: undefined }, routerDeps);
     } catch (err) {
       // The blob is orphaned if the chain write failed — best-effort cleanup.
-      await evidenceStore.del(evidenceId).then(() => {}, () => {});
+      // Pass the rollback token from the PUT so evidence-store permits the delete
+      // (S9: DELETE is rollback-only).
+      await evidenceStore.del(evidenceId, stored.body && stored.body.rollbackToken).then(() => {}, () => {});
       throw err;
     }
 
@@ -677,7 +726,7 @@ function createApp(deps) {
       evidenceId,
       caseId: caseId || undefined,
       originalFilename,
-      mimeType: req.file.mimetype || null,
+      mimeType: contentType, // sniffed-safe type (S20) — drives the SPA render decision
       sizeBytes: req.file.size,
       integrityProof,
       uploadedBy: actor,
@@ -743,7 +792,7 @@ function createApp(deps) {
   // ---- reads (evaluate, always direct) ----
   // Under a user session every evidence read is (a) authz-gated per case and
   // (b) view/download/export auto-append a synchronous AccessLog event.
-  app.get('/api/v1/evidence/:id', wrap(async (req, res) => {
+  app.get('/api/v1/evidence/:id', limitAutoLog, wrap(async (req, res) => {
     await ensureEvidenceAccess(req, req.params.id);
     const out = await routeRead({ variant: V, fn: 'ReadEvidence', args: [req.params.id], caseId: req.query.caseId }, routerDeps);
     await logAccess(req, req.params.id, 'view', req.query.caseId);
@@ -762,7 +811,7 @@ function createApp(deps) {
   // Blob CONTENT is participant-only (M18): unlike view/audit/export, the
   // admin bypass does not apply here — {content:true} sends admins through
   // the same case-participation check as everyone else.
-  app.get('/api/v1/evidence/:id/download', requireLibrary, wrap(async (req, res) => {
+  app.get('/api/v1/evidence/:id/download', requireLibrary, limitAutoLog, wrap(async (req, res) => {
     await ensureEvidenceAccess(req, req.params.id, { content: true });
     const upstream = await evidenceStore.fetchBlob(req.params.id);
     if (upstream.status === 404) throw new RequestError(404, 'no stored binary for this evidence');
@@ -776,7 +825,7 @@ function createApp(deps) {
     Readable.fromWeb(upstream.body).pipe(res);
   }));
 
-  app.get('/api/v1/evidence/:id/export', wrap(async (req, res) => {
+  app.get('/api/v1/evidence/:id/export', limitAutoLog, wrap(async (req, res) => {
     await ensureEvidenceAccess(req, req.params.id);
     const [record, audit] = await Promise.all([
       routeRead({ variant: V, fn: 'ReadEvidence', args: [req.params.id], caseId: req.query.caseId }, routerDeps),
