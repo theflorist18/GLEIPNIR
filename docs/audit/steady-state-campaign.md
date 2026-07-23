@@ -79,6 +79,8 @@ benefit needs a single-channel-saturating regime, above this campaign's range.
 
 ## Status
 All four variants collected; RQ1 (storage/compression) and RQ2 (verification latency, with
-step attribution) answered. Deferred, non-blocking follow-ups: `package_ccaas` determinism
-(reproducibility), and the Chunk-4b security items (async scrypt, rate limiting) — neither
-affects any campaign number (Caliper uses the service token + JSON path).
+step attribution) answered. All follow-ups since closed: the Chunk-4b security items
+(async scrypt, auto-log rate limit, content sniffing, list caps, DELETE token — commit
+`bb319b8`) and `package_ccaas` determinism (`8a419e7` — the package id is now byte-reproducible
+from the cited commit; an independent packaging run reproduces up.sh's live `CCAAS_ID_APP`
+exactly). None affected any campaign number (Caliper uses the service token + JSON path).
