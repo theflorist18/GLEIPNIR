@@ -111,13 +111,25 @@ package_ccaas() {
   # channel-artifacts must already exist here: installs are hoisted before the
   # first create_channel (F46), whose mkdir used to cover this on a clean tree
   # (audit F73, first live bring-up).
+  # DETERMINISTIC packaging (reproducibility): the package id is a sha256 of
+  # these bytes, so it must be identical on every bring-up of the cited commit.
+  # `tar -czf` was non-deterministic — gzip embeds a build timestamp and tar
+  # records per-run file mtimes/ownership — so a re-package produced a DIFFERENT
+  # id that no running ccaas serves (the Parallel c>1 endorsement bug, worked
+  # around in provision-channel.sh by reusing CCAAS_ID_APP; fixed at the root
+  # here). Pin all of it: --mtime=@0 --owner/group=0 --numeric-owner remove tar's
+  # timestamps/ownership, and gzip -n drops the gzip header's mtime+name. Written
+  # to files (not a pipe) so `set -e` catches a tar/gzip failure. Verified
+  # byte-identical across repeated runs. GNU tar 1.34 in fabric-tools.
   cli "set -e
 mkdir -p ${CTN_ARTIFACTS}
 tmp=\$(mktemp -d)
 printf '{\"address\":\"%s:9999\",\"dial_timeout\":\"10s\",\"tls_required\":false}' '${ccaas_host}' > \$tmp/connection.json
 printf '{\"type\":\"ccaas\",\"label\":\"${CC_LABEL}\"}' > \$tmp/metadata.json
-tar -C \$tmp -czf \$tmp/code.tar.gz connection.json
-tar -C \$tmp -czf ${CTN_REPO}/network/channel-artifacts/${CC_NAME}-${ccaas_host}.tar.gz metadata.json code.tar.gz
+tar --mtime=@0 --owner=0 --group=0 --numeric-owner -C \$tmp -cf \$tmp/code.tar connection.json
+gzip -n < \$tmp/code.tar > \$tmp/code.tar.gz
+tar --mtime=@0 --owner=0 --group=0 --numeric-owner -C \$tmp -cf \$tmp/pkg.tar metadata.json code.tar.gz
+gzip -n < \$tmp/pkg.tar > ${CTN_REPO}/network/channel-artifacts/${CC_NAME}-${ccaas_host}.tar.gz
 peer lifecycle chaincode calculatepackageid ${CTN_REPO}/network/channel-artifacts/${CC_NAME}-${ccaas_host}.tar.gz"
 }
 
