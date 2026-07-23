@@ -24,13 +24,14 @@ Caliper machinery are in scope only where the library touches them.
 | S14 lead cannot add admin to roster | **fixed** + test |
 | S15 generic gateway error body | **fixed** |
 | S16 evidence-store generic errors | **fixed** |
-| S6 async scrypt | **deferred** — invasive across boot + 3 test files; medium DoS on local-dev; do in isolation |
-| S17 rate-limit auto-log routes | **deferred** — pairs with S6 (shared rate-limit utility); benchmark path unaffected |
-| S9 evidence-store DELETE scope guard | **deferred** — largely resolved by S2 (4006 no longer host-reachable) |
-| S19 LIMIT on list/search | **deferred** — low; behaviour change needs a frontend check |
-| S20 server-side content sniffing | **deferred** — S11 sandbox is the load-bearing mitigation; sniffing is defence-in-depth |
+| S6 async scrypt | **fixed** (`bb319b8`) + test — hashing on the libuv threadpool; login no longer blocks the event loop |
+| S17 rate-limit auto-log routes | **fixed** (`bb319b8`) + test — per-session cap on view/download/export/coc-report; service token exempt |
+| S9 evidence-store DELETE scope guard | **fixed** (`bb319b8`) + test — DELETE now requires the PUT's rollback token |
+| S19 LIMIT on list/search | **fixed** (`bb319b8`) + test — default 500 cap, `?limit` override capped at 1000 |
+| S20 server-side content sniffing | **fixed** (`bb319b8`) + test — a non-PDF declared application/pdf is downgraded to octet-stream |
 
-Deferred items are tracked as a follow-up; none is high-severity once S1/S2 land.
+All fixable findings are now resolved. Only open item: `package_ccaas` non-determinism
+(a reproducibility gap surfaced during the campaign, not a library security finding).
 
 ---
 
