@@ -292,3 +292,40 @@ the Chunk 11 rebuild.
 **Residual caveat — [CAVEAT D3].** Password policy is non-empty-only, and sessions live
 over plaintext HTTP — non-production posture, documented. (No password-complexity rule was
 added: it would change UX/fixtures and is a documented thesis caveat, not a defect.)
+
+---
+
+## A08 — Software & Data Integrity Failures
+
+**What it is.** Integrity of data, updates, and the supply chain: unverified data,
+insecure deserialization, tampering with stored artifacts, unpinned dependencies.
+
+**GLEIPNIR controls (live-verified, `scratchpad/probe-a08.sh`, 3/3).**
+- **Evidence integrity is cryptographic and end-to-end.** The on-chain `ni:///sha-256`
+  proof decodes to the **exact** SHA-256 of the uploaded bytes (probe decoded the ni
+  base64url payload and matched `sha256sum`); the ledger holds only the proof, never the
+  binary; download bytes hash-match the upload.
+- **Blobs are immutable:** exclusive `wx` create, a second PUT of the same id → **409**
+  (probe confirmed).
+- **[FIXED S9]** evidence-store `DELETE /blobs/:id` requires the PUT's rollback token
+  (evidence-store suite 9/9 green in-env); holding the internal token alone can no longer
+  destroy committed evidence.
+- **Merkle anchoring:** SHA-256 tree, roots keyed on `(scopeId,batchId)` with duplicate
+  rejection + `batchEpoch` namespacing — the on-chain root of trust (S1 closes the
+  batchId-squat once `requireService` gates the sink).
+- **Supply-chain integrity:** `npm ci --omit=dev` against committed lockfiles in every
+  Node Dockerfile (byte-reproducible); `package_ccaas` determinism fixed (`8a419e7`) so the
+  chaincode package id is reproducible.
+- **Deserialization:** `JSON.parse` is used only over trusted local stores (users.json,
+  runs); request bodies go through `express.json()`, now with the N6 terminal handler
+  catching malformed input. No untrusted deserialization sink.
+
+**New fixes:** none new here — the `benchmark/package-lock.json` integrity pin already
+exists; runtime dep patching landed in A06/N5.
+
+**Residual caveat — [CAVEAT D1].** The **receipt store is deliberately un-hardened** — no
+auth, no hash chain, no signatures, no replication (CLAUDE.md invariant). Its weaker
+integrity is a **measured property** of the design (availability exposure of the *witness*,
+not integrity of the *ledger* — the on-chain Merkle root remains the root of trust).
+**Documented, not fixed** — hardening it would destroy the thesis's measured caveat. (S2's
+port-unpublish is not hardening: it adds no integrity mechanism.)
