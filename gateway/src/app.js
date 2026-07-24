@@ -13,6 +13,7 @@ const { niUri } = require('./ni');
 const { toCsv } = require('./csv');
 const { routeWrite, routeRead, channelFor, RequestError } = require('./variantRouter');
 const { makeAuth, bearerOf } = require('./auth');
+const { makeSecurityLog } = require('./securityLog');
 
 const uuid = () => crypto.randomUUID();
 const nowIso = () => new Date().toISOString();
@@ -99,7 +100,9 @@ function createApp(deps) {
     ...config,
   };
   const routerDeps = { fabric, batcher, defaultChannel: cfg.defaultChannel };
-  const auth = makeAuth({ token: cfg.token, sessions, users });
+  // Security-event log (N4). Tests may inject a fake sink via deps.securityLog.
+  const securityLog = deps.securityLog || makeSecurityLog({ enabled: cfg.securityLogEnabled !== false });
+  const auth = makeAuth({ token: cfg.token, sessions, users, securityLog });
 
   const app = express();
   // The gateway sits behind exactly one reverse proxy (the nginx container that
@@ -162,6 +165,7 @@ function createApp(deps) {
     }
     const rec = loginFailures.get(key);
     if (rec && now - rec.windowStart < loginWindowMs && rec.count >= loginMaxAttempts) {
+      securityLog.loginLockout(req, username);
       res.set('retry-after', String(Math.ceil((rec.windowStart + loginWindowMs - now) / 1000)));
       return res.status(429).json({ error: 'too many failed attempts — try again later' });
     }
@@ -173,6 +177,7 @@ function createApp(deps) {
       } else {
         loginFailures.set(key, { count: 1, windowStart: now });
       }
+      securityLog.loginFailure(req, username);
       return res.status(401).json({ error: 'invalid credentials' });
     }
     loginFailures.delete(key);
@@ -312,15 +317,18 @@ function createApp(deps) {
     if (status !== 200 || !body) throw new RequestError(502, 'authz check failed');
     if (!body.allowed) {
       // Unknown-to-the-library evidence 404s so ids can't be probed.
+      securityLog.authzDenied(req, `evidence_access:${body.reason || 'denied'}`);
       throw new RequestError(body.reason === 'unknown-evidence' ? 404 : 403, 'access to this evidence is denied');
     }
     // M25 role ladder: viewer = view/export, contributor = +write events and
     // annotations, lead = +remove. The 'uploader' pseudo-role (own
     // uncategorized evidence — no case, so no lead exists) keeps both.
     if (remove && !['lead', 'uploader'].includes(body.roleInCase)) {
+      securityLog.authzDenied(req, 'evidence_remove_requires_lead');
       throw new RequestError(403, 'the case lead role is required to remove evidence');
     }
     if (write && !['contributor', 'lead', 'uploader'].includes(body.roleInCase)) {
+      securityLog.authzDenied(req, 'evidence_write_requires_contributor');
       throw new RequestError(403, 'a contributor role in the case is required to write');
     }
   }
@@ -331,13 +339,22 @@ function createApp(deps) {
   // role. Non-participants get 404 so case ids can't be probed. Returns the
   // case detail for lead callers (admins return null — no fetch needed).
   async function ensureCaseLead(req, caseId) {
-    if (!req.principal || req.principal.kind !== 'user') throw new RequestError(403, 'user session required');
+    if (!req.principal || req.principal.kind !== 'user') {
+      securityLog.authzDenied(req, 'case_mgmt_requires_user');
+      throw new RequestError(403, 'user session required');
+    }
     if (req.principal.role === 'admin') return null;
     const out = await caseRegistry.request('GET', `/cases/${encodeURIComponent(caseId)}`);
     if (out.status !== 200 || !out.body) throw new RequestError(404, 'case not found');
     const me = (out.body.participants || []).find((p) => p.userId === req.principal.username);
-    if (!me) throw new RequestError(404, 'case not found'); // don't leak existence
-    if (me.roleInCase !== 'lead') throw new RequestError(403, 'the case lead role is required');
+    if (!me) {
+      securityLog.authzDenied(req, 'case_not_participant');
+      throw new RequestError(404, 'case not found'); // don't leak existence
+    }
+    if (me.roleInCase !== 'lead') {
+      securityLog.authzDenied(req, 'case_lead_required');
+      throw new RequestError(403, 'the case lead role is required');
+    }
     // Re-check the caller's CURRENT global role, not just the case-role row: a
     // user demoted from global 'lead' to 'investigator' may still hold a stale
     // case-lead participant row, and users are deactivated-not-deleted, so

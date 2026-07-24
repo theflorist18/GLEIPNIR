@@ -9,6 +9,7 @@ const { createApp } = require('../src/app');
 const { makeUsersStore } = require('../src/users');
 const { makeSessions } = require('../src/sessions');
 const { safeEqual } = require('../src/auth');
+const { makeSecurityLog } = require('../src/securityLog');
 
 function tmpAuthDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'gleipnir-auth-'));
@@ -436,6 +437,44 @@ test('N3: idleTtlSeconds=0 disables the idle clock; absolute TTL still enforced'
   assert.equal(noIdle.get(t1)?.userId, 'usr-1');         // never idle-expires
   const absolute = makeSessions({ ttlSeconds: 0, idleTtlSeconds: 0 });
   assert.equal(absolute.get(absolute.create('usr-2')), null); // absolute clock still fires
+});
+
+// N4 (OWASP A09): security-relevant failures are logged as structured lines,
+// and a token/password is NEVER logged.
+test('N4: auth/authz failures emit structured security events; no secrets leak', async (t) => {
+  const lines = [];
+  const { deps } = await fakeDeps();
+  deps.securityLog = makeSecurityLog({ sink: { warn: (s) => lines.push(s) } });
+  const { server, url } = await listen(createApp(deps));
+  t.after(() => server.close());
+
+  await login(url, 'root', 'wrong-secret-password');                                   // login_failure
+  await fetch(`${url}/api/v1/auth/me`);                                                 // auth_failure missing_token
+  await fetch(`${url}/api/v1/auth/me`, { headers: asUser('super-secret-bad-token') });  // auth_failure invalid token
+  await fetch(`${url}/api/v1/admin/users`, { headers: asUser('secret-token') });        // authz_denied (service->admin)
+
+  assert.ok(lines.some((l) => l.includes('"sec":"login_failure"') && l.includes('"username":"root"')));
+  assert.ok(lines.some((l) => l.includes('"sec":"auth_failure"') && l.includes('missing_token')));
+  assert.ok(lines.some((l) => l.includes('"sec":"auth_failure"') && l.includes('invalid_or_expired_token')));
+  assert.ok(lines.some((l) => l.includes('"sec":"authz_denied"') && l.includes('role_required:admin')));
+  assert.ok(lines.every((l) => l.startsWith('[security] {')));
+
+  const joined = lines.join('\n');
+  assert.doesNotMatch(joined, /wrong-secret-password/); // attempted password never logged
+  assert.doesNotMatch(joined, /super-secret-bad-token/); // bad bearer never logged
+  assert.doesNotMatch(joined, /secret-token/);           // the service token value never logged
+});
+
+test('N4: successful auth emits NO security line (service-token hot path stays quiet)', async (t) => {
+  const lines = [];
+  const { deps } = await fakeDeps();
+  deps.securityLog = makeSecurityLog({ sink: { warn: (s) => lines.push(s) } });
+  const { server, url } = await listen(createApp(deps));
+  t.after(() => server.close());
+
+  assert.equal((await fetch(`${url}/api/v1/runs`, { headers: asUser('secret-token') })).status, 200);
+  assert.equal((await login(url, 'root', 'root-pw')).status, 200);
+  assert.equal(lines.length, 0, 'successful auth must not emit security events');
 });
 
 // ---- Chunk 4 security fixes ----

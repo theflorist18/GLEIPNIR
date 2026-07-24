@@ -33,10 +33,17 @@ function bearerOf(req) {
   return auth.startsWith('Bearer ') ? auth.slice(7) : null;
 }
 
-function makeAuth({ token, sessions, users }) {
+function makeAuth({ token, sessions, users, securityLog }) {
+  // Optional security-event channel (N4). Falls back to no-ops so existing
+  // callers/tests that don't pass one keep working unchanged.
+  const log = securityLog || { authFailure() {}, authzDenied() {} };
+
   function authenticate(req, res, next) {
     const bearer = bearerOf(req);
-    if (bearer === null) return res.status(401).json({ error: 'unauthorized' });
+    if (bearer === null) {
+      log.authFailure(req, 'missing_token');
+      return res.status(401).json({ error: 'unauthorized' });
+    }
     if (safeEqual(bearer, token)) {
       req.principal = { kind: 'service' };
       return next();
@@ -51,17 +58,20 @@ function makeAuth({ token, sessions, users }) {
         }
       }
     }
+    log.authFailure(req, 'invalid_or_expired_token');
     return res.status(401).json({ error: 'unauthorized' });
   }
 
   function requireUser(req, res, next) {
     if (req.principal && req.principal.kind === 'user') return next();
+    log.authzDenied(req, 'user_session_required');
     return res.status(403).json({ error: 'user session required' });
   }
 
   function requireRole(...roles) {
     return (req, res, next) => {
       if (req.principal && req.principal.kind === 'user' && roles.includes(req.principal.role)) return next();
+      log.authzDenied(req, `role_required:${roles.join('|')}`);
       const label = roles.length === 1 ? `${roles[0]} role required` : `one of [${roles.join(', ')}] roles required`;
       return res.status(403).json({ error: label });
     };
@@ -74,6 +84,7 @@ function makeAuth({ token, sessions, users }) {
   // the inverse of requireRole: only the service principal passes.
   function requireService(req, res, next) {
     if (req.principal && req.principal.kind === 'service') return next();
+    log.authzDenied(req, 'service_token_required');
     return res.status(403).json({ error: 'service token required' });
   }
 

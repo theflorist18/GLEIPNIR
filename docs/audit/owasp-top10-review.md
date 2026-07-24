@@ -329,3 +329,41 @@ integrity is a **measured property** of the design (availability exposure of the
 not integrity of the *ledger* — the on-chain Merkle root remains the root of trust).
 **Documented, not fixed** — hardening it would destroy the thesis's measured caveat. (S2's
 port-unpublish is not hardening: it adds no integrity mechanism.)
+
+---
+
+## A09 — Security Logging & Monitoring Failures
+
+**What it is.** Insufficient logging/alerting of security-relevant events, leaving attacks
+undetectable: no record of failed logins, lockouts, or authorization denials.
+
+**GLEIPNIR controls (pre-existing).**
+- The **on-chain audit trail** records every *successful* evidence write
+  (CREATE/TRANSFER/ACCESS/REMOVE) immutably with attributed actor — the product's core
+  strength.
+- **[FIXED S15/S16]** error bodies are sanitized (no stack/paths to clients); the N6
+  terminal handler (A05) closed the last leak.
+
+**Gap found + fixed — [NEW N4] (the clearest genuine gap this pass).** Before N4, **no**
+security-relevant *failure* was logged anywhere: failed logins, account lockouts,
+authorization denials (role/service/participation), and attempts on `/internal/anchor-root`
+were all silent, and there was no request logger. For a chain-of-custody system, the
+on-chain trail records only successful writes — an operator had no way to see an attack.
+
+Added `gateway/src/securityLog.js`: a lightweight structured (JSON) stderr channel wired
+into the login handler (`login_failure`, `login_lockout`), `auth.authenticate`
+(`auth_failure`: missing / invalid-or-expired token), `requireRole`/`requireService`/
+`requireUser` (`authz_denied` incl. the `/internal/anchor-root` service-token denial), and
+the `ensureEvidenceAccess`/`ensureCaseLead` per-case denials (IDOR/probe attempts). Design
+constraints, unit-verified:
+- **Only failures are logged** — a successful request emits nothing, so the service-token
+  benchmark hot path is untouched (test: successful service-token + user login → 0 lines).
+- **No secrets ever** — the logger receives only event type, coarse reason, the actor's
+  (already-public) username, method, path, ip; a test asserts the attempted password, a bad
+  bearer, and the service-token value never appear in output.
+
+Unit tests: 2 in `auth.test.js` (events emitted + no-secret guarantee; hot-path silence);
+full non-integration gateway suite 45/45. Live after the Chunk 11 rebuild.
+
+**Residual caveat:** no external SIEM/alerting or log persistence — stderr only, consistent
+with the single-host non-production posture (D3-adjacent). Documented.
