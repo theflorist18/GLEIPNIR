@@ -367,3 +367,37 @@ full non-integration gateway suite 45/45. Live after the Chunk 11 rebuild.
 
 **Residual caveat:** no external SIEM/alerting or log persistence — stderr only, consistent
 with the single-host non-production posture (D3-adjacent). Documented.
+
+---
+
+## A10 — Server-Side Request Forgery (SSRF)
+
+**What it is.** The server can be induced to make requests to an attacker-chosen
+destination (internal services, cloud metadata, arbitrary URLs).
+
+**GLEIPNIR controls (static verification, grep of every outbound call site).** There is
+**no SSRF surface**: every outbound `fetch`/client base URL is a fixed deployment config
+constant, and only `encodeURIComponent`'d request values ever appear as **path segments** —
+never a host, scheme, or origin.
+
+| Call site | Base (config constant) | Request-derived part |
+|---|---|---|
+| `app.js:885` `/verify` proxy | `cfg.verificationUrl` | `eventId` (path segment, encoded) |
+| `serviceClients.js:17` case-registry | `baseUrl` (`CASE_REGISTRY_URL`) | gateway-built path, params encoded |
+| `serviceClients.js:38,59,65` evidence-store | `baseUrl` (`EVIDENCE_STORE_URL`) | `evidenceId` (encoded) |
+| `batcherClient.js:10` | `batcherUrl` (`BATCHER_URL`) | none (fixed `/events`) |
+| `merkle-batcher` / `verification` internal calls | `cfg.anchorClientUrl` / `gatewayUrl` / `receiptStoreUrl` | scopeId/batchId/eventId (encoded) |
+
+Because `encodeURIComponent` escapes `/`, `:`, and `.`, even a crafted `eventId` like
+`http://evil/x` becomes an inert encoded segment appended to the fixed
+`verification:4004` host — it cannot redirect the request off-host. The anchor-client uses
+the Fabric gRPC SDK, not an HTTP-fetchable URL; `/internal/anchor-root` is
+service-principal-gated (S1).
+
+**New fixes:** none required — no SSRF surface exists.
+
+**Note (tangential, tracked separately):** on the **standard** variant a *direct* API call
+to `GET /evidence/:id/verify` returns a generic 502 because the `verification:4004` service
+only ships with the anchoring variants; the SPA never calls it on standard (it shows
+"Merkle: N/A"). Not SSRF, not user-facing — flagged as a separate cleanup item, out of
+strict OWASP scope.
