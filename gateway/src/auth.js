@@ -1,5 +1,19 @@
 'use strict';
 
+const crypto = require('node:crypto');
+
+// Constant-time bearer/token comparison (OWASP A02/A07). A plain `===` on a
+// secret leaks its length and a prefix-match position through timing. Hash both
+// sides to a fixed 32-byte digest first so timingSafeEqual always gets
+// equal-length buffers (it throws on a length mismatch) and the comparison is
+// constant-time regardless of the candidate's length. Mirrors the password
+// path, which is already timing-safe (users.js verifyHash).
+function safeEqual(a, b) {
+  const ah = crypto.createHash('sha256').update(String(a == null ? '' : a), 'utf8').digest();
+  const bh = crypto.createHash('sha256').update(String(b == null ? '' : b), 'utf8').digest();
+  return crypto.timingSafeEqual(ah, bh);
+}
+
 // Bearer authentication (M12). Two kinds of principal:
 //
 //   - service: the static GLEIPNIR_TOKEN. Contract-unchanged (docs/CONTRACTS.md
@@ -23,7 +37,7 @@ function makeAuth({ token, sessions, users }) {
   function authenticate(req, res, next) {
     const bearer = bearerOf(req);
     if (bearer === null) return res.status(401).json({ error: 'unauthorized' });
-    if (bearer === token) {
+    if (safeEqual(bearer, token)) {
       req.principal = { kind: 'service' };
       return next();
     }
@@ -66,4 +80,4 @@ function makeAuth({ token, sessions, users }) {
   return { authenticate, requireUser, requireRole, requireService };
 }
 
-module.exports = { makeAuth, bearerOf };
+module.exports = { makeAuth, bearerOf, safeEqual };

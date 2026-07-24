@@ -23,6 +23,15 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const Database = require('better-sqlite3');
 
+// Constant-time compare of the internal shared secret (OWASP A02): hash both
+// sides to a fixed length so timingSafeEqual never throws on a length mismatch
+// and the guard can't leak the token by timing.
+function safeEqual(a, b) {
+  const ah = crypto.createHash('sha256').update(String(a == null ? '' : a), 'utf8').digest();
+  const bh = crypto.createHash('sha256').update(String(b == null ? '' : b), 'utf8').digest();
+  return crypto.timingSafeEqual(ah, bh);
+}
+
 // Same charset contract as the receipt store's eventId guard (CONTRACTS §6);
 // applied to ids that reach SQL params or URLs.
 const SAFE_ID = /^[A-Za-z0-9._:-]+$/;
@@ -224,9 +233,12 @@ function createApp(overrides) {
 
   app.get('/healthz', (_req, res) => res.json({ ok: true }));
 
-  // Shared-secret guard: this service trusts only the gateway.
+  // Shared-secret guard: this service trusts only the gateway. Constant-time
+  // compare (OWASP A02) — hash both sides to a fixed length so timingSafeEqual
+  // never throws on a length mismatch and the check can't leak the token by
+  // timing.
   app.use((req, res, next) => {
-    if (req.get('x-gleipnir-internal-token') !== cfg.internalToken) {
+    if (!safeEqual(req.get('x-gleipnir-internal-token'), cfg.internalToken)) {
       return res.status(401).json({ error: 'unauthorized' });
     }
     // M25b: the acting username, attributed by the GATEWAY (session-derived,

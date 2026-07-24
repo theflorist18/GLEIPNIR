@@ -8,6 +8,7 @@ const path = require('node:path');
 const { createApp } = require('../src/app');
 const { makeUsersStore } = require('../src/users');
 const { makeSessions } = require('../src/sessions');
+const { safeEqual } = require('../src/auth');
 
 function tmpAuthDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'gleipnir-auth-'));
@@ -388,6 +389,31 @@ test('M17 upgrade: a pre-rename users.json (displayName) is migrated to name in 
   assert.equal(onDisk[0].name, 'Old Root');
   assert.equal(onDisk[0].displayName, undefined);
   assert.equal(makeUsersStore(dir).getByUsername('old-root').name, 'Old Root');
+});
+
+// N1 (OWASP A02/A07): the service/internal token comparison is constant-time.
+// safeEqual hashes both sides to a fixed length, so it returns a correct
+// boolean for equal, differing, and length-mismatched inputs without throwing
+// (a raw timingSafeEqual throws on unequal-length buffers).
+test('N1: safeEqual is a correct constant-time-style compare (no throw on length mismatch)', () => {
+  assert.equal(safeEqual('dev-token', 'dev-token'), true);
+  assert.equal(safeEqual('dev-token', 'dev-tokeX'), false);      // same length, differs
+  assert.equal(safeEqual('dev-token', 'dev-token-longer'), false); // different length, no throw
+  assert.equal(safeEqual('', ''), true);
+  assert.equal(safeEqual('secret', ''), false);
+  assert.equal(safeEqual(undefined, 'secret'), false);
+  assert.equal(safeEqual(null, null), true); // both coerce to '' — only reachable when a real token is unset
+});
+
+// Byte-compat guard for N1: a correct service token still authenticates and a
+// near-miss is refused, proving the constant-time swap didn't change behavior.
+test('N1: service token still authenticates after the constant-time swap; near-miss -> 401', async (t) => {
+  const { deps } = await fakeDeps();
+  const { server, url } = await listen(createApp(deps));
+  t.after(() => server.close());
+  assert.equal((await fetch(`${url}/api/v1/runs`, { headers: asUser('secret-token') })).status, 200);
+  assert.equal((await fetch(`${url}/api/v1/runs`, { headers: asUser('secret-tokeX') })).status, 401);
+  assert.equal((await fetch(`${url}/api/v1/runs`, { headers: asUser('secret-token-extra') })).status, 401);
 });
 
 // ---- Chunk 4 security fixes ----

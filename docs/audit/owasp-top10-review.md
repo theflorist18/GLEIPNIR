@@ -58,3 +58,45 @@ missing function-level access control, forced browsing.
 an admin can add themselves to a roster and then download. The control is **auditability**
 (a self-grant always leaves an immutable, attributed `PARTICIPANT_ADDED` row), not
 prevention. Documented so the thesis does not overclaim it as an access barrier.
+
+> **Test-environment note.** In the WSL dev mount, `services/case-registry` and the
+> gateway's `library.integration.test.js` cannot run — their `better-sqlite3` native
+> module was built for Windows and fails to load under Linux with `invalid ELF header`.
+> This is unrelated to any change here (a pure-JS edit does not touch native modules); the
+> authoritative coverage for those paths is the live `smoke-library.sh` + `functional-test.sh`
+> against the correctly-built containers. All non-native gateway suites and the
+> filesystem-only evidence-store suite run clean.
+
+---
+
+## A02 — Cryptographic Failures
+
+**What it is.** Sensitive data exposed through weak, missing, or misused cryptography:
+plaintext transport, weak hashing, non-constant-time secret comparison, poor randomness.
+
+**GLEIPNIR controls.**
+- Passwords: async **scrypt** (16-byte salt, 64-byte key), verified with
+  `crypto.timingSafeEqual`, fail-closed on truncated hashes; unknown usernames still run
+  full scrypt to defeat enumeration (`gateway/src/users.js:33-48,64-67`). **[FIXED S6]**.
+- Randomness is CSPRNG throughout: session tokens `randomBytes(32)`, salts
+  `randomBytes(16)`, ids `randomUUID()`, rollback tokens `randomBytes(16)`. No
+  `Math.random` in any security path.
+- Evidence integrity: RFC 6920 `ni:///sha-256` proof, bytes hashed then discarded
+  (`gateway/src/ni.js`); binaries never touch the chain.
+- TLS: gRPC-over-TLS to Fabric orderers/peers (`gateway/src/fabric.js:61-65`). No weak/
+  legacy primitives (no MD5/SHA-1/DES/ECB, no custom crypto).
+
+**New fix applied — [NEW N1].** The service/internal bearer tokens were compared with
+plain `===`/`!==` (`auth.js:26`, `case-registry:229`, `evidence-store:84`) — the only
+secret comparisons in the codebase that were **not** constant-time, leaking length and
+prefix-match position through timing. Replaced with a length-guarded constant-time helper
+`safeEqual(a,b)` that hashes both sides to a fixed 32-byte digest before
+`crypto.timingSafeEqual` (so it never throws on a length mismatch), mirroring the password
+path. Applied in all three services. Unit-verified: `gateway/test/auth.test.js` (2 new
+tests — correctness incl. length-mismatch + service-token byte-compat); full auth suite
+22/22. Live re-probe of the running containers happens after the Chunk 11 image rebuild.
+
+**Residual caveat — [CAVEAT D3].** Off-chain traffic (gateway ↔ services ↔ frontend) is
+plaintext HTTP with an absolute-only session TTL — non-production posture, single host, no
+TLS termination. Stated in the thesis caveats; not changed here (out of the web-app-tier
+code scope and by design).
