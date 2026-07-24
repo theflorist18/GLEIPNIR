@@ -165,7 +165,7 @@ business-logic flows.
 | Class | Items |
 |---|---|
 | **[FIXED]** S-items relevant to web-app tier | S1, S4, S5, S6, S7, S9, S10, S11, S12, S13, S14, S15, S16, S17, S19, S20 |
-| **[NEW]** gaps found + fixed here | **N1** constant-time token compare (A02/A07) · **N2** gateway-origin security headers (A05) · **N3** session idle timeout (A07) · **N4** security-event logging (A09) · **N5** dependency scan + benchmark lockfile (A06/A08) |
+| **[NEW]** gaps found + fixed here | **N1** constant-time token compare (A02/A07) · **N2** gateway-origin security headers (A05) · **N3** session idle timeout (A07) · **N4** security-event logging (A09) · **N5** dependency scan + benchmark lockfile (A06/A08) · **N6** terminal error handler — malformed-body stack-trace leak (A05/A09, found by live probe) |
 | **[CAVEAT]** intentional, do-NOT-fix | **D1** receipt store un-hardened (availability, not integrity, exposure) · **D2** committed default secrets (reproducible local-dev) · **D3** plaintext HTTP + absolute-only TTL + non-empty-only password policy · **D4** self-serviceable admin blob barrier (auditability, not prevention) · **S18** synchronous auto-log couples read availability to chain health (correct for CoC) |
 | **[STOP-and-ask]** needs contract amendment | **C1** the single shared static `GLEIPNIR_TOKEN` authenticates every route incl. internal; mechanism frozen by Caliper/smoke dependence — not touched |
 
@@ -173,3 +173,43 @@ business-logic flows.
 
 **Residual caveats:** D1–D4, S18, C1 as tabled above — these are measured thesis
 properties and belong in the paper's security-caveats section, not the defect list.
+
+---
+
+## A05 — Security Misconfiguration
+
+**What it is.** Insecure defaults, unnecessary exposure, missing hardening: open ports,
+verbose errors, missing security headers, default credentials, over-permissive config.
+
+**GLEIPNIR controls (verified live, `scratchpad/probe-a05.sh`).**
+- **[FIXED S2]** Internal service ports **4002–4006 refuse from the host** (probe: all 5
+  refuse); only `gateway:3000` and `frontend:8081` are published.
+- **[FIXED S12]** The nginx SPA edge sets `X-Frame-Options: DENY`,
+  `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, and a real CSP
+  (all confirmed present on `:8081`).
+- **[FIXED S7]** `trust proxy: 1` for correct client-IP throttling.
+- Node services run as non-root (`USER node`); no CORS surface (same-origin SPA via the
+  nginx `/api` proxy).
+
+**New fixes applied.**
+- **[NEW N2]** The gateway's own origin (`:3000`) set **no** security headers — anything
+  reaching it directly (bypassing nginx) got bare responses (probe confirmed the gap).
+  Added a response-header middleware in `gateway/src/app.js`: `nosniff`, `X-Frame-Options:
+  DENY`, `Referrer-Policy: no-referrer`, and a strict `default-src 'none'; frame-ancestors
+  'none'` CSP (the API returns only JSON, so it can be maximally strict). Response-side
+  only — success bodies and the service-token path are byte-unchanged.
+- **[NEW N6 — found by live probe]** A **malformed JSON body** to any endpoint returned
+  Express's **default HTML error page with a full stack trace and internal container paths**
+  (`/app/node_modules/body-parser/...`). S15 sanitized only the per-route `wrap()` handler;
+  `express.json()` throws its parse error in middleware *before* the routes, bypassing it.
+  Added a **terminal error-handling middleware** that keeps the client-error status, logs
+  any 5xx detail server-side, and returns a generic JSON body (`{"error":"invalid request
+  body"}` for a 400). Unit-verified: `app.test.js` (N2 headers present; N6 malformed body →
+  generic 400 with no `SyntaxError`/`node_modules`/`/app/`/`<pre>` leak). Live re-probe
+  after the Chunk 11 rebuild.
+
+**Residual caveat — [CAVEAT D2].** Default secrets (`dev-token`, `internal-dev-token`,
+`admin-dev-password`) are committed in `network/compose/.env` for a reproducible local-dev
+thesis artifact. The deeper design residual (single shared static token) is **C1**
+(STOP-and-ask, not touched). Out-of-scope infra items noted but not changed (web-app tier
+only): CA `-d` debug flag, ccaas `tls_required:false`, Fabric ports on `0.0.0.0`.

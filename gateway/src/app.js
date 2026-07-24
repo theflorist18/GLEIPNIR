@@ -110,6 +110,23 @@ function createApp(deps) {
   // a client reaching :3000 directly can still spoof X-Forwarded-For, an
   // accepted local-dev residual.
   app.set('trust proxy', 1);
+
+  // Security headers on the gateway's own origin (OWASP A05 / N2). The SPA edge
+  // (frontend/nginx.conf) already sets these for :8081, but the gateway is
+  // published on :3000 and anything reaching it directly (bypassing nginx) got
+  // bare responses. This API only ever returns JSON, so the policy can be
+  // maximally strict: deny framing, forbid content-type sniffing, leak no
+  // referrer, and a `default-src 'none'` CSP (the API loads no resources).
+  // Response-side only — the service-token auth path and every response body
+  // are byte-unchanged, so the benchmark is unaffected.
+  app.use((_req, res, next) => {
+    res.set('X-Content-Type-Options', 'nosniff');
+    res.set('X-Frame-Options', 'DENY');
+    res.set('Referrer-Policy', 'no-referrer');
+    res.set('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'");
+    next();
+  });
+
   app.use(express.json({ limit: '2mb' }));
 
   // Health check is unauthenticated.
@@ -886,6 +903,28 @@ function createApp(deps) {
     if (!r) return res.status(404).json({ error: 'run not found' });
     return res.json(r);
   }));
+
+  // Terminal error handler (OWASP A05/A09 / N6). Errors thrown in MIDDLEWARE
+  // before the route handlers — most notably a malformed or oversized JSON body
+  // rejected by express.json() — never reach the per-route wrap() sanitizer, so
+  // Express's built-in handler was returning a full HTML stack trace with
+  // internal container paths (/app/node_modules/...). S15 only covered wrap().
+  // Catch them here: keep the client-error status, but log any detail
+  // server-side and return a generic JSON body. Response-side only; the
+  // service-token path and success responses are unchanged.
+  // eslint-disable-next-line no-unused-vars
+  app.use((err, req, res, next) => {
+    if (res.headersSent) return next(err);
+    const raw = Number(err && (err.status || err.statusCode));
+    const status = raw >= 400 && raw < 600 ? raw : 500;
+    if (status >= 500) console.error('[gateway] middleware error:', (err && err.stack) || err);
+    const msg = status === 400 ? 'invalid request body'
+      : status === 413 ? 'payload too large'
+      : status === 415 ? 'unsupported media type'
+      : status < 500 ? 'bad request'
+      : 'internal error';
+    return res.status(status).json({ error: msg });
+  });
 
   app.locals.config = cfg;
   return app;

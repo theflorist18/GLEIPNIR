@@ -35,6 +35,32 @@ test('healthz is unauthenticated', async (t) => {
   assert.equal((await r.json()).ok, true);
 });
 
+test('N2: gateway origin sets security headers on every response (incl. healthz)', async (t) => {
+  const { deps } = fakeDeps();
+  const { server, url } = await listen(createApp(deps));
+  t.after(() => server.close());
+  const r = await fetch(`${url}/healthz`);
+  assert.equal(r.headers.get('x-content-type-options'), 'nosniff');
+  assert.equal(r.headers.get('x-frame-options'), 'DENY');
+  assert.equal(r.headers.get('referrer-policy'), 'no-referrer');
+  assert.match(r.headers.get('content-security-policy') || '', /default-src 'none'/);
+});
+
+test('N6: malformed JSON body -> generic 400, no stack/paths leaked', async (t) => {
+  const { deps } = fakeDeps();
+  const { server, url } = await listen(createApp(deps));
+  t.after(() => server.close());
+  const r = await fetch(`${url}/api/v1/auth/login`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: '{bad json',
+  });
+  assert.equal(r.status, 400);
+  const text = await r.text();
+  assert.equal(r.headers.get('content-type')?.startsWith('application/json'), true);
+  assert.deepEqual(JSON.parse(text), { error: 'invalid request body' });
+  // no Express default HTML stack page, no container paths, no parser internals
+  assert.doesNotMatch(text, /SyntaxError|node_modules|\/app\/|<pre>|at JSON\.parse/);
+});
+
 test('missing/invalid bearer token -> 401', async (t) => {
   const { deps } = fakeDeps();
   const { server, url } = await listen(createApp(deps));
