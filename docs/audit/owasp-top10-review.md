@@ -137,3 +137,39 @@ injection, cross-site scripting (XSS), CSV/formula injection, header/log injecti
 **New fixes:** none required — controls present and confirmed live.
 
 **Residual caveat:** none for this category.
+
+---
+
+## A04 — Insecure Design
+
+**What it is.** Weaknesses rooted in missing or ineffective control *design* (as opposed to
+implementation bugs): absent threat modeling, missing security requirements, insecure
+business-logic flows.
+
+**GLEIPNIR controls / design posture.**
+- **Explicit threat model.** STRIDE surface is deliberately materialized as four
+  separately-deployed units so the model maps 1:1 to artifacts (`docs/ARCHITECTURE.md:475`):
+  batcher, receipt store (tampering/repudiation), anchor-client identity/MSP
+  (spoofing/elevation), chaincode lifecycle (tampering/DoS).
+- **Structural security invariants** (not bolt-ons): evidence binaries always off-chain
+  (ledger holds only the `ni` proof); MVCC-conflict-freedom is structural via composite
+  event sub-keys `(evidenceId, monotonicCounter)`, not client retry loops; case↔evidence
+  linkage is off-chain only; users are deactivated-never-deleted so audit actor
+  attribution always resolves; notes are append-only.
+- **Prior systematic review.** The S1–S20 pass (`docs/audit/security-review.md`) is itself
+  the design-level control audit; all `fix`-class items are resolved, S18 is a documented
+  design trade, C1 is contract-frozen.
+
+**This OWASP pass — consolidated design ledger.**
+
+| Class | Items |
+|---|---|
+| **[FIXED]** S-items relevant to web-app tier | S1, S4, S5, S6, S7, S9, S10, S11, S12, S13, S14, S15, S16, S17, S19, S20 |
+| **[NEW]** gaps found + fixed here | **N1** constant-time token compare (A02/A07) · **N2** gateway-origin security headers (A05) · **N3** session idle timeout (A07) · **N4** security-event logging (A09) · **N5** dependency scan + benchmark lockfile (A06/A08) |
+| **[CAVEAT]** intentional, do-NOT-fix | **D1** receipt store un-hardened (availability, not integrity, exposure) · **D2** committed default secrets (reproducible local-dev) · **D3** plaintext HTTP + absolute-only TTL + non-empty-only password policy · **D4** self-serviceable admin blob barrier (auditability, not prevention) · **S18** synchronous auto-log couples read availability to chain health (correct for CoC) |
+| **[STOP-and-ask]** needs contract amendment | **C1** the single shared static `GLEIPNIR_TOKEN` authenticates every route incl. internal; mechanism frozen by Caliper/smoke dependence — not touched |
+
+**New fixes:** design-review only; the N-fixes land in their own categories (A02/A05/A06/A07/A09).
+
+**Residual caveats:** D1–D4, S18, C1 as tabled above — these are measured thesis
+properties and belong in the paper's security-caveats section, not the defect list.
