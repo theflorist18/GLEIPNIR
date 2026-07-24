@@ -213,3 +213,49 @@ verbose errors, missing security headers, default credentials, over-permissive c
 thesis artifact. The deeper design residual (single shared static token) is **C1**
 (STOP-and-ask, not touched). Out-of-scope infra items noted but not changed (web-app tier
 only): CA `-d` debug flag, ccaas `tls_required:false`, Fabric ports on `0.0.0.0`.
+
+---
+
+## A06 — Vulnerable & Outdated Components
+
+**What it is.** Running components (direct or transitive) with known vulnerabilities, or
+that are unmaintained/outdated; missing integrity pinning.
+
+**Scan (first `npm audit` run on this repo, `scratchpad/audit-scan.sh`).** Every workspace
+audited; the Go module reported. Findings triaged by *deployed attack surface* vs
+*operator-run/dev tooling*, and *pinned* vs *non-pinned*.
+
+**New fix applied — [NEW N5].** Patched the **non-pinned runtime** advisories via
+lockfile-only `npm audit fix` (non-force, no breaking majors), so the container `npm ci`
+picks them up at rebuild without touching WSL native modules:
+
+| Workspace | Before | After | Result |
+|---|---|---|---|
+| gateway | body-parser 1.20.5, protobufjs 7.6.4 | 1.20.6, 7.6.5 | **0 vulns** |
+| anchor-client | protobufjs 7.6.4 | 7.6.5 | **0 vulns** |
+| merkle-batcher / receipt-store / verification | body-parser 1.20.5 | 1.20.6 | **0 vulns** |
+| case-registry / evidence-store | — | — | already 0 |
+
+Pinned versions **unchanged and verified**: `@hyperledger/fabric-gateway 1.11.0`,
+`@grpc/grpc-js` stayed on 1.14.x, `caliper-cli 0.6.0`. No `package.json` range edits (the
+patches fit existing `^` ranges); only lockfiles moved. The `benchmark/package-lock.json`
+integrity pin already exists (tracked).
+
+**Residual advisories — kept by explicit author decision, documented not fixed:**
+- **react-router (frontend runtime, moderate).** Open-redirect via backslash in
+  `<Link>`/`navigate`; the **only** fix is react-router v7 (`isSemVerMajor`), which
+  contradicts CLAUDE.md's pinned **react-router v6** and needs an app migration. **Not
+  reachable here** — the exploit requires an attacker-controlled redirect target, and every
+  GLEIPNIR route uses fixed internal ids. Kept on v6; documented.
+- **vite / vitest / esbuild (frontend dev-only, up to critical).** Build/test tooling —
+  **never shipped** in the nginx static `dist/` build; the critical `vitest` advisory only
+  applies when running `vitest --ui` and exposing it locally. Fix requires `vite@8`
+  (breaking). Kept; documented as dev-only, no production exposure.
+- **benchmark `caliper-cli 0.6.0` tree (65 advisories, 24 critical).** **Out of the
+  web-app-tier scope** and pinned: operator-run load tool, not a deployed surface, and the
+  flagged deps (elliptic, ethereumjs, web3, decompress) are Ethereum-connector code
+  GLEIPNIR never exercises (Fabric-only). Bumping would break the pinned stack + the
+  like-for-like benchmark control. Documented; untouched.
+- **chaincode Go module:** `govulncheck` not installed in-env; `go.mod` pins current
+  Fabric v2 contract/chaincode APIs (`fabric-contract-api-go/v2 2.2.1`, `protobuf 1.36.11`).
+  Out of the web-app-tier scope; noted for a later `govulncheck` pass.
