@@ -416,6 +416,28 @@ test('N1: service token still authenticates after the constant-time swap; near-m
   assert.equal((await fetch(`${url}/api/v1/runs`, { headers: asUser('secret-token-extra') })).status, 401);
 });
 
+// N3 (OWASP A07): a sliding idle timeout ends an inactive session before its
+// absolute TTL; each authenticated read refreshes the idle window.
+test('N3: idle timeout expires an inactive token; activity slides the window', async () => {
+  const s = makeSessions({ ttlSeconds: 3600, idleTtlSeconds: 0.15 }); // 150 ms idle window
+  const tok = s.create('usr-1');
+  assert.equal(s.get(tok)?.userId, 'usr-1');            // fresh
+  await new Promise((r) => setTimeout(r, 80));
+  assert.equal(s.get(tok)?.userId, 'usr-1');            // 80 ms < 150 ms, and this get slides it
+  await new Promise((r) => setTimeout(r, 80));
+  assert.equal(s.get(tok)?.userId, 'usr-1');            // slid again (80 ms since last activity)
+  await new Promise((r) => setTimeout(r, 220));
+  assert.equal(s.get(tok), null);                        // idle > 150 ms -> expired
+});
+
+test('N3: idleTtlSeconds=0 disables the idle clock; absolute TTL still enforced', () => {
+  const noIdle = makeSessions({ ttlSeconds: 3600, idleTtlSeconds: 0 });
+  const t1 = noIdle.create('usr-1');
+  assert.equal(noIdle.get(t1)?.userId, 'usr-1');         // never idle-expires
+  const absolute = makeSessions({ ttlSeconds: 0, idleTtlSeconds: 0 });
+  assert.equal(absolute.get(absolute.create('usr-2')), null); // absolute clock still fires
+});
+
 // ---- Chunk 4 security fixes ----
 
 // S1: /internal/anchor-root is service-principal only. Global authenticate

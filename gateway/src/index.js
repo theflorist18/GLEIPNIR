@@ -23,7 +23,10 @@ async function makeAuthStores(env) {
     console.warn(`[gateway] auth store unavailable (${err.message}) — user login disabled; service token unaffected`);
     return { users: undefined, sessions: undefined };
   }
-  const sessions = makeSessions({ ttlSeconds: parseInt(env.SESSION_TTL_SECONDS, 10) || 28800 });
+  const sessions = makeSessions({
+    ttlSeconds: parseInt(env.SESSION_TTL_SECONDS, 10) || 28800,
+    idleTtlSeconds: parseInt(env.SESSION_IDLE_TTL_SECONDS, 10) || 1800, // N3: 30-min sliding idle
+  });
   if (env.ADMIN_USERNAME && env.ADMIN_PASSWORD) {
     const seeded = await users.seedAdmin({ username: env.ADMIN_USERNAME, password: env.ADMIN_PASSWORD });
     if (seeded) console.log(`[gateway] seeded first admin user '${seeded.username}'`);

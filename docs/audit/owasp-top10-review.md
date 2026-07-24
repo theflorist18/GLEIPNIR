@@ -259,3 +259,36 @@ integrity pin already exists (tracked).
 - **chaincode Go module:** `govulncheck` not installed in-env; `go.mod` pins current
   Fabric v2 contract/chaincode APIs (`fabric-contract-api-go/v2 2.2.1`, `protobuf 1.36.11`).
   Out of the web-app-tier scope; noted for a later `govulncheck` pass.
+
+---
+
+## A07 — Identification & Authentication Failures
+
+**What it is.** Weaknesses in confirming identity and managing sessions: brute force,
+credential stuffing, weak session lifecycle, missing lockout.
+
+**GLEIPNIR controls.**
+- **[FIXED S6]** async scrypt (event-loop safe); **[FIXED S7]** login throttle keyed on
+  `(real-client-IP, username)` with `trust proxy`, 5 attempts/60 s → 429 even for correct
+  creds (leaks nothing).
+- **[FIXED S5]** password reset invalidates the target's live sessions; deactivation
+  propagates immediately (user re-fetched per request).
+- Opaque 256-bit CSPRNG session tokens; unknown-username login still does full scrypt
+  (enumeration defense).
+
+**Live/unit-verified.** `auth.test.js`: brute-force lockout + window expiry + reset;
+deactivated user → 401 login; reset kills the pre-reset token. `functional-test.sh` §A/§B
+re-confirms live (lockout 429, deactivation 401, reset 401).
+
+**New fix applied — [NEW N3].** Sessions had an **absolute-only** 8 h TTL — a token left
+on an unattended terminal stayed valid the full 8 h. Added a **sliding idle timeout**
+(`gateway/src/sessions.js`): a session now dies at the *earlier* of the absolute expiry or
+an idle window (default 30 min, `SESSION_IDLE_TTL_SECONDS`), refreshed on each
+authenticated request. Purely additive; the service-token path never touches the session
+store, so the benchmark is unaffected. Unit-verified: 2 tests (idle expiry + sliding
+refresh; `idleTtlSeconds=0` disables idle while the absolute clock still fires). Live after
+the Chunk 11 rebuild.
+
+**Residual caveat — [CAVEAT D3].** Password policy is non-empty-only, and sessions live
+over plaintext HTTP — non-production posture, documented. (No password-complexity rule was
+added: it would change UX/fixtures and is a documented thesis caveat, not a defect.)

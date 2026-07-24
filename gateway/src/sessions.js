@@ -6,25 +6,37 @@
 // out, which is acceptable for a single-host thesis deployment and keeps the
 // store trivially correct. The static GLEIPNIR_TOKEN service path does not go
 // through this store at all (see auth.js).
+//
+// A session dies at the EARLIER of two clocks (OWASP A07 / N3): an absolute
+// expiry set at login (a stolen token can't live forever) and a SLIDING idle
+// expiry refreshed on each authenticated request (an abandoned token on an
+// unattended terminal stops working after a period of inactivity). Before N3
+// there was only the absolute clock, so a token left idle stayed valid for the
+// full 8h. Purely additive: the service-token path never reaches this store.
 
 const crypto = require('node:crypto');
 
-function makeSessions({ ttlSeconds = 28800 } = {}) {
-  const sessions = new Map(); // token -> { userId, expiresAt (epoch ms) }
+function makeSessions({ ttlSeconds = 28800, idleTtlSeconds = 1800 } = {}) {
+  const sessions = new Map(); // token -> { userId, expiresAt, lastSeenAt (epoch ms) }
+  const idleMs = idleTtlSeconds > 0 ? idleTtlSeconds * 1000 : Infinity;
 
   function create(userId) {
+    const now = Date.now();
     const token = crypto.randomBytes(32).toString('hex');
-    sessions.set(token, { userId, expiresAt: Date.now() + ttlSeconds * 1000 });
+    sessions.set(token, { userId, expiresAt: now + ttlSeconds * 1000, lastSeenAt: now });
     return token;
   }
 
   function get(token) {
     const s = sessions.get(token);
     if (!s) return null;
-    if (Date.now() >= s.expiresAt) {
+    const now = Date.now();
+    // Absolute cap OR idle timeout — whichever fires first ends the session.
+    if (now >= s.expiresAt || now - s.lastSeenAt >= idleMs) {
       sessions.delete(token);
       return null;
     }
+    s.lastSeenAt = now; // sliding window: activity resets the idle clock
     return s;
   }
 
