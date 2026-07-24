@@ -100,3 +100,40 @@ tests — correctness incl. length-mismatch + service-token byte-compat); full a
 plaintext HTTP with an absolute-only session TTL — non-production posture, single host, no
 TLS termination. Stated in the thesis caveats; not changed here (out of the web-app-tier
 code scope and by design).
+
+---
+
+## A03 — Injection
+
+**What it is.** Untrusted input interpreted as code/commands: SQL injection, OS command
+injection, cross-site scripting (XSS), CSV/formula injection, header/log injection.
+
+**GLEIPNIR controls.**
+- **SQL:** `better-sqlite3` prepared statements throughout `services/case-registry`; every
+  dynamic `WHERE` is built from literal fragments with user values bound as `@named`
+  params; `LIKE` escapes `% _ \` with `ESCAPE '\'`; enum inputs validated against
+  allow-lists (**[FIXED]** — S-review round 2, "SQL injection: none").
+- **Command:** no `child_process`/`exec`/`eval`/`Function` in any request path (only
+  operator-run orchestration scripts, not request-reachable).
+- **XSS:** React auto-escapes all rendered user content; **no** `dangerouslySetInnerHTML`
+  anywhere; the only `<iframe>` is `sandbox=""` + `referrerPolicy="no-referrer"` and only
+  for content confirmed `application/pdf` by magic-byte sniff (**[FIXED S11+S20]**); nginx
+  CSP `script-src 'self'` + `X-Content-Type-Options: nosniff` (**[FIXED S12]**).
+- **CSV formula:** `gateway/src/csv.js` `neutralize()` prefixes any cell beginning
+  `= + - @ TAB CR` with `'` (**[FIXED S10]**), server- and client-side.
+
+**Live-probe result (`scratchpad/probe-a03.sh`, standard variant).**
+- SQLi payloads (`' OR '1'='1`, `'; DROP TABLE cases;--`, `%' UNION SELECT * FROM users --`,
+  `\`) in case + evidence search → **200**, treated as literal, no 500/leak; the `cases`
+  table answers normally afterward. An unknown `flag` enum is ignored (filter not applied,
+  returns the normal visible set) — injection-safe because the query is parameterized
+  regardless.
+- **S10:** a label `=HYPERLINK("http://evil","click")` in the CoC CSV export comes out as
+  `"'=HYPERLINK(...`— neutralized with a leading apostrophe.
+- **Stored XSS:** a `<script>…</script><img onerror=…>` note body round-trips as the exact
+  literal (stored as data, not interpreted server-side); the notes endpoint is served as
+  `application/json` (nosniff-safe), and React escapes it on render.
+
+**New fixes:** none required — controls present and confirmed live.
+
+**Residual caveat:** none for this category.
