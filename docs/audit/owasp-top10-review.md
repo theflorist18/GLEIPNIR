@@ -401,3 +401,46 @@ to `GET /evidence/:id/verify` returns a generic 502 because the `verification:40
 only ships with the anchoring variants; the SPA never calls it on standard (it shows
 "Merkle: N/A"). Not SSRF, not user-facing — flagged as a separate cleanup item, out of
 strict OWASP scope.
+
+---
+
+## Summary
+
+| OWASP | Verdict | New fix |
+|---|---|---|
+| A01 Broken Access Control | controls present, live-verified (14/14) | — (doc D4) |
+| A02 Cryptographic Failures | fixed | **N1** constant-time token compare |
+| A03 Injection | controls present, live-verified | — |
+| A04 Insecure Design | design-reviewed, ledger consolidated | — |
+| A05 Security Misconfiguration | fixed | **N2** gateway headers · **N6** error-leak handler |
+| A06 Vulnerable & Outdated Components | patched | **N5** runtime deps → 0 vulns (pinned untouched) |
+| A07 Identification & Auth Failures | fixed | **N3** session idle timeout |
+| A08 Software & Data Integrity | controls present, live-verified (3/3) | — (doc D1) |
+| A09 Logging & Monitoring | gap fixed | **N4** security-event logging |
+| A10 Server-Side Request Forgery | no surface, static-verified | — |
+
+**Six new fixes (N1–N6), all invariant-safe, all unit-tested.** Two (N6 error-leak, and
+the gateway-origin header gap) were found by live probing, not the prior review. Nothing
+touched the service-token/benchmark path, the frozen contracts, or the pinned stack.
+Intentional caveats (D1–D4, S18) and the STOP-and-ask service token (C1) are documented,
+not "fixed."
+
+## Final verification (Chunk 11)
+
+Images for the three changed services (gateway, case-registry, evidence-store) were rebuilt
+and their containers recreated **preserving all named volumes** (data survived: 10 users all
+log in, 6 cases intact). A gateway restart clears in-memory sessions by design, so a
+**re-login is required** — no data lost.
+
+| Gate | Result |
+|---|---|
+| Gateway unit suites (non-integration: app, auth, csv, ni, variantRouter) | **45/45 pass** (incl. N1/N2/N3/N4/N6 tests) |
+| evidence-store unit suite | 9/9 pass |
+| case-registry / gateway integration suites | not runnable in-env (WSL `better-sqlite3` ELF mismatch — env, not code); covered by live gates below |
+| New-fix live re-probe (rebuilt stack) | **10/10** — N2 headers on :3000, N6 generic 400, N1 valid/near-miss, N4 logs username-not-password |
+| `smoke-library.sh` (service-token + user paths) | **PASS** (17/17) — proves service-token path byte-compatible |
+| `functional-test.sh` (79-check battery) | **78/79** — the 1 is a known harness test-ordering artifact (coc-report auto-log), proven not an app defect |
+| Fixture integrity | 23/24 exhibits pure `CREATE`; `ev-mrd-001` retains only the 2 `view`s from the author's own earlier browsing — the OWASP work added **0** events to any fixture item |
+
+All work was performed on branch `owasp-top10-review` (off `main`), one commit per chunk,
+no history rewrite, `network/compose/.env` never staged, no `configtx/core/orderer` change.
