@@ -9,8 +9,13 @@ the admin blob-content restriction; per-case evidence categories + off-chain
 forensic ingest metadata; examiner notes/flags/activity feed; the in-repo UI
 kit + modal admin pages; the 4-step ingest wizard with client-side ni-URI
 verification; the tabbed case/evidence detail pages; the per-case CoC report
-(CSV + print) and the lead dashboard — CONTRACTS §12-8/§12-9). This document
-is descriptive, not normative.
+(CSV + print) and the lead dashboard — CONTRACTS §12-8/§12-9). **Further
+updated 2026-08-03** to fill in the M25/M25b library additions (team-roster
+picker, in-place case-role change, persistent case activity feed) that had
+landed in code and CONTRACTS.md but not yet in this document's route table
+and frontend catalogue, and to add §9 covering the `owasp-top10-review`
+branch's web-app-tier security hardening (N1–N6). This document is
+descriptive, not normative.
 
 | Document | Role |
 |---|---|
@@ -18,6 +23,8 @@ is descriptive, not normative.
 | `docs/CONTRACTS.md` | The binding **interface contracts** (§1–§12; cited below rather than restated) |
 | **`docs/AS-BUILT.md`** (this file) | The system **as implemented**: modules, dependencies, ports, data flows |
 | `docs/audit/REPORT.md` + `docs/audit/*` | The **verification record**: static audit (F1–F71), live E2E (F72–F73), variant smokes (F74–F76) |
+| `docs/audit/security-review.md` | The **S1–S20 security pass** — first systematic security review, all fixable items resolved |
+| `docs/audit/owasp-top10-review.md` | The **OWASP Top 10 (2021) pass** over the web-app tier — six new fixes (N1–N6), summarized in §9 |
 
 GLEIPNIR benchmarks four blockchain chain-of-custody (B-CoC) architectural
 variants on a single Hyperledger Fabric 2.5 LTS substrate, measured with
@@ -275,21 +282,35 @@ sequenceDiagram
 |---|---|
 | `POST /api/v1/auth/login`, `POST /auth/logout`, `GET /auth/me` | session lifecycle (M12); users in `AUTH_DATA_DIR/users.json`, scrypt hashes |
 | `GET/POST /api/v1/admin/users`, `PATCH /admin/users/:id`, `POST …/reset-password` | user management — admin session only |
+| `GET /api/v1/users/directory` | admin-or-lead session (M25); roster picker for team assignment — leads never see admin accounts |
 | `POST /api/v1/evidence` | `CreateEvidence` submit, or batcher enqueue (anchoring variants); multipart (M13c) → evidence-store blob + head with store proof + evidence-index row (library caseId never on-chain) |
 | `POST /api/v1/evidence/:id/transfer` | `TransferCustody` or enqueue; user sessions: case-role gated |
 | `POST /api/v1/evidence/:id/access` | `AccessLog` or enqueue; user sessions: case-role gated |
-| `DELETE /api/v1/evidence/:id` | `RemoveEvidence` or enqueue; best-effort index status sync |
+| `DELETE /api/v1/evidence/:id` | `RemoveEvidence` or enqueue; M25: needs case-lead role (or the `uploader` pseudo-role for one's own uncategorized evidence); best-effort index status sync |
 | `GET /api/v1/evidence/:id` | `ReadEvidence` (evaluate); user sessions: authz + synchronous auto-`AccessLog(view)` |
-| `GET /api/v1/evidence/:id/download` | stream from evidence-store; auto-`AccessLog(download)` |
+| `GET /api/v1/evidence/:id/download` | stream from evidence-store; authz-gated with `{content:true}` — **admin bypass does not apply** (M18/§12-8: admins lose blob-content access off their own cases); auto-`AccessLog(download)` |
 | `GET /api/v1/evidence/:id/export` | `{record, auditTrail}` bundle; auto-`AccessLog(export)` |
 | `GET /api/v1/evidence/:id/audit` | `GetAuditTrail` (evaluate); authz-gated, never auto-logged |
-| `GET /api/v1/evidence/:id/verify?eventId=` | proxy → verification `/verify/:eventId` |
+| `GET /api/v1/evidence/:id/verify?eventId=` | proxy → verification `/verify/:eventId`; not variant-restricted at the gateway itself — on Standard the call 502s because `verification:4004` only ships with the anchoring variants (not SSRF, tracked separately in `docs/audit/owasp-top10-review.md` A10); the SPA never calls it under Standard |
+| `PATCH /api/v1/evidence/:id/details` | M19 forensic metadata (label/seizedAt/acquisitionLocation/handedOverBy); write-gated (contributor+), never auto-logged |
+| `GET/POST /api/v1/evidence/:id/notes` | M20 examiner notes — append-only, immutable-by-API; read/write case-role gated |
+| `PUT /api/v1/evidence/:id/flag` | M20 strict-enum triage flag (`HIGH_PRIORITY`/`PROCESSED`/`NEEDS_LEAD_REVIEW`); write-gated |
 | `GET /api/v1/evidence/search`, `GET /api/v1/cases/search` | case-registry search, participant-scoped unless admin |
-| `POST/GET/PATCH /api/v1/cases[/:id]` + participants + evidence | case-registry proxy; management admin-only |
+| `POST/GET/PATCH /api/v1/cases[/:id]` | case-registry proxy; **create** = admin-or-lead (lead auto-added as case lead); **update** = admin-or-that-case's-lead (`ensureCaseLead`) |
+| `POST/PATCH/DELETE /api/v1/cases/:id/participants[/:userId]` | roster grant/revoke; PATCH (M25) is in-place role change; admin-or-case-lead; removing/demoting the last lead is 409 for leads (admin may) |
+| `POST/DELETE /api/v1/cases/:id/evidence[/:evidenceId]` | categorize/uncategorize; admin-or-case-lead |
+| `GET/POST/PATCH/DELETE /api/v1/cases/:id/categories[/:categoryId]` | M19 per-case evidence taxonomy; read = case visibility, manage = admin-or-case-lead |
+| `GET /api/v1/cases/:id/coc-report?format=csv\|json` | M24 chain-of-custody report — assembles every exhibit's trail; one synchronous `AccessLog('coc-report')` per exhibit for user sessions only (never for the service token) |
+| `GET /api/v1/cases/:id/activity` | M20/M25b persistent `case_audit_log` feed (roster + categorize + note + flag events); case-visibility, never auto-logged |
 | `POST/GET /api/v1/runs`, `GET /api/v1/runs/:id` | run-request store (dashboard); `POST` admin-session-only |
-| `POST /internal/anchor-root` | submit `CommitAnchorRoot` on `coc-main` (anchoring) |
-| `GET /internal/anchor-root/:scopeId/:batchId` | evaluate `ReadAnchorRoot` on `coc-main` |
+| `POST /internal/anchor-root` | submit `CommitAnchorRoot` on `coc-main` (anchoring); `requireService` — no user session, admin included, may call this |
+| `GET /internal/anchor-root/:scopeId/:batchId` | evaluate `ReadAnchorRoot` on `coc-main`; same service-only gate |
 | `GET /healthz` | `{ok:true, variant}` (unauthenticated) |
+
+Every response carries gateway-origin security headers (N2, §9) regardless
+of auth outcome; a malformed request body gets a generic JSON error rather
+than a stack trace (N6, §9); sessions die at the earlier of an 8 h absolute
+TTL or a 30 min sliding idle timeout (N3, §9).
 
 - **Dependencies:** `@grpc/grpc-js ^1.14.0`, `@hyperledger/fabric-gateway
   1.11.0`, `express ^4.21.2`, `multer ^2` (M13c).
@@ -395,12 +416,30 @@ sequenceDiagram
 
 ### 4.9 `frontend/` — SPA behind nginx, port 8081
 
-- **Responsibility (M14):** the multi-page evidence-library app — login +
-  role-aware nav (`auth/`), investigator pages (ingest with real file upload,
-  my-cases, case detail, evidence detail with audit trail + per-event Merkle
-  badge + download/export, search), admin pages (users, case admin, and the
-  operator dashboard: variant selector, sweep configuration, run
-  requests/history, throughput/latency/storage charts — recharts).
+- **Responsibility (M14, extended through M25b):** the multi-page
+  evidence-library app — login + role-aware nav (`auth/`), 3-tier RBAC
+  (`admin`/`lead`/`investigator`, M18) layered on per-case roles
+  (`viewer`/`contributor`/`lead`). Investigator pages: a 4-step ingest wizard
+  (case+category / metadata with `ITEM-NNN` auto-suggest / file + local
+  WebCrypto ni-URI hash with progress / review — M22, comparing the local
+  hash against the server's `integrityProof`), my-cases, a tabbed case detail
+  (Overview / Evidence / Activity — M21/M23), a tabbed evidence detail
+  (Overview / Chain of custody via `AuditTrailTimeline` / Examiner notes —
+  M20/M21/M23, with an auto-logged inline preview for image/video/audio/
+  PDF/text added M25), and search. Lead-tier: `/lead/dashboard` (M24) — led
+  cases, flagged evidence, merged team activity, roster add/remove. Admin
+  pages: users (modal-driven, role badges — M21), case administration, and
+  the operator dashboard (variant selector, sweep configuration, run
+  requests/history, throughput/latency/storage charts — recharts). A
+  print-optimized per-case CoC report (`/cases/:id/report`, M24) renders
+  outside the normal app shell (browser print → PDF).
+- **UI kit (M21):** in-repo primitives only — no external component library
+  (`components/ui/`: Tabs, Stepper, Modal, Timeline, Badge) — styled on
+  `styles.css` tokens, covered by the first frontend vitest tests.
+- **Role gating is UX-only.** `RequireAuth`/`RequireRole` guard routes
+  client-side for navigation convenience; every one of those rules is
+  re-enforced server-side by the gateway and case-registry (§4.2, §4.7) — a
+  hidden nav item is not a security control.
 - **Network path:** a single `GatewayClient` (`src/api.ts`, owned by
   `AuthContext`) with base `/api/v1`; nginx proxies `location /api/` to
   `http://gateway:3000` and `try_files` keeps deep links refresh-safe. The
@@ -408,6 +447,9 @@ sequenceDiagram
 - **Runtime dependencies:** `react ^18.3.1`, `react-dom ^18.3.1`,
   `react-router-dom ^6`, `recharts ^2.13.3`; built with `vite ^5.4.11` /
   `typescript ~5.6.3` into a static bundle served by `nginx:alpine`.
+- **Does not:** apply to the Parallel / Parallel-Anchored variants — the
+  library UI targets Standard and Anchoring only; Parallel variants keep the
+  benchmark/operator-dashboard path.
 
 ## 5. Fabric network topology
 
@@ -571,7 +613,42 @@ These are experimental controls; each was audited as an invariant:
 6. **GoLevelDB only** — key-value chaincode by construction; adding CouchDB
    would invalidate the storage measurements.
 
-## 9. Repository layout
+## 9. Security posture (`owasp-top10-review` branch)
+
+A prior systematic pass (`docs/audit/security-review.md`, S1–S20) resolved
+every fixable web-app-tier finding. A follow-on OWASP Top 10 (2021) review
+(`docs/audit/owasp-top10-review.md`, 2026-07-24) re-verified the S-fixes live
+against the running **standard** variant and found six residual gaps, all now
+fixed (N1–N6) and unit-tested — none touch the chaincode, the frozen
+contracts, or the service-token/benchmark write path:
+
+| # | Category | Fix | Where |
+|---|---|---|---|
+| **N1** | A02 Cryptographic Failures | Service/internal bearer-token comparisons (`===`/`!==`) were the only non-constant-time secret comparisons in the codebase. Replaced with a length-guarded `safeEqual()` (fixed-digest hash → `crypto.timingSafeEqual`) in gateway, case-registry, evidence-store. | `gateway/src/auth.js`, `services/case-registry/src/index.js`, `services/evidence-store/src/index.js` |
+| **N2** | A05 Security Misconfiguration | The gateway's own origin (`:3000`) shipped bare responses — no security headers — if reached directly, bypassing the nginx edge. Added `nosniff` / `X-Frame-Options: DENY` / `Referrer-Policy: no-referrer` / strict `default-src 'none'` CSP middleware. | `gateway/src/app.js` |
+| **N3** | A07 Auth Failures | Sessions were absolute-TTL-only (8 h) — a token on an unattended terminal stayed valid the full window. Added a sliding idle timeout (default 30 min, `SESSION_IDLE_TTL_SECONDS`), refreshed per authenticated request, dying at the earlier of the two clocks. | `gateway/src/sessions.js` |
+| **N4** | A09 Logging & Monitoring | No security-relevant *failure* was logged anywhere (failed logins, lockouts, authz denials, `/internal/anchor-root` probing) — only successful on-chain writes are visible in the audit trail. Added a structured JSON stderr sink; logs only failures, never secrets (unit-verified no-secret guarantee). | `gateway/src/securityLog.js` |
+| **N5** | A06 Vulnerable Components | First `npm audit` pass on the repo; patched non-pinned runtime advisories (`body-parser`, `protobufjs`) via lockfile-only `npm audit fix` across gateway/anchor-client/merkle-batcher/receipt-store/verification → 0 vulns. Pinned versions (`fabric-gateway 1.11.0`, `caliper-cli 0.6.0`) untouched. | lockfiles only |
+| **N6** | A05 / A09 | A malformed JSON request body returned Express's default HTML error page with a full stack trace and container filesystem paths — S15's per-route sanitizer never saw it because `express.json()` throws before routing. Added a terminal error-handling middleware: generic JSON body to the client, detail logged server-side. | `gateway/src/app.js` |
+
+**Documented, not fixed — intentional design properties (do not "fix"):**
+D1 the receipt store's un-hardened witness (§4.4, §8) · D2 committed non-production
+default secrets in `network/compose/.env` (reproducible local-dev artifact) ·
+D3 plaintext HTTP + non-empty-only password policy (single-host,
+non-production posture) · D4 the §12-8 admin blob barrier is
+self-serviceable but fully auditable, not a hard prevention control · **C1
+(stop-and-ask, untouched)** the single shared `GLEIPNIR_TOKEN` authenticates
+every route including internal ones — frozen by the Caliper/smoke-script
+dependency on it; changing it needs an explicit contract amendment.
+
+Final verification (Chunk 11): gateway unit suites 45/45, evidence-store 9/9,
+`smoke-library.sh` 17/17, a 79-check live functional battery 78/79 (the one
+gap a known harness-ordering artifact, not an app defect), and the manual
+23-exhibit test fixture confirmed untouched (0 events added by the review
+itself). Full detail, live-probe transcripts, and the OWASP-category-by-
+category writeup live in `docs/audit/owasp-top10-review.md`.
+
+## 10. Repository layout
 
 ```
 Gleipnir/
@@ -601,10 +678,12 @@ Gleipnir/
 └── docs/                     # ARCHITECTURE (plan), CONTRACTS, audit/, this file
 ```
 
-## 10. Provenance & citation
+## 11. Provenance & citation
 
-- **Code:** cite the repository at a commit SHA (this document describes
-  `8bb4c4e`). History is never rewritten; cited SHAs remain valid.
+- **Code:** cite the repository at a commit SHA. The core architecture
+  described in §1–§8 was live-verified at `8bb4c4e`; the security posture in
+  §9 was verified through the `owasp-top10-review` branch, chunk 11 final
+  commit `13e9685`. History is never rewritten; cited SHAs remain valid.
 - **Configuration:** every run manifest embeds `gitCommit` plus the git blob
   SHAs of `configtx.yaml`, `core.yaml`, `orderer.yaml` and the three compose
   files, so any datapoint is traceable to the exact configuration that
@@ -613,4 +692,6 @@ Gleipnir/
   never used (it resolves to Fabric 3.x).
 - **Verification trail:** `docs/audit/REPORT.md` consolidates the six-chunk
   static audit, the chunk-7 live bring-up, and the step-2 variant smokes,
-  including every finding (F1–F76) and its resolution.
+  including every finding (F1–F76) and its resolution. `docs/audit/
+  security-review.md` (S1–S20) and `docs/audit/owasp-top10-review.md`
+  (N1–N6, §9 above) cover the security-specific passes.
