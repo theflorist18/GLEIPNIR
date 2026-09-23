@@ -90,7 +90,10 @@ function buildEvent(op, evidenceId, caseId, actor, detail) {
 }
 
 function createApp(deps) {
-  const { fabric, batcher, runsStore, users, sessions, caseRegistry, evidenceStore, config } = deps;
+  const { fabric, batcher, receipts, runsStore, users, sessions, caseRegistry, evidenceStore, config } = deps;
+  // anchor-client is reached only by the Parallel-Anchored anchor-roots read
+  // below (deps so tests can point it at a fake).
+  const anchorClientUrl = deps.anchorClientUrl || 'http://anchor-client:4003';
   const cfg = {
     variant: 'standard',
     token: 'dev-token',
@@ -99,7 +102,7 @@ function createApp(deps) {
     maxUploadBytes: 26214400, // 25 MiB
     ...config,
   };
-  const routerDeps = { fabric, batcher, defaultChannel: cfg.defaultChannel };
+  const routerDeps = { fabric, batcher, receipts, defaultChannel: cfg.defaultChannel };
   // Security-event log (N4). Tests may inject a fake sink via deps.securityLog.
   const securityLog = deps.securityLog || makeSecurityLog({ enabled: cfg.securityLogEnabled !== false });
   const auth = makeAuth({ token: cfg.token, sessions, users, securityLog });
@@ -306,7 +309,7 @@ function createApp(deps) {
   // CONTRACTS §12-8): downloading evidence bytes requires being a participant
   // of the evidence's case, even for admins. User identity in case-registry
   // is the immutable username.
-  async function ensureEvidenceAccess(req, evidenceId, { write = false, remove = false, content = false } = {}) {
+  async function ensureEvidenceAccess(req, evidenceId, { write = false, dispose = false, content = false } = {}) {
     if (!caseRegistry) return;
     if (!req.principal || req.principal.kind !== 'user') return;
     if (req.principal.role === 'admin' && !content) return;
@@ -321,11 +324,11 @@ function createApp(deps) {
       throw new RequestError(body.reason === 'unknown-evidence' ? 404 : 403, 'access to this evidence is denied');
     }
     // M25 role ladder: viewer = view/export, contributor = +write events and
-    // annotations, lead = +remove. The 'uploader' pseudo-role (own
+    // annotations, lead = +dispose. The 'uploader' pseudo-role (own
     // uncategorized evidence — no case, so no lead exists) keeps both.
-    if (remove && !['lead', 'uploader'].includes(body.roleInCase)) {
-      securityLog.authzDenied(req, 'evidence_remove_requires_lead');
-      throw new RequestError(403, 'the case lead role is required to remove evidence');
+    if (dispose && !['lead', 'uploader'].includes(body.roleInCase)) {
+      securityLog.authzDenied(req, 'evidence_dispose_requires_lead');
+      throw new RequestError(403, 'the case lead role is required to dispose evidence');
     }
     if (write && !['contributor', 'lead', 'uploader'].includes(body.roleInCase)) {
       securityLog.authzDenied(req, 'evidence_write_requires_contributor');
@@ -808,22 +811,25 @@ function createApp(deps) {
     res.status(r.status).json(r.body);
   }));
 
+  // DisposeEvidence (M26): a terminal status transition, never a deletion —
+  // the head and its audit trail stay on the ledger. DELETE is kept as the
+  // HTTP verb for API stability.
   app.delete('/api/v1/evidence/:id', wrap(async (req, res) => {
-    await ensureEvidenceAccess(req, req.params.id, { remove: true });
+    await ensureEvidenceAccess(req, req.params.id, { dispose: true });
     const b = req.body || {};
     const caseId = b.caseId || req.query.caseId;
     const reason = b.reason || req.query.reason || '';
-    const event = buildEvent('REMOVE', req.params.id, caseId, actorFor(req, ''), { reason });
-    const r = await routeWrite({ variant: V, fn: 'RemoveEvidence', ccArgs: [req.params.id, reason], event, caseId }, routerDeps);
+    const event = buildEvent('DISPOSE', req.params.id, caseId, actorFor(req, ''), { reason });
+    const r = await routeWrite({ variant: V, fn: 'DisposeEvidence', ccArgs: [req.params.id, reason], event, caseId }, routerDeps);
     // Best-effort cache sync: the ledger is authoritative; a failed PATCH here
     // is a display glitch the library tolerates by design.
     if (caseRegistry) {
-      await caseRegistry.request('PATCH', `/evidence-index/${encodeURIComponent(req.params.id)}`, { status: 'REMOVED' }).then(() => {}, () => {});
+      await caseRegistry.request('PATCH', `/evidence-index/${encodeURIComponent(req.params.id)}`, { status: 'DISPOSED' }).then(() => {}, () => {});
     }
     res.status(r.status).json(r.body);
   }));
 
-  // ---- reads (evaluate, always direct) ----
+  // ---- reads (direct variants: evaluate; batched variants: off-chain trail, M26) ----
   // Under a user session every evidence read is (a) authz-gated per case and
   // (b) view/download/export auto-append a synchronous AccessLog event.
   app.get('/api/v1/evidence/:id', limitAutoLog, wrap(async (req, res) => {
@@ -836,9 +842,12 @@ function createApp(deps) {
   // Audit-trail reads are authz-gated but NOT auto-logged: the detail page
   // fetches record + trail together, and logging trail reads would grow the
   // trail on every render of the very page that displays it.
+  // ?proofs=1 (batched variants only; ignored elsewhere) attaches each event's
+  // Merkle witness for host-side audit reconstruction (M26).
   app.get('/api/v1/evidence/:id/audit', wrap(async (req, res) => {
     await ensureEvidenceAccess(req, req.params.id);
-    const out = await routeRead({ variant: V, fn: 'GetAuditTrail', args: [req.params.id], caseId: req.query.caseId }, routerDeps);
+    const withProofs = req.query.proofs === '1' || req.query.proofs === 'true';
+    const out = await routeRead({ variant: V, fn: 'GetAuditTrail', args: [req.params.id], caseId: req.query.caseId, withProofs }, routerDeps);
     res.type('application/json').send(out);
   }));
 
@@ -887,6 +896,25 @@ function createApp(deps) {
     res.status(resp.status).json(body);
   }));
 
+  // Anchor-root read for audit reconstruction (M26): any authenticated
+  // principal. Anchoring keeps its roots on coc-main; Parallel-Anchored keeps
+  // them on the anchor channel, reachable only through the anchor-client (the
+  // sole holder of that identity) — proxied verbatim, status included. The
+  // direct variants have no roots at all.
+  app.get('/api/v1/anchor-roots/:scopeId/:batchId', wrap(async (req, res) => {
+    const { scopeId, batchId } = req.params;
+    if (V === 'anchoring') {
+      const out = await fabric.evaluate(cfg.defaultChannel, 'ReadAnchorRoot', [scopeId, batchId]);
+      return res.type('application/json').send(out);
+    }
+    if (V === 'parallel-anchored') {
+      const resp = await fetch(`${anchorClientUrl}/roots/${encodeURIComponent(scopeId)}/${encodeURIComponent(batchId)}`);
+      const body = await resp.json().catch(() => ({}));
+      return res.status(resp.status).json(body);
+    }
+    return res.status(404).json({ error: 'no anchor roots in this variant' });
+  }));
+
   // ---- internal: anchor-root sink for the Anchoring variant (coc-main) ----
   // Service-principal only (S1). These routes commit/read Merkle roots on the
   // ledger and belong to the batcher + verification service, which use the
@@ -906,10 +934,10 @@ function createApp(deps) {
     res.type('application/json').send(out);
   }));
 
-  // ---- runs (request store; execution is host-side sweep.py) ----
+  // ---- runs (request store; execution is host-side experiment.py) ----
   // Starting a run is an admin action (M12). Reads stay open to any
-  // authenticated principal — sweep.py never uses this API, so the gate cannot
-  // touch the benchmark path.
+  // authenticated principal — experiment.py never uses this API, so the gate
+  // cannot touch the benchmark path.
   app.post('/api/v1/runs', requireAdmin, wrap(async (req, res) => {
     const record = await runsStore.create(req.body || {});
     res.status(201).json(record);

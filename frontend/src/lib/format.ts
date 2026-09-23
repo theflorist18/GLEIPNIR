@@ -18,6 +18,12 @@ export function formatTs(iso: string | null | undefined): string {
     + `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())} UTC`;
 }
 
+// Evidence head status → terminal? 'DISPOSED' since M26 (DisposeEvidence);
+// 'REMOVED' is the legacy value on rows written before the rename — same
+// meaning, so pills and filters treat both alike.
+export const isDisposed = (status: string | null | undefined): boolean =>
+  status === 'DISPOSED' || status === 'REMOVED';
+
 // Date-only variant for coarse columns ("2026-07-21").
 export function formatDate(iso: string | null | undefined): string {
   if (!iso) return '—';

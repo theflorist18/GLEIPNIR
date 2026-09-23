@@ -1,62 +1,72 @@
 'use strict';
 
-// verify workload — measures VERIFICATION/AUDIT latency (thesis RQ2), the
-// numerator of the latency-vs-storage tradeoff. Anchoring variants only.
+// verify workload — VERIFICATION latency of one event (thesis RQ2), reported
+// in the reads table. Anchored variants only (rest mode).
 //
-// initializeWorkloadModule (NOT timed): seed M events through the gateway enqueue
-// path (capturing their eventIds from the 202 responses), then force a batch
-// boundary so roots are committed and receipts are complete. The timed round then
-// hammers GET /api/v1/evidence/:id/verify?eventId=... through the connector, so
-// Caliper's latency columns reflect fetch->recompute->compare-root cost.
+// initializeWorkloadModule (NOT timed): seed `seedCount` events through the
+// gateway enqueue path (capturing eventIds from the 202 responses), then force
+// a batch boundary so roots are committed and receipts are complete. The timed
+// round then GETs /api/v1/evidence/:id/verify?eventId=... through the REST
+// connector, so latency reflects fetch -> recompute branch -> compare root.
 //
-// Seeding/flush use direct fetch (they need response bodies + are not part of the
-// measurement); only the verify GETs go through sutAdapter.
-// roundArguments: { seedCount, caseId?, channels? }. With `channels: C`
-// (Parallel-Anchored multi-channel cells, audit F6/F24) seeds are spread
-// round-robin across case-001..case-00C; the verify GET itself is caseId-free
-// (the receipt's rootRef carries the scope). Env: GATEWAY_URL, BATCHER_URL,
-// GLEIPNIR_TOKEN.
+// Seeding/flush use direct fetch (they need response bodies and are not part
+// of the measurement); only the verify GETs go through sutAdapter.
+// roundArguments: { label, seedCount, variant?, channels?, caseId?, payloadBytes? }.
+// With `channels: C` (Parallel-Anchored) seeds are spread across
+// case-001..case-00C; the verify GET itself is caseId-free (the receipt's
+// rootRef carries the scope). Env: GATEWAY_URL, BATCHER_URL, GLEIPNIR_TOKEN.
+// Each timed verify is logged via lib/txlog as VERIFY.
 
 const { WorkloadModuleBase } = require('@hyperledger/caliper-core');
 const crypto = require('crypto');
-const { caseSelector } = require('./lib/payloads');
+const { caseSelector, createRestBody, filler } = require('./lib/payloads');
+const { flushBatcher } = require('./lib/pool');
+const txlog = require('./lib/txlog');
 
 class VerifyWorkload extends WorkloadModuleBase {
   async initializeWorkloadModule(workerIndex, totalWorkers, roundIndex, roundArguments, sutAdapter, sutContext) {
     await super.initializeWorkloadModule(workerIndex, totalWorkers, roundIndex, roundArguments, sutAdapter, sutContext);
     this.gatewayUrl = process.env.GATEWAY_URL || 'http://localhost:3000';
-    this.batcherUrl = process.env.BATCHER_URL || 'http://localhost:4001';
     this.token = process.env.GLEIPNIR_TOKEN || 'dev-token';
-    this.caseId = roundArguments.caseId;
+    this.label = roundArguments.label || `round-${roundIndex}`;
+    this.payloadBytes = roundArguments.payloadBytes | 0;
     const nextCase = caseSelector(roundArguments, workerIndex);
-    this.eventIds = [];
+    this.seeded = []; // {eventId, evidenceId, caseId}
     this.n = 0;
 
     const seedCount = roundArguments.seedCount || 50;
     const headers = { 'content-type': 'application/json', authorization: `Bearer ${this.token}` };
     for (let i = 0; i < seedCount; i += 1) {
       const id = `ev-verify-w${workerIndex}-r${roundIndex}-${i}-${crypto.randomUUID().slice(0, 8)}`;
-      const caseId = nextCase ? nextCase() : this.caseId;
-      const body = { evidenceId: id, version: '1.0', identity: { org: 'Org1MSP', subject: `custodian-${workerIndex}` }, storage: { protocol: 'file', location: `blob://${id}` }, ...(caseId ? { caseId } : {}) };
+      const caseId = nextCase ? nextCase() : (roundArguments.caseId || null);
+      const body = createRestBody(id, `custodian-${workerIndex}`, caseId, filler(id, this.payloadBytes));
       const resp = await fetch(`${this.gatewayUrl}/api/v1/evidence`, { method: 'POST', headers, body: JSON.stringify(body) });
       const j = await resp.json().catch(() => ({}));
-      if (j.eventId) this.eventIds.push(j.eventId);
+      if (j.eventId) this.seeded.push({ eventId: j.eventId, evidenceId: id, caseId });
+      // Untimed ledger write (no TxStatus — this goes over plain fetch), so it
+      // counts toward storage bytes/event but never toward a timing statistic.
+      txlog.logUntimed(workerIndex, this.label, 'CREATE', caseId, id, resp.ok,
+        resp.ok ? null : `HTTP ${resp.status}`);
     }
     // Force the batch boundary so roots are committed and receipts finalised.
-    await fetch(`${this.batcherUrl}/flush`, { method: 'POST' }).catch(() => {});
+    await flushBatcher();
   }
 
   async submitTransaction() {
-    if (this.eventIds.length === 0) {
+    if (this.seeded.length === 0) {
       // Nothing seeded (misconfiguration) — issue a harmless verify to surface failure.
-      return this.sutAdapter.sendRequests({ method: 'GET', path: '/api/v1/evidence/none/verify?eventId=none' });
+      const status = await this.sutAdapter.sendRequests({ method: 'GET', path: '/api/v1/evidence/none/verify?eventId=none' });
+      txlog.log(this.workerIndex, this.label, 'VERIFY', null, null, status);
+      return status;
     }
-    const eventId = this.eventIds[this.n % this.eventIds.length];
+    const s = this.seeded[this.n % this.seeded.length];
     this.n += 1;
-    return this.sutAdapter.sendRequests({
+    const status = await this.sutAdapter.sendRequests({
       method: 'GET',
-      path: `/api/v1/evidence/${encodeURIComponent(eventId)}/verify?eventId=${encodeURIComponent(eventId)}`,
+      path: `/api/v1/evidence/${encodeURIComponent(s.eventId)}/verify?eventId=${encodeURIComponent(s.eventId)}`,
     });
+    txlog.log(this.workerIndex, this.label, 'VERIFY', s.caseId, s.evidenceId, status);
+    return status;
   }
 }
 

@@ -38,7 +38,7 @@ so the runtime image stays lean). Same Node version pin, different libc.
 | `DELETE` | `/cases/:caseId/evidence/:evidenceId` | uncategorize (`case_id -> NULL`) |
 | `POST` | `/evidence-index` | register a row at ingest; `409` dup |
 | `GET` | `/evidence-index?caseId=&q=&uploadedBy=&type=&from=&to=&visibleToUserId=` | search; `visibleToUserId` = participant cases + own uncategorized uploads |
-| `GET`/`PATCH` | `/evidence-index/:evidenceId` | read / sync cached `status` |
+| `GET`/`PATCH` | `/evidence-index/:evidenceId` | read / sync cached `status` (`ACTIVE` / `DISPOSED` since M26; legacy `REMOVED` rows are read as `DISPOSED`-equivalent — the `EVIDENCE_REMOVED` activity type is the library's own "left the roster" concept, not the chaincode op) |
 | `GET` | `/internal/authz?userId=&evidenceId=` | `{allowed, caseId, roleInCase}` — the gateway's per-evidence pre-flight |
 
 Authz decision matrix: participant of the evidence's case → allowed (with the

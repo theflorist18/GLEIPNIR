@@ -2,14 +2,15 @@
   "name": "gleipnir-benchmark",
   "version": "1.0.0",
   "private": true,
-  "description": "GLEIPNIR Hyperledger Caliper 0.6.0 workspace (workloads, network configs, REST connector)",
+  "description": "GLEIPNIR Hyperledger Caliper 0.6.0 workspace (trace-replay workloads, network configs, REST connector, audit reconstruction)",
   "engines": {
     "node": ">=18.19"
   },
   "scripts": {
     "bind": "caliper bind --caliper-bind-sut fabric:fabric-gateway",
-    "gen:rounds": "node generate-rounds.js",
-    "launch:standard": "caliper launch manager --caliper-workspace . --caliper-benchconfig benchmarks/steady-standard.yaml --caliper-networkconfig networks/coc-main.yaml",
+    "gen:trace": "node trace/generate.js",
+    "audit": "node audit/reconstruct.js",
+    "test": "node --test test/*.test.js",
     "launch:smoke": "caliper launch manager --caliper-workspace . --caliper-benchconfig benchmarks/smoke-standard.yaml --caliper-networkconfig networks/coc-main.yaml"
   },
   "dependencies": {

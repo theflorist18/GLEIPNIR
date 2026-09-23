@@ -7,9 +7,15 @@
 //                    INCLUDING body download + JSON parse — the body scales
 //                    with the O(log N) sibling path, so excluding it would
 //                    undercount exactly the N-dependent cost RQ2 measures (F55)
-//   recomputeMs    = fold leafHash up the sibling path to the implied root
+//   recomputeMs    = leaf = SHA-256(canonical receipt.event) when the receipt
+//                    carries the event copy (else receipt.leafHash as stored),
+//                    then fold it up the sibling path to the implied root
 //   compareRootMs  = read the ANCHORED root and compare
-// and returns { ok, latencyMs, steps:{fetchMs,recomputeMs,compareRootMs} }.
+// and returns { ok, latencyMs, leafSource:"event"|"receipt",
+//               steps:{fetchMs,recomputeMs,compareRootMs} }.
+// Recomputing the leaf from the event copy is what makes "fetch event ->
+// recompute branch -> verify root" real: a tampered off-chain event copy fails
+// verification instead of riding on a stored leafHash (brief 2026-09-22 §6).
 //
 // This is the numerator of the latency-vs-storage tradeoff the Anchoring study
 // exists to quantify (thesis RQ2). It deliberately does NOT verify signatures or
@@ -20,7 +26,7 @@
 
 const express = require('express');
 const fsp = require('fs/promises');
-const { computeRoot } = require('./merkle');
+const { computeRoot, leafHash } = require('./merkle');
 
 function loadConfig() {
   return {
@@ -32,9 +38,10 @@ function loadConfig() {
     token: process.env.GLEIPNIR_TOKEN || 'dev-token',
     logLevel: process.env.LOG_LEVEL || 'info',
     // RQ2: where to append the per-request step breakdown. Empty (the default)
-    // disables it — only the sweep sets it, so unit tests and ad-hoc runs write
-    // nothing. sweep.py truncates the file before each verify run; collect.py
-    // reads it after and summarises percentiles into the run manifest.
+    // disables it — only the orchestrator sets it, so unit tests and ad-hoc
+    // runs write nothing. experiment.py truncates the file before each verify
+    // run; collect.py reads it after and summarises percentiles into the run
+    // manifest.
     metricsPath: process.env.VERIFY_METRICS_PATH || '',
   };
 }
@@ -126,9 +133,14 @@ function createApp(overrides) {
       return res.status(422).json({ ok: false, reason: 'malformed-receipt', latencyMs: steps.fetchMs, steps });
     }
 
-    // 2) recompute the root implied by leafHash + siblingPath.
+    // 2) recompute the root implied by leaf + siblingPath. The leaf is
+    // recomputed from the event copy when present (that hashing IS part of
+    // the audit cost, so it sits inside recomputeMs); older receipts without
+    // an event copy fall back to the stored leafHash.
+    const leafSource = receipt.event != null ? 'event' : 'receipt';
     const t1 = process.hrtime.bigint();
-    const recomputedRoot = computeRoot(receipt.leafHash, receipt.siblingPath || []);
+    const leaf = leafSource === 'event' ? leafHash(receipt.event) : receipt.leafHash;
+    const recomputedRoot = computeRoot(leaf, receipt.siblingPath || []);
     steps.recomputeMs = msSince(t1);
 
     // 3) read the anchored root and compare.
@@ -156,13 +168,14 @@ function createApp(overrides) {
       ts: new Date().toISOString(),
       eventId,
       ok,
+      leafSource,
       fetchMs: steps.fetchMs,
       recomputeMs: steps.recomputeMs,
       compareRootMs: steps.compareRootMs,
       latencyMs,
     });
     // A mismatch is a tamper signal, not a server error -> 200 with ok:false.
-    return res.status(200).json({ ok, reason: ok ? undefined : 'root-mismatch', latencyMs, steps });
+    return res.status(200).json({ ok, reason: ok ? undefined : 'root-mismatch', latencyMs, leafSource, steps });
   });
 
   app.locals.config = cfg;

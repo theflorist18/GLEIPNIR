@@ -10,7 +10,7 @@ export function MerkleBadge({ state }: { state: VerifyState }) {
   if (state === 'pending') return <span className="badge pending">Merkle: …</span>;
   if (state === 'notyet') {
     return (
-      <span className="badge pending" title="Receipt or root not anchored yet — the batch may not have closed. Not a tamper signal. Run demos with a small BATCH_N.">
+      <span className="badge pending" title="Receipt or root not anchored yet — the batch may not have closed. Not a tamper signal. Run demos with a small BATCH_SIZE.">
         Merkle: not yet anchored
       </span>
     );

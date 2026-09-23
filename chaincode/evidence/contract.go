@@ -88,8 +88,8 @@ func (c *EvidenceContract) TransferCustody(ctx contractapi.TransactionContextInt
 //
 // It MUST NOT read or write the head key (the structural zero-conflict
 // guarantee, and the thesis gate): any head read here — even a "reject if
-// removed" check — would reintroduce a conflict point under concurrent access.
-// So access is ALWAYS appended, even after RemoveEvidence; a post-removal
+// disposed" check — would reintroduce a conflict point under concurrent access.
+// So access is ALWAYS appended, even after DisposeEvidence; a post-disposal
 // access is deliberately recorded as an audit event rather than rejected.
 //
 // ISO/IEC 27037: Preservation (auditability of access).
@@ -99,11 +99,12 @@ func (c *EvidenceContract) AccessLog(ctx contractapi.TransactionContextInterface
 	})
 }
 
-// RemoveEvidence sets the terminal REMOVED disposition. After this, further
-// TransferCustody / RemoveEvidence calls fail (head no longer ACTIVE).
+// DisposeEvidence sets the terminal DISPOSED status. After this, further
+// TransferCustody / DisposeEvidence calls fail (head no longer ACTIVE).
 //
-// ISO/IEC 27037: Preservation (disposition).
-func (c *EvidenceContract) RemoveEvidence(ctx contractapi.TransactionContextInterface, evidenceId, reason string) error {
+// ISO/IEC 27037: Preservation (disposition) — nothing is deleted; a status
+// transition. The head record and every audit event stay on the ledger.
+func (c *EvidenceContract) DisposeEvidence(ctx contractapi.TransactionContextInterface, evidenceId, reason string) error {
 	stub := ctx.GetStub()
 
 	head, headKey, err := c.readActiveHead(ctx, evidenceId)
@@ -111,7 +112,7 @@ func (c *EvidenceContract) RemoveEvidence(ctx contractapi.TransactionContextInte
 		return err
 	}
 
-	head.Status = StatusRemoved
+	head.Status = StatusDisposed
 	headBytes, err := json.Marshal(head)
 	if err != nil {
 		return err
@@ -119,7 +120,7 @@ func (c *EvidenceContract) RemoveEvidence(ctx contractapi.TransactionContextInte
 	if err := stub.PutState(headKey, headBytes); err != nil {
 		return err
 	}
-	return c.appendEvent(ctx, evidenceId, OpRemove, "", map[string]string{
+	return c.appendEvent(ctx, evidenceId, OpDispose, "", map[string]string{
 		"reason": reason,
 	})
 }
@@ -239,7 +240,7 @@ func (c *EvidenceContract) ReadAnchorRoot(ctx contractapi.TransactionContextInte
 // ---- internal helpers ----
 
 // readActiveHead loads the head record and requires it to be ACTIVE. Used by
-// the serial mutating ops (TransferCustody, RemoveEvidence). AccessLog does NOT
+// the serial mutating ops (TransferCustody, DisposeEvidence). AccessLog does NOT
 // use this — it never reads the head.
 func (c *EvidenceContract) readActiveHead(ctx contractapi.TransactionContextInterface, evidenceId string) (EvidenceHead, string, error) {
 	stub := ctx.GetStub()

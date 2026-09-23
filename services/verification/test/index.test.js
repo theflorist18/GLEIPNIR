@@ -70,6 +70,7 @@ test('anchoring happy path: recomputed root == anchored root -> ok:true with tim
   assert.equal(resp.status, 200);
   const body = await resp.json();
   assert.equal(body.ok, true);
+  assert.equal(body.leafSource, 'receipt', 'no event copy -> stored leafHash used');
   assert.equal(gatewayHits, 1);
   assert.ok(typeof body.steps.fetchMs === 'number');
   assert.ok(typeof body.steps.recomputeMs === 'number');
@@ -168,6 +169,7 @@ test('RQ2: a completed verify appends a step-breakdown metric line; errors do no
   const rec = JSON.parse(lines[0]);
   assert.equal(rec.eventId, 'evt-1');
   assert.equal(rec.ok, true);
+  assert.equal(rec.leafSource, 'receipt');
   for (const k of ['fetchMs', 'recomputeMs', 'compareRootMs', 'latencyMs']) {
     assert.ok(typeof rec[k] === 'number', `${k} should be a number`);
   }
@@ -203,4 +205,65 @@ test('parallel-anchored path reads the anchor-client, not the gateway', async (t
   assert.equal(resp.status, 200);
   assert.equal((await resp.json()).ok, true);
   assert.equal(anchorHits, 1);
+});
+
+// ---- leaf recomputed from the event copy (supervisor brief 2026-09-22 §6) ----
+// Receipts written since the brief carry `event` (the CoC event as enqueued).
+// The leaf is then SHA-256(canonical event) recomputed HERE, inside
+// recomputeMs, and the stored leafHash is not trusted for the fold.
+
+test('receipt with event copy: leaf recomputed from the event -> ok:true, leafSource:"event"', async (t) => {
+  const r = { ...goodReceipt('shared'), evidenceId: 'ev-1', event: { i: 1 } }; // leafHash({i:1}) == V2.L1
+  const rstore = await receiptStore(new Map([['evt-1', r]]));
+  const gw = await startServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ merkleRoot: V2.ROOT }));
+  });
+  const app = createApp({ variant: 'anchoring', receiptStoreUrl: rstore.url, gatewayUrl: gw.url, logLevel: 'silent' });
+  const v = await listen(app);
+  t.after(() => { v.server.close(); rstore.server.close(); gw.server.close(); });
+
+  const resp = await fetch(`${v.url}/verify/evt-1`);
+  assert.equal(resp.status, 200);
+  const body = await resp.json();
+  assert.equal(body.ok, true);
+  assert.equal(body.leafSource, 'event');
+});
+
+test('tampered event copy with an untouched stored leafHash -> root-mismatch (leaf comes from the event, not the receipt)', async (t) => {
+  const r = { ...goodReceipt('shared'), evidenceId: 'ev-1', event: { i: 1, tampered: true } };
+  const rstore = await receiptStore(new Map([['evt-1', r]]));
+  const gw = await startServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ merkleRoot: V2.ROOT }));
+  });
+  const app = createApp({ variant: 'anchoring', receiptStoreUrl: rstore.url, gatewayUrl: gw.url, logLevel: 'silent' });
+  const v = await listen(app);
+  t.after(() => { v.server.close(); rstore.server.close(); gw.server.close(); });
+
+  const resp = await fetch(`${v.url}/verify/evt-1`);
+  assert.equal(resp.status, 200);
+  const body = await resp.json();
+  assert.equal(body.ok, false);
+  assert.equal(body.reason, 'root-mismatch');
+  assert.equal(body.leafSource, 'event');
+});
+
+test('metrics line records leafSource:"event" for an event-copy receipt', async (t) => {
+  const metricsPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'verify-metrics-')), 'verify.jsonl');
+  const r = { ...goodReceipt('shared'), evidenceId: 'ev-1', event: { i: 1 } };
+  const rstore = await receiptStore(new Map([['evt-1', r]]));
+  const gw = await startServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ merkleRoot: V2.ROOT }));
+  });
+  const app = createApp({ variant: 'anchoring', receiptStoreUrl: rstore.url, gatewayUrl: gw.url, logLevel: 'silent', metricsPath });
+  const v = await listen(app);
+  t.after(() => { v.server.close(); rstore.server.close(); gw.server.close(); });
+
+  assert.equal((await fetch(`${v.url}/verify/evt-1`)).status, 200);
+  await new Promise((res) => setTimeout(res, 50));
+  const rec = JSON.parse(fs.readFileSync(metricsPath, 'utf8').trim());
+  assert.equal(rec.leafSource, 'event');
+  assert.ok(rec.recomputeMs >= 0);
 });

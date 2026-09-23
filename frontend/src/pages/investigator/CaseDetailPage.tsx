@@ -9,7 +9,7 @@ import { Modal } from '../../components/ui/Modal';
 import { Tabs } from '../../components/ui/Tabs';
 import { Timeline } from '../../components/ui/Timeline';
 import { activityLine, activityTone } from '../../lib/activity';
-import { formatTs } from '../../lib/format';
+import { formatTs, isDisposed } from '../../lib/format';
 import type { CaseActivityEvent, CaseDetail, CaseRole, EvidenceFlag, EvidenceIndexRow, User } from '../../types';
 
 const fmtBytes = (n: number | null) => (n == null ? '—' : n >= 1048576 ? `${(n / 1048576).toFixed(1)} MiB` : n >= 1024 ? `${(n / 1024).toFixed(1)} KiB` : `${n} B`);
@@ -117,7 +117,7 @@ export function CaseDetailPage() {
     if (fq && !`${e.evidenceId} ${e.label ?? ''} ${e.originalFilename ?? ''}`.toLowerCase().includes(fq.toLowerCase())) return false;
     if (fCat && e.categoryId !== fCat) return false;
     if (fFlag && e.flag !== fFlag) return false;
-    if (fStatus && e.status !== fStatus) return false;
+    if (fStatus === 'DISPOSED' ? !isDisposed(e.status) : (fStatus && e.status !== fStatus)) return false;
     return true;
   });
 
@@ -298,7 +298,7 @@ export function CaseDetailPage() {
                 <select value={fStatus} aria-label="filter by status" onChange={(e) => setFStatus(e.target.value)}>
                   <option value="">any status</option>
                   <option value="ACTIVE">ACTIVE</option>
-                  <option value="REMOVED">REMOVED</option>
+                  <option value="DISPOSED">DISPOSED</option>
                 </select>
                 <button className="small" disabled={filteredEvidence.length === 0} onClick={exportFilteredCsv}>
                   Export CSV ({filteredEvidence.length})
@@ -319,7 +319,7 @@ export function CaseDetailPage() {
                         <td>{e.flag ? <Badge tone={FLAG_TONE[e.flag]}>{FLAG_LABEL[e.flag]}</Badge> : <span className="muted small">—</span>}</td>
                         <td className="small">{fmtBytes(e.sizeBytes)}</td>
                         <td>{e.uploadedBy ?? '—'}</td>
-                        <td><span className={`pill ${e.status === 'REMOVED' ? 'removed' : 'active'}`}>{e.status}</span></td>
+                        <td><span className={`pill ${isDisposed(e.status) ? 'removed' : 'active'}`}>{e.status}</span></td>
                       </tr>
                     ))}
                   </tbody>

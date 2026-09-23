@@ -1,11 +1,13 @@
 'use strict';
 
-// Bootstrap: wire the real Fabric session + batcher client + runs store into the
-// app and listen. All configuration comes from the environment (docs/CONTRACTS.md §7).
+// Bootstrap: wire the real Fabric session + batcher/receipts clients + runs
+// store into the app and listen. All configuration comes from the environment
+// (docs/CONTRACTS.md §7).
 
 const { createApp } = require('./app');
 const { connectFabric } = require('./fabric');
 const { makeBatcherClient } = require('./batcherClient');
+const { makeReceiptsClient } = require('./receiptsClient');
 const { makeRunsStore } = require('./runsStore');
 const { makeUsersStore } = require('./users');
 const { makeSessions } = require('./sessions');
@@ -40,6 +42,7 @@ async function main() {
   const port = parseInt(process.env.PORT, 10) || 3000;
   const { fabric, close } = await connectFabric(process.env);
   const batcher = makeBatcherClient(process.env.BATCHER_URL || 'http://merkle-batcher:4001');
+  const receipts = makeReceiptsClient(process.env.RECEIPT_STORE_URL || 'http://receipt-store:4002');
   const runsStore = makeRunsStore(process.env.RESULTS_DIR || '/results');
   const { users, sessions } = await makeAuthStores(process.env);
   const internalToken = process.env.GLEIPNIR_INTERNAL_TOKEN || 'internal-dev-token';
@@ -49,6 +52,8 @@ async function main() {
   const app = createApp({
     fabric,
     batcher,
+    receipts,
+    anchorClientUrl: process.env.ANCHOR_CLIENT_URL || 'http://anchor-client:4003',
     runsStore,
     users,
     sessions,

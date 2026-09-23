@@ -235,7 +235,7 @@ Property support summary:
 - `timeout` / `orderer`: **1.4 binding only** — do not use with GLEIPNIR's gateway binding.
 
 For GLEIPNIR's create/transfer/access/verify workloads: use `readOnly:false` for
-`CreateEvidence`/`TransferCustody`/`AccessLog`/`RemoveEvidence`; `readOnly:true` for
+`CreateEvidence`/`TransferCustody`/`AccessLog`/`DisposeEvidence` (M26 rename); `readOnly:true` for
 `ReadEvidence`/`GetAuditTrail`. For the Parallel variant, per-case channel is selected either by a
 per-channel network config **or** by the `channel:` request field.
 Source: `https://hyperledger-caliper.github.io/caliper/0.6.0/concepts/workload-module/` and `.../connectors/fabric-config/`

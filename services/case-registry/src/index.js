@@ -36,6 +36,10 @@ function safeEqual(a, b) {
 // applied to ids that reach SQL params or URLs.
 const SAFE_ID = /^[A-Za-z0-9._:-]+$/;
 const CASE_STATUSES = ['OPEN', 'CLOSED', 'ARCHIVED'];
+// Terminal evidence status as synced from the ledger: 'DISPOSED' since M26
+// (DisposeEvidence); 'REMOVED' is the legacy value on rows synced before the
+// rename and means the same thing.
+const isDisposed = (status) => status === 'DISPOSED' || status === 'REMOVED';
 // M20: single evidence flag (or null). A deliberate enum, not free-form tags.
 const EVIDENCE_FLAGS = ['HIGH_PRIORITY', 'PROCESSED', 'NEEDS_LEAD_REVIEW'];
 // M18 (CONTRACTS §12-8): 'lead' joined the per-case ladder — leads manage the
@@ -653,7 +657,9 @@ function createApp(overrides) {
                   WHERE evidence_id = @evidence_id`).run(row);
       if (row.case_id) {
         const opts = { actor: req.actor, evidenceId: row.evidence_id };
-        if (row.status === 'REMOVED' && before.status !== 'REMOVED') {
+        // EVIDENCE_REMOVED = "left the case roster" (library concept), fired once
+        // on the ACTIVE -> DISPOSED transition; it is not the chaincode op name.
+        if (isDisposed(row.status) && !isDisposed(before.status)) {
           audit(row.case_id, 'EVIDENCE_REMOVED', { ...opts, detail: { label: row.label ?? null } });
         }
         if (b.flag !== undefined && (row.flag ?? null) !== before.flag) {

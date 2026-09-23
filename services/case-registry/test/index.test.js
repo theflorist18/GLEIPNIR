@@ -115,8 +115,8 @@ test('evidence-index: register once (409 on dup), read, status sync', async (t) 
   assert.equal((await indexEvidence(url, '../escape')).status, 400);
   assert.equal((await indexEvidence(url, 'ev-x', { caseId: 'CASE-missing' })).status, 404);
 
-  const patched = await json(await call(url, 'PATCH', '/evidence-index/ev-1', { status: 'REMOVED' }));
-  assert.equal(patched.status, 'REMOVED');
+  const patched = await json(await call(url, 'PATCH', '/evidence-index/ev-1', { status: 'DISPOSED' }));
+  assert.equal(patched.status, 'DISPOSED');
   assert.ok(patched.lastSyncedAt);
 
   assert.equal((await call(url, 'GET', '/evidence-index/ev-none')).status, 404);

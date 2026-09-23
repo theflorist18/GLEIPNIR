@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatDate, formatTs } from './format';
+import { formatDate, formatTs, isDisposed } from './format';
 
 describe('formatTs', () => {
   it('renders a fixed UTC datetime', () => {
@@ -16,6 +16,15 @@ describe('formatTs', () => {
   });
   it('falls back to the raw value for unparseable input (never throws)', () => {
     expect(formatTs('not-a-date')).toBe('not-a-date');
+  });
+});
+
+describe('isDisposed', () => {
+  it('treats DISPOSED and the legacy REMOVED value alike, nothing else', () => {
+    expect(isDisposed('DISPOSED')).toBe(true);
+    expect(isDisposed('REMOVED')).toBe(true);
+    expect(isDisposed('ACTIVE')).toBe(false);
+    expect(isDisposed(undefined)).toBe(false);
   });
 });
 

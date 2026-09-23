@@ -14,8 +14,8 @@ import "encoding/json"
 
 // Status values for an evidence head record.
 const (
-	StatusActive  = "ACTIVE"
-	StatusRemoved = "REMOVED" // terminal; no further mutation permitted
+	StatusActive   = "ACTIVE"
+	StatusDisposed = "DISPOSED" // terminal disposition; nothing is deleted, no further mutation permitted
 )
 
 // Operation tags recorded on each audit event.
@@ -23,7 +23,7 @@ const (
 	OpCreate   = "CREATE"
 	OpTransfer = "TRANSFER"
 	OpAccess   = "ACCESS"
-	OpRemove   = "REMOVE"
+	OpDispose  = "DISPOSE"
 )
 
 // Storage is the off-chain binary pointer. integrity_proof is an RFC 6920
@@ -84,7 +84,7 @@ type CodexEntry struct {
 // sect. 5): CodexEntry is embedded WITHOUT a json tag so the stored JSON is
 // the flat sect. 5 shape ({id, version, storage, ..., custodian, status}),
 // never nested under a "codex" key. Written ONLY by CreateEvidence/
-// TransferCustody/RemoveEvidence, which are semantically serial per evidence.
+// TransferCustody/DisposeEvidence, which are semantically serial per evidence.
 // AccessLog never touches it.
 type EvidenceHead struct {
 	CodexEntry

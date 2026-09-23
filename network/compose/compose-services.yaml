@@ -14,8 +14,9 @@ volumes:
   gateway-auth-data:
   case-registry-data:
   evidence-blob-data:
-  # RQ2 per-request verify-step timings (fetch/recompute/compare). sweep.py
-  # truncates this before each verify run; collect.py reads it after.
+  # RQ2 per-request verify-step timings (fetch/recompute/compare), written by
+  # the verification service; the orchestrator (experiment.py) resets it per
+  # run and collect.py reads it after.
   verify-metrics:
 
 services:
@@ -29,6 +30,11 @@ services:
       - GLEIPNIR_TOKEN=${GLEIPNIR_TOKEN:-dev-token}
       - BATCHER_URL=http://merkle-batcher:4001
       - VERIFICATION_URL=http://verification:4004
+      # M26 off-chain reads (anchored variants) + anchor-root reads; both
+      # services only exist under their profiles, so on standard/parallel these
+      # URLs are never dialled.
+      - RECEIPT_STORE_URL=http://receipt-store:4002
+      - ANCHOR_CLIENT_URL=http://anchor-client:4003
       - PEER_ENDPOINT=peer0-org1:7051
       - PEER_HOST_ALIAS=peer0.org1.example.com
       - MSP_ID=Org1MSP
@@ -103,9 +109,12 @@ services:
     environment:
       - PORT=4001
       - VARIANT=${VARIANT:-anchoring}
-      - BATCH_N=${BATCH_N:-100}
-      - BATCH_K=${BATCH_K:-25}
-      # Namespaces batchIds per sweep cell so recreates against a persistent
+      # ONE batch-size grid for Anchoring (N) and Parallel-Anchored (K);
+      # experiment.py sets both per run. BATCH_FLUSH_MS=0 = size-only batching
+      # (a timeout, when set, is held constant across runs).
+      - BATCH_SIZE=${BATCH_SIZE:-100}
+      - BATCH_FLUSH_MS=${BATCH_FLUSH_MS:-0}
+      # Namespaces batchIds per run so recreates against a persistent
       # ledger never reuse a committed (scope,batchId) key (audit F44).
       - BATCH_EPOCH=${BATCH_EPOCH:-}
       - RECEIPT_STORE_URL=http://receipt-store:4002

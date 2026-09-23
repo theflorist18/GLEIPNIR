@@ -7,9 +7,9 @@ const OP_TONE: Record<Op, TimelineItem['tone']> = {
   CREATE: 'ok',
   TRANSFER: 'accent',
   ACCESS: 'muted',
-  REMOVE: 'danger',
+  DISPOSE: 'danger',
 };
-const OP_MARK: Record<Op, string> = { CREATE: '+', TRANSFER: '⇄', ACCESS: '◉', REMOVE: '×' };
+const OP_MARK: Record<Op, string> = { CREATE: '+', TRANSFER: '⇄', ACCESS: '◉', DISPOSE: '×' };
 
 // M21: the chain-of-custody trail as a vertical timeline — one entry per
 // on-chain event, op-toned, with the op-specific detail spelled out.
@@ -21,12 +21,14 @@ export function AuditTrailTimeline({ events }: { events: CoCEvent[] }) {
       <h3>Chain of custody ({events.length})</h3>
       <Timeline
         items={events.map((e, i) => {
-          const op = (e.op ?? 'ACCESS') as Op;
+          // 'REMOVE' is the pre-M26 tag for the same terminal op on ledgers
+          // written before the DisposeEvidence rename; render it as DISPOSE.
+          const op = (((e.op as string | undefined) === 'REMOVE' ? 'DISPOSE' : e.op) ?? 'ACCESS') as Op;
           const detail = e.detail ?? {};
           const line =
             op === 'TRANSFER' ? `to ${String(detail.newCustodian ?? '?')}${detail.reason ? ` — ${String(detail.reason)}` : ''}`
             : op === 'ACCESS' ? String(detail.action ?? '')
-            : op === 'REMOVE' ? String(detail.reason ?? '')
+            : op === 'DISPOSE' ? String(detail.reason ?? '')
             : '';
           return {
             key: e.eventId ?? String(i),

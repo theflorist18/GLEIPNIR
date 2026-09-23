@@ -9,7 +9,7 @@
 
 export type Variant = 'standard' | 'anchoring' | 'parallel' | 'parallel-anchored';
 export type Regime = 'smoke' | 'steady';
-export type Op = 'CREATE' | 'TRANSFER' | 'ACCESS' | 'REMOVE';
+export type Op = 'CREATE' | 'TRANSFER' | 'ACCESS' | 'DISPOSE';
 
 // ---- Evidence head record (CONTRACTS §5, Codex-Entry mapping) ----
 
@@ -114,11 +114,12 @@ export interface AccessLogRequest {
 
 // ---- Runs / sweep (CONTRACTS §10) ----
 
+// One batch-size grid for both anchored variants (supervisor brief 2026-09-22);
+// sendRateTps is the CONFIGURED send rate (input), never a measured throughput.
 export interface SweepCell {
-  N?: number;
-  K?: number;
+  batchSize?: number;
   channels?: number;
-  offeredLoadTps?: number;
+  sendRateTps?: number;
   repetition?: number;
 }
 

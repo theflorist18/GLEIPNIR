@@ -55,9 +55,13 @@ only).
   case-lead role offers only global leads; server enforces the last-lead
   409).
 - `src/pages/admin/` — `UsersPage`, `CasesAdminPage` (roster + categorize),
-  `DashboardPage` (the old operator dashboard, now admin-gated: variant/sweep
-  config, run control, charts, history/compare — execution stays host-side,
-  `orchestration/sweep.py`).
+  `DashboardPage` (the old operator dashboard, now admin-gated: variant
+  selector, the M26 run-request form — ONE `batch size` field + `channels` +
+  `send rate (tx/s)` → `cell: {batchSize, channels, sendRateTps}` — run
+  control, charts, history/compare; execution stays host-side,
+  `orchestration/experiment.py`). `Op` is `CREATE | TRANSFER | ACCESS |
+  DISPOSE` and the status pill shows `DISPOSED` (legacy `REMOVED` rows
+  tolerated).
 - `src/settings.tsx` — trimmed to the display `variant` only; the token input
   is gone (login replaced it).
 
@@ -68,9 +72,12 @@ too). nginx's `try_files … /index.html` keeps deep links refresh-safe.
 
 **Verification is per event** (receipts are keyed by eventId), so Verify
 targets on the evidence page come from write responses captured this session
-(`SessionTrail`). **Demo tip:** with the default `BATCH_N=100` a demo batch
-may never close, so Verify legitimately reports *not yet anchored* — bring
-the network up with a small batch (e.g. `BATCH_N=5`) to see green badges.
+(`SessionTrail`). **Demo tip:** with the compose default `BATCH_SIZE` a demo
+batch may never close, so Verify legitimately reports *not yet anchored* —
+bring the network up with a small batch (e.g. `BATCH_SIZE=5` in
+`network/compose/.env`) to see green badges. On the anchored variants the
+evidence page's trail is read from the receipt store (the off-chain trail,
+M26); evidence written before M26 shows an empty trail there by design.
 
 Views, downloads, and exports of an evidence item are logged **server-side**
 automatically (synchronous `AccessLog` under the signed-in username) — the

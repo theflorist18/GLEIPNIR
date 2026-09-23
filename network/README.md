@@ -20,7 +20,9 @@ Used by **all variants**. Referenced by commit SHA in every run manifest (method
 
 ## Channels
 
-`coc-main` (Org1+Org2; Standard, Anchoring) · `case-001..005` (Org1+Org2; Parallel*) ·
+`coc-main` (Org1+Org2; Standard, Anchoring) · `case-001..case-NNN` (Org1+Org2; Parallel*;
+as many as the E2 `channel_counts` / E3b `case_counts` grids in `benchmark/sweeps.yaml`
+need, provisioned by `orchestration/provision-channel.sh` / `experiment.py`) ·
 `anchor-main` (AnchorClientMSP; Parallel-Anchored). Channel creation is
 channel-participation only: `configtxgen -outputBlock` → `osnadmin channel join` on all
 three orderer admin endpoints (HTTP 201) → `peer channel join`. **No legacy bootstrap
@@ -52,9 +54,15 @@ plus anchor-client, peer0-anchor, ccaas-evidence-anchor, ca-anchor.
 ## Named volumes (measurement design — never anonymous)
 
 `peer0org1-ledger`, `peer0org2-ledger`, `peer0anchor-ledger` → `/var/hyperledger/production`;
-`orderer{0,1,2}-ledger` → `/var/hyperledger/production/orderer`; `receipt-data` → `/data`.
-`du` checkpoints target `…/ledgersData/chains/chains/<channel>` (block store) and
-`…/ledgersData/stateLeveldb` (world state).
+`orderer{0,1,2}-ledger` → `/var/hyperledger/production/orderer`; `receipt-data` → `/data`;
+`verify-metrics` → `/verify-metrics` (verification service's per-request JSONL); library:
+`gateway-auth-data`, `case-registry-data`, `evidence-blob-data`.
+`du` checkpoints target `…/ledgersData/chains/chains/<channel>` (block store),
+`…/ledgersData/stateLeveldb` (world state) and the receipt store's `/data`.
+`orchestration/reset-network.sh` (M26) removes ONLY the six ledger volumes + `receipt-data` +
+`verify-metrics` between runs and never the library volumes or `organizations/`.
+`.env` also carries the batcher's per-run `BATCH_SIZE` / `BATCH_FLUSH_MS` / `BATCH_EPOCH`
+(one batch-size grid for both anchored variants), written by `experiment.py`.
 
 ## Decision record (docs/CONTRACTS.md §12)
 

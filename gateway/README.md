@@ -50,12 +50,13 @@ Admin-only routes (user management, `POST /runs`) require an **admin session**
 | `POST` | `/evidence` | `CreateEvidence` (or batcher enqueue). Also accepts `multipart/form-data` (M13c): `file` part → evidence-store blob PUT → head committed with the store's ni-URI proof → evidence-index row. The library `caseId` never reaches the chain (linkage is off-chain only) |
 | `POST` | `/evidence/:id/transfer` | `TransferCustody` (or enqueue); user sessions need a writing role |
 | `POST` | `/evidence/:id/access` | `AccessLog` (or enqueue); user sessions need a writing role |
-| `DELETE` | `/evidence/:id` | `RemoveEvidence` (or enqueue); best-effort evidence-index status sync. M25 role ladder: user sessions need the case-lead role (uploader keeps it for own uncategorized evidence; contributors/viewers 403) |
-| `GET` | `/evidence/:id` | `ReadEvidence`; user sessions: authz-gated + auto `AccessLog(view)` |
+| `DELETE` | `/evidence/:id` | `DisposeEvidence` (or enqueue; op `DISPOSE`) — a terminal status transition to `DISPOSED`, never a deletion; best-effort evidence-index status sync. M25 role ladder: user sessions need the case-lead role (uploader keeps it for own uncategorized evidence; contributors/viewers 403) |
+| `GET` | `/evidence/:id` | `ReadEvidence` (batched variants: head folded from the off-chain trail, `offChain: true`; 404 when no events); user sessions: authz-gated + auto `AccessLog(view)` |
 | `GET` | `/evidence/:id/download` | stream bytes from evidence-store; user sessions: authz-gated + auto `AccessLog(download)`; blob content is participant-only — the admin bypass does NOT apply here (M18) |
 | `GET` | `/evidence/:id/export` | `{record, auditTrail}` JSON bundle; user sessions: authz-gated + auto `AccessLog(export)` |
-| `GET` | `/evidence/:id/audit` | `GetAuditTrail`; authz-gated, NOT auto-logged |
+| `GET` | `/evidence/:id/audit?proofs=1` | `GetAuditTrail` (batched variants: CoC events from the receipt store in receipt order; `?proofs=1` adds each event's `proof {leafHash, siblingPath, batchId, leafIndex, rootRef}` — ignored on direct variants); authz-gated, NOT auto-logged |
 | `GET` | `/evidence/:id/verify?eventId=` | proxy → verification service |
+| `GET` | `/anchor-roots/:scopeId/:batchId` | anchor-root record for audit reconstruction (M26); any authenticated principal. anchoring → `ReadAnchorRoot` on `coc-main`; parallel-anchored → proxy anchor-client `GET /roots/:scopeId/:batchId` (status passed through); standard/parallel → `404 {error:'no anchor roots in this variant'}` |
 | `GET` | `/evidence/search?caseId=&q=&uploadedBy=&type=&from=&to=` | evidence-index search, participant-scoped unless admin |
 | `POST`/`GET`/`PATCH` | `/cases`, `/cases/:id`, `/cases/search` | proxy → case-registry; create admin-or-lead (lead creator auto-added as case lead; admin may pass `leadUserId`), update admin-or-case-lead; list/detail participant-scoped unless admin |
 | `POST`/`PATCH`/`DELETE` | `/cases/:id/participants[/:userId]` | proxy, admin-or-case-lead; `roleInCase: lead` grants require a global-`lead` target; removing (or PATCH-demoting, M25) the last case lead is 409 (admin may) |
@@ -66,7 +67,7 @@ Admin-only routes (user management, `POST /runs`) require an **admin session**
 | `PUT` | `/evidence/:id/flag` | one strict-enum triage flag or null (M20); write-gated |
 | `GET` | `/cases/:id/activity?limit=` | case audit log (M20 feed; persistent since M25b — the gateway forwards the session username via `X-Gleipnir-Actor` on every registry mutation); case-visibility gate; never auto-logged |
 | `GET` | `/cases/:id/coc-report?format=csv\|json` | per-case CoC report (M24): all exhibit trails + metadata; sessions auto-log one `AccessLog('coc-report')` per exhibit after assembly (never the service token); CSV is hand-rolled RFC 4180 |
-| `POST`/`GET` | `/runs`, `/runs/:id` | run-request store (execution is host-side); `POST` is admin-session-only |
+| `POST`/`GET` | `/runs`, `/runs/:id` | run-request store (execution is host-side `orchestration/experiment.py`); `POST` is admin-session-only |
 
 Auto-AccessLog is **synchronous**: a user-session view/download/export succeeds
 only if the log write succeeds. It **never** fires for the service token —
@@ -88,15 +89,29 @@ Internal (no `/api/v1` prefix, still bearer-authed): `POST /internal/anchor-root
 - **parallel** → `submit` on `case-<id>` (from `caseId`; validated `^case-\d{3}$`).
 - **parallel-anchored** → enqueue per-case to the merkle-batcher (`202`).
 
-Reads always evaluate directly, on `coc-main` or the `?caseId=` case channel.
+Reads (M26): **standard / parallel** evaluate the chaincode directly, on `coc-main` or
+the `?caseId=` case channel. **anchoring / parallel-anchored** keep no per-event
+record on the app channel (only the Merkle root is committed), so `ReadEvidence` and
+`GetAuditTrail` are served from the **off-chain trail**: `receiptsClient.js` lists the
+receipt store's per-evidence index (`GET /receipts?evidenceId=`), each receipt carrying
+the CoC `event` it witnesses. The trail is those events in receipt order; the head is
+folded from them (`id`, `version`, `storage` from CREATE, `identity.subject` = CREATE
+actor, `custodian` = last TRANSFER `newCustodian` else CREATE actor, `status`
+`DISPOSED`|`ACTIVE`, `offChain: true`). Pre-M26 receipts without an `event` copy
+contribute no entry. The Parallel* `caseId` validation is unchanged on reads.
+The off-chain trail is exactly as trustworthy as the receipt store (un-hardened by
+design): a verifier must recompute each event's leaf and check it against the
+on-chain root (`?proofs=1` + `/anchor-roots`) — the gateway does not do that.
 
 ## Inputs / outputs
 
 - **In:** REST/JSON requests; env config.
 - **Out:** Fabric submit/evaluate on app channels; enqueue POSTs to the batcher;
-  verification proxy; run-request files under `RESULTS_DIR`.
+  receipt-store index reads (batched variants); anchor-client root reads
+  (parallel-anchored); verification proxy; run-request files under `RESULTS_DIR`.
 
 Env: `PORT=3000`, `GLEIPNIR_TOKEN`, `VARIANT`, `BATCHER_URL`, `VERIFICATION_URL`,
+`RECEIPT_STORE_URL=http://receipt-store:4002`, `ANCHOR_CLIENT_URL=http://anchor-client:4003`,
 `PEER_ENDPOINT`, `PEER_HOST_ALIAS`, `MSP_ID`, `CRYPTO_PATH`, `TLS_CERT_PATH`,
 `DEFAULT_CHANNEL=coc-main`, `CC_NAME=evidence`, `RESULTS_DIR=/results`,
 `AUTH_DATA_DIR=/data/auth`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`,
@@ -114,7 +129,9 @@ still starts with user login disabled (service token unaffected).
   off-chain only.
 - Build Merkle trees, verify proofs, or write the anchor channel (batcher / verification /
   anchor-client own those).
-- Execute benchmark runs — `POST /runs` only records a request; `orchestration/sweep.py`
+- Verify Merkle branches or roots itself — `?proofs=1` and `/anchor-roots` only hand the
+  witness and the root to the caller (verification service / `benchmark/audit`).
+- Execute benchmark runs — `POST /runs` only records a request; `orchestration/experiment.py`
   runs Caliper and writes the manifest the UI polls.
 
 ## Failure modes
@@ -129,11 +146,16 @@ still starts with user login disabled (service token unaffected).
 - `413` — multipart file over `MAX_UPLOAD_BYTES`.
 - `503` — login attempted while the users store is unavailable; library route
   without the case-registry/evidence-store clients configured.
-- `404` — read of an unknown key (mapped from the chaincode not-found error).
-- `502` — Fabric submit/evaluate error, batcher unreachable, or verification proxy error.
+- `404` — read of an unknown key (mapped from the chaincode not-found error); batched
+  variant `ReadEvidence` with no off-chain events; `/anchor-roots` on a direct variant
+  (no roots exist) or an unknown `(scopeId, batchId)`.
+- `503` — batched-variant read without a receipts client injected (misconfigured deps).
+- `502` — Fabric submit/evaluate error, batcher / receipt-store / anchor-client
+  unreachable, or verification proxy error.
 
 ## Test
 
 ```bash
-npm install && npm test    # node:test — variant matrix, ni-URI vector, auth 401, create-vs-enqueue
+npm install && npm test    # node:test — variant matrix, ni-URI vector, auth 401, create-vs-enqueue,
+                           # off-chain reads (trail/proofs/fold/404), anchor-roots per variant
 ```

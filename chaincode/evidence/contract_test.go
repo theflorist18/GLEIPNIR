@@ -237,27 +237,39 @@ func TestConcurrentAccessLogDistinctKeys(t *testing.T) {
 	}
 }
 
-func TestRemoveIsTerminal(t *testing.T) {
+func TestDisposeIsTerminal(t *testing.T) {
 	c := &EvidenceContract{}
 	stub := newMemStub()
 	ctx := newCtx(stub)
 	id := "ev-4"
 	mustCreate(t, c, ctx, id)
 
-	stub.txID = "c2remove00dead0009ff"
-	if err := c.RemoveEvidence(ctx, id, "disposed"); err != nil {
-		t.Fatalf("RemoveEvidence: %v", err)
+	stub.txID = "c2dispose0dead0009ff"
+	if err := c.DisposeEvidence(ctx, id, "disposed"); err != nil {
+		t.Fatalf("DisposeEvidence: %v", err)
+	}
+	// Nothing is deleted: the head stays readable with the terminal status.
+	out, err := c.ReadEvidence(ctx, id)
+	if err != nil {
+		t.Fatalf("ReadEvidence after dispose: %v", err)
+	}
+	var head EvidenceHead
+	if err := json.Unmarshal([]byte(out), &head); err != nil {
+		t.Fatalf("unmarshal head: %v", err)
+	}
+	if head.Status != StatusDisposed {
+		t.Errorf("status = %q, want DISPOSED", head.Status)
 	}
 	if err := c.TransferCustody(ctx, id, "custodian-z", "late"); err == nil {
-		t.Fatal("TransferCustody after remove should fail")
+		t.Fatal("TransferCustody after dispose should fail")
 	}
-	if err := c.RemoveEvidence(ctx, id, "again"); err == nil {
-		t.Fatal("second RemoveEvidence should fail")
+	if err := c.DisposeEvidence(ctx, id, "again"); err == nil {
+		t.Fatal("second DisposeEvidence should fail")
 	}
-	// AccessLog after removal is deliberately still recorded (no head read).
+	// AccessLog after disposal is deliberately still recorded (no head read).
 	stub.txID = "d3access00feed000aee"
-	if err := c.AccessLog(ctx, id, "auditor", "post-removal-view"); err != nil {
-		t.Fatalf("post-removal AccessLog should be recorded, got: %v", err)
+	if err := c.AccessLog(ctx, id, "auditor", "post-disposal-view"); err != nil {
+		t.Fatalf("post-disposal AccessLog should be recorded, got: %v", err)
 	}
 }
 

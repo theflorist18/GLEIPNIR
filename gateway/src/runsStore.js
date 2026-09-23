@@ -1,7 +1,7 @@
 'use strict';
 
 // Run-request store. The dashboard POSTs a run REQUEST here; the actual
-// benchmark EXECUTION is host-side (orchestration/sweep.py), which writes the
+// benchmark EXECUTION is host-side (orchestration/experiment.py), which writes the
 // results manifest + checkpoints under RESULTS_DIR/<runId>/. This store just
 // records requests and reads back manifests/checkpoints so the UI can poll.
 // (Decoupling is intentional — the gateway cannot run Caliper.)

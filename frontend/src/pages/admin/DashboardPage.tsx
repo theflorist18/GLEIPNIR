@@ -7,8 +7,8 @@ import { useSettings } from '../../settings';
 import { GatewayError } from '../../api';
 import type { Checkpoint, RunDetail, Variant } from '../../types';
 
-// ---- Operator dashboard (variant/sweep config, run control, charts, run
-// history + comparison). ARCHITECTURE §5. Execution is host-side (sweep.py);
+// ---- Operator dashboard (variant/run config, run control, charts, run
+// history + comparison). ARCHITECTURE §5. Execution is host-side (experiment.py);
 // the UI creates a run REQUEST and polls the manifest — surfaced honestly
 // below. Relocated from dashboard.tsx in M14: now an admin-gated route
 // (starting a run requires an admin session server-side too), with the client
@@ -30,13 +30,12 @@ function VariantSelector() {
   );
 }
 
-function SweepConfigForm({ onSubmitted }: { onSubmitted: (runId: string) => void }) {
+function RunConfigForm({ onSubmitted }: { onSubmitted: (runId: string) => void }) {
   const { client } = useAuth();
   const { variant } = useSettings();
-  const [n, setN] = useState(100);
-  const [k, setK] = useState(25);
+  const [batchSize, setBatchSize] = useState(50);
   const [channels, setChannels] = useState(1);
-  const [load, setLoad] = useState(50);
+  const [sendRate, setSendRate] = useState(50);
   const [reps, setReps] = useState(3);
   const [err, setErr] = useState('');
 
@@ -46,7 +45,7 @@ function SweepConfigForm({ onSubmitted }: { onSubmitted: (runId: string) => void
       const res = await client.startRun({
         variant,
         regime: 'steady',
-        cell: { N: n, K: k, channels, offeredLoadTps: load },
+        cell: { batchSize, channels, sendRateTps: sendRate },
         repetitions: reps,
       });
       onSubmitted(res.runId);
@@ -57,12 +56,11 @@ function SweepConfigForm({ onSubmitted }: { onSubmitted: (runId: string) => void
 
   return (
     <div className="card form">
-      <h3>Sweep configuration</h3>
-      <p className="hint">Values mirror benchmark/sweeps.yaml. This creates a run <em>request</em>; the sweep runs host-side.</p>
-      <label>N (anchoring batch)<input type="number" value={n} onChange={(e) => setN(+e.target.value)} /></label>
-      <label>K (parallel-anchored batch)<input type="number" value={k} onChange={(e) => setK(+e.target.value)} /></label>
-      <label>channels<input type="number" value={channels} onChange={(e) => setChannels(+e.target.value)} /></label>
-      <label>offered load (tps)<input type="number" value={load} onChange={(e) => setLoad(+e.target.value)} /></label>
+      <h3>Run configuration</h3>
+      <p className="hint">Values mirror benchmark/sweeps.yaml. This creates a run <em>request</em>; execution is host-side experiment.py.</p>
+      <label>batch size (anchored variants)<input type="number" value={batchSize} onChange={(e) => setBatchSize(+e.target.value)} /></label>
+      <label>channels (parallel variants)<input type="number" value={channels} onChange={(e) => setChannels(+e.target.value)} /></label>
+      <label>send rate (tx/s)<input type="number" value={sendRate} onChange={(e) => setSendRate(+e.target.value)} /></label>
       <label>repetitions<input type="number" value={reps} onChange={(e) => setReps(+e.target.value)} /></label>
       <button onClick={submit}>Request run</button>
       {err && <div className="err">{err}</div>}
@@ -95,7 +93,7 @@ function RunControl({ runId }: { runId: string }) {
   return (
     <div className="card">
       <div className="row-between"><h3>Run {runId}</h3><span className="pill">{detail?.status ?? 'requested'}</span></div>
-      <p className="hint">Benchmark execution is host-side (orchestration/sweep.py). Status reflects the results manifest.</p>
+      <p className="hint">Benchmark execution is host-side (orchestration/experiment.py). Status reflects the results manifest.</p>
       {err && <div className="err">{err}</div>}
       {detail && (
         <>
@@ -114,7 +112,7 @@ function ThroughputChart({ run }: { run: RunDetail }) {
   if (data.length === 0) return <Empty label="throughput" />;
   return (
     <ChartFrame title="Throughput (successful-only TPS)">
-      <BarChart data={data}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="channel" /><YAxis /><Tooltip /><Bar dataKey="tps" fill="#4f86c6" /></BarChart>
+      <BarChart data={data}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="channel" /><YAxis /><Tooltip /><Bar dataKey="tps" name="throughput (TPS)" fill="#4f86c6" /></BarChart>
     </ChartFrame>
   );
 }
@@ -202,7 +200,7 @@ function RunCompare({ runs }: { runs: RunDetail[] }) {
     <div className="card">
       <h3>Compare</h3>
       <table className="runs">
-        <thead><tr><th>run</th><th>variant</th><th>agg TPS</th><th>write avg</th><th>verify avg</th><th>byte/log</th></tr></thead>
+        <thead><tr><th>run</th><th>variant</th><th>throughput (TPS)</th><th>write avg</th><th>verify avg</th><th>byte/log</th></tr></thead>
         <tbody>
           {rows.map((r) => (
             <tr key={r.runId}><td className="mono small">{r.runId}</td><td>{r.variant}</td>
@@ -232,7 +230,7 @@ export function DashboardPage() {
     <div className="dashboard">
       <section className="col">
         <VariantSelector />
-        <SweepConfigForm onSubmitted={(id) => { setSelected(id); setRefreshKey((k) => k + 1); }} />
+        <RunConfigForm onSubmitted={(id) => { setSelected(id); setRefreshKey((k) => k + 1); }} />
         <RunHistory onSelect={onSelect} refreshKey={refreshKey} />
       </section>
       <section className="col wide">
