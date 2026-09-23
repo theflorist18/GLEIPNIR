@@ -1,12 +1,38 @@
-# GLEIPNIR sweep constants — SINGLE SOURCE OF TRUTH (CONTRACTS.md sect. 10).
-# Every other file (benchmarks/*.yaml, orchestration/sweep.py, services BATCH_N/BATCH_K)
-# imports these values. Do not scatter literals elsewhere. If you change a value here,
-# re-run `npm run gen:rounds` so benchmarks/*.yaml stay in sync (see README sync rule).
-anchoring_batch_N: [10, 50, 100, 250]
-parallel_anchored_batch_K: [5, 10, 25, 50]
-channel_counts: [1, 2, 5]        # 10 deliberately cut — single host
-offered_load_tps: [25, 50, 100]  # conjecture until measured; tune per host
-repetitions: 3                   # N-runs loop for mean ± spread
+# GLEIPNIR experiment constants — SINGLE SOURCE OF TRUTH (docs/CONTRACTS.md §10).
+# Supervisor brief 2026-09-22: E1 batch calibration → E2 channel calibration → E3 scalability
+# (a: vs send rate, b: vs cases) + per-operation breakdown; E0 pilot is functional only.
+seed: 20260922            # PRNG seed of the transaction trace — identical sequence across all variants
+workers: 4                # Caliper worker processes (constant)
+repetitions: 3            # r; results reported as mean ± SD over repetitions
+
+# ---- swept grids ----
+batch_sizes: [10, 25, 50, 100, 200]               # E1 — ONE grid for Anchoring (N) and Parallel-Anchored (K)
+channel_counts: [5, 10, 20, 30, 40, 50]           # E2 — Parallel only; bounded by host cores (Fabric perf guidance)
+send_rates_tps: [10, 25, 50, 75, 100, 150, 200]   # E3a — send rate = CONFIGURED offered load (input, not output)
+case_counts: [5, 10, 20, 30, 40, 50]              # E3b — trimmed to ≤ baseline.channels_max before E3b runs
+
+# ---- calibrated constants carried forward (filled from results; "baseline", never "optimal") ----
+baseline:
+  send_rate_tps: 50       # from E0 pilot (sub-saturation) → used by E1, E2, E3b, ops   [PLACEHOLDER until E0]
+  batch_size: 50          # from E1 (rule: docs/methodology/experiments.md §4) → E3, ops  [PLACEHOLDER until E1]
+  channels: 20            # from E2: MEDIAN of the healthy range → E3a, ops              [PLACEHOLDER until E2]
+  channels_max: 50        # from E2: top of the healthy range → E3b upper bound          [PLACEHOLDER until E2]
+
+# ---- controlled workload (identical across variants; recorded in every run.json) ----
+workload:
+  cases: null                     # null → cases = channels (1:1 mapping); integer decouples data from infra
+  evidence_per_case: 20
+  events_per_case_per_round: 200  # per round; per-worker share = cases*200/workers must be an integer
+  rounds: 5                       # trace slices per run (E1/E2/E3b); E3a uses one slice per send rate
+  mix: { transfer_weight: 0.15, access_weight: 0.85, dispose_fraction: 0.5 }  # CREATE = 1/evidence; DISPOSE ends dispose_fraction of evidence
+  payload_bytes: 256              # synthetic Codex-Entry filler hashed into storage.integrity_proof
+  audit_cases: 5                  # cases reconstructed per run (audit reconstruction time)
+anchoring:
+  flush_timeout_ms: 0             # 0 = size-only batching; partial batch flushed at run end (constant across runs)
+monitor:
+  interval_s: 5                   # Caliper docker resource monitor sampling interval
 regimes:
-  smoke:  { cases: 10, logs_per_case_min: 10, logs_per_case_max: 25 }
-  steady: { min_events_per_channel: 1000 }
+  smoke:  { cases: 10, evidence_per_case: 2, logs_per_case_min: 10, logs_per_case_max: 25, send_rate_tps: 5 }
+  steady: { min_events_per_channel: 1000 }   # cumulative per run; a run below the floor is labelled "sub-floor", never "steady"
+ramp:                              # E0 short ramp to locate approximate saturation
+  events_per_case_per_round: 40

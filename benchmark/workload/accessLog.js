@@ -1,52 +1,38 @@
 'use strict';
 
-// accessLog workload. Two scenarios via roundArguments.scenario:
+// accessLog workload — per-operation round (ops breakdown), every variant.
+// AccessLog is a WRITE custody event (brief §1 Q7). Each worker seeds a pool of
+// `pool` evidence items (NOT timed, via lib/pool) and then logs an access to
+// the pooled items round-robin, always on the case the evidence lives on.
 //
-//   'shared'  — the Stage-1 CORRECTNESS GATE. Every worker issues AccessLog
-//               against ONE shared evidenceId (roundArguments.sharedEvidenceId).
-//               Because each access appends under a distinct (evidenceId, sortKey)
-//               composite key, this MUST produce ZERO MVCC_READ_CONFLICT even at
-//               high concurrency — the structural guarantee the whole design rests
-//               on. (Contrast: mutating one record here would guarantee conflicts.)
-//
-//   'spread'  — each worker logs access to its own seeded pool (throughput shape).
-//
-// roundArguments: { mode, scenario, sharedEvidenceId?, caseId?, channel?, channels?, pool? }.
-// With `channels: C` (multi-channel Parallel cells, audit F6/F24) the spread pool
-// is seeded round-robin across case-001..case-00C and every access targets the
-// SAME case its evidence was created on.
+// Legacy `scenario: shared` (the Stage-1 zero-MVCC-conflict gate: every worker
+// hits ONE evidenceId) is kept: it needs no pool and proves the composite
+// (evidenceId, sortKey) design produces zero MVCC_READ_CONFLICT under
+// concurrency. roundArguments: { mode, label, variant?, channels?, caseId?,
+// channel?, pool, payloadBytes?, scenario?, sharedEvidenceId? }.
+// Each timed tx is logged via lib/txlog (GLEIPNIR_TXLOG_DIR).
 
 const { WorkloadModuleBase } = require('@hyperledger/caliper-core');
-const { evidenceId, codexJson, createRestBody, fabricRequest, caseSelector } = require('./lib/payloads');
+const { fabricRequest } = require('./lib/payloads');
+const { seedPool } = require('./lib/pool');
+const txlog = require('./lib/txlog');
 
 class AccessLogWorkload extends WorkloadModuleBase {
   async initializeWorkloadModule(workerIndex, totalWorkers, roundIndex, roundArguments, sutAdapter, sutContext) {
     await super.initializeWorkloadModule(workerIndex, totalWorkers, roundIndex, roundArguments, sutAdapter, sutContext);
     this.mode = roundArguments.mode || 'fabric';
-    this.scenario = roundArguments.scenario || 'spread';
-    this.caseId = roundArguments.caseId;
-    this.channel = roundArguments.channel;
+    this.label = roundArguments.label || `round-${roundIndex}`;
+    this.payloadBytes = roundArguments.payloadBytes | 0;
     this.n = 0;
-
-    if (this.scenario === 'shared') {
-      // The shared evidence is expected to already exist (created by the
-      // orchestration gate before the round). AccessLog never reads the head,
-      // so even a not-yet-created id would still be appended without conflict.
-      this.targets = [{ id: roundArguments.sharedEvidenceId || 'ev-shared-gate', caseId: this.caseId, channel: this.channel }];
+    if (roundArguments.scenario === 'shared') {
+      // AccessLog never reads the head, so even a not-yet-created id appends without conflict.
+      this.targets = [{
+        id: roundArguments.sharedEvidenceId || 'ev-shared-gate',
+        caseId: roundArguments.caseId || null,
+        channel: roundArguments.channel || null,
+      }];
     } else {
-      const poolSize = roundArguments.pool || 25;
-      const nextCase = caseSelector(roundArguments, workerIndex);
-      this.targets = [];
-      for (let i = 0; i < poolSize; i += 1) {
-        const id = evidenceId(this.workerIndex, this.roundIndex, `seed${i}`);
-        const spread = nextCase ? nextCase() : null;
-        this.targets.push({ id, caseId: spread || this.caseId, channel: spread || this.channel });
-        if (this.mode === 'rest') {
-          await this.sutAdapter.sendRequests({ method: 'POST', path: '/api/v1/evidence', body: createRestBody(id, this.workerIndex, spread || this.caseId) });
-        } else {
-          await this.sutAdapter.sendRequests(fabricRequest('CreateEvidence', [id, codexJson(id, this.workerIndex)], spread || this.channel));
-        }
-      }
+      this.targets = await seedPool(this, roundArguments.pool || 25);
     }
   }
 
@@ -55,16 +41,16 @@ class AccessLogWorkload extends WorkloadModuleBase {
     this.n += 1;
     const actor = `worker-${this.workerIndex}`;
     const action = `access-${this.n}`;
-    if (this.mode === 'rest') {
-      return this.sutAdapter.sendRequests({
+    const req = this.mode === 'rest'
+      ? {
         method: 'POST',
         path: `/api/v1/evidence/${encodeURIComponent(target.id)}/access`,
-        body: { actor, action, caseId: target.caseId },
-      });
-    }
-    return this.sutAdapter.sendRequests(
-      fabricRequest('AccessLog', [target.id, actor, action], target.channel),
-    );
+        body: { actor, action, ...(target.caseId ? { caseId: target.caseId } : {}) },
+      }
+      : fabricRequest('AccessLog', [target.id, actor, action], target.channel);
+    const status = await this.sutAdapter.sendRequests(req);
+    txlog.log(this.workerIndex, this.label, 'ACCESS', target.caseId || target.channel, target.id, status);
+    return status;
   }
 }
 

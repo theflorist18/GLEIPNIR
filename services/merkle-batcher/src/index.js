@@ -6,6 +6,13 @@
 // submits the root for on-chain commit (gateway for `anchoring`, anchor-client
 // for `parallel-anchored`), then re-PUTs receipts with the returned txId.
 //
+// A boundary is reached by SIZE (BATCH_SIZE events in the open queue) or, when
+// BATCH_FLUSH_MS > 0, by TIME (a timer armed at the first enqueue of an open
+// batch), or by POST /flush at run end. Every batch record carries the
+// timestamps the "anchoring delay" metric is computed from (supervisor brief
+// 2026-09-22 §6): openedAt / closedAt / committedAt and per-event
+// enqueue -> commit delays {min, mean, max}.
+//
 // Does NOT: submit to the ledger itself, persist receipts, or verify anything.
 // Contracts: docs/CONTRACTS.md §4/§5/§6/§7/§9; docs/ARCHITECTURE.md §4.2.
 
@@ -24,18 +31,24 @@ function loadConfig() {
   return {
     port: int(process.env.PORT, 4001),
     variant: process.env.VARIANT || 'anchoring',
+    // BATCH_SIZE is the one batch-size knob (E1 sweeps ONE grid for both
+    // anchored variants). 0 = unset -> fall back to the legacy per-variant
+    // BATCH_N (anchoring) / BATCH_K (parallel-anchored).
+    batchSize: int(process.env.BATCH_SIZE, 0),
     batchN: int(process.env.BATCH_N, 100),
     batchK: int(process.env.BATCH_K, 25),
+    // 0 = size-only batching (partial batch flushed at run end by /flush).
+    flushMs: int(process.env.BATCH_FLUSH_MS, 0),
     receiptStoreUrl: process.env.RECEIPT_STORE_URL || 'http://receipt-store:4002',
     gatewayUrl: process.env.GATEWAY_URL || 'http://gateway:3000',
     anchorClientUrl: process.env.ANCHOR_CLIENT_URL || 'http://anchor-client:4003',
     // Bearer token for the gateway's authed /internal/anchor-root (audit F23).
     token: process.env.GLEIPNIR_TOKEN || 'dev-token',
     // batchEpoch namespaces batchIds per batcher lifetime: the ledger persists
-    // across batcher recreates (sweep cells recreate the batcher), so a bare
-    // per-scope sequence would collide with roots already committed by an
-    // earlier process and poison verification (audit F44). sweep.py sets
-    // BATCH_EPOCH per cell; the startup timestamp covers every other restart.
+    // across batcher recreates (experiment cells recreate the batcher), so a
+    // bare per-scope sequence would collide with roots already committed by an
+    // earlier process and poison verification (audit F44). The orchestrator
+    // sets BATCH_EPOCH per run; the startup timestamp covers every other restart.
     batchEpoch: process.env.BATCH_EPOCH || Date.now().toString(36),
     logLevel: process.env.LOG_LEVEL || 'info',
   };
@@ -47,15 +60,19 @@ function createApp(overrides) {
     if (cfg.logLevel !== 'silent') console.log('[merkle-batcher]', ...args);
   };
 
-  // Per-scope open queue: { seq, events:[{eventId,event,leafHash,leafIndex}], ids:Set }
+  // Per-scope open queue:
+  // { seq, events:[{eventId,event,leafHash,leafIndex,enqueuedAt}], ids:Set,
+  //   openedAt: ms of the first enqueue, timer: flush timer | null }
   const queues = new Map();
   // Closed-batch records keyed by batchId (kept for /status; never dropped).
   const batches = new Map();
   // In-flight boundary promises (so /flush can await them deterministically).
   const inflight = new Set();
 
-  const batchSize = () =>
-    (cfg.variant === 'parallel-anchored' ? cfg.batchK : cfg.batchN);
+  const batchSize = () => {
+    if (cfg.batchSize > 0) return cfg.batchSize;
+    return cfg.variant === 'parallel-anchored' ? cfg.batchK : cfg.batchN;
+  };
 
   // batchId = scope + epoch + sequence. Opaque at every consumer (receipt
   // rootRef, chaincode composite key, verification query); the epoch component
@@ -66,7 +83,7 @@ function createApp(overrides) {
   function getQueue(scopeId) {
     let q = queues.get(scopeId);
     if (!q) {
-      q = { seq: 0, events: [], ids: new Set() };
+      q = { seq: 0, events: [], ids: new Set(), openedAt: null, timer: null };
       queues.set(scopeId, q);
     }
     return q;
@@ -132,8 +149,13 @@ function createApp(overrides) {
   async function processBatch(batch) {
     const leaves = batch.events.map((e) => e.leafHash);
     const tree = buildTree(leaves);
+    // Receipt = witness (leafHash + sibling path + rootRef) PLUS the event body
+    // as enqueued, so the off-chain trail can be read back and the leaf
+    // recomputed from the event (leafHash stays SHA-256 of the canonical event).
     const receipts = batch.events.map((e, i) => ({
       eventId: e.eventId,
+      evidenceId: e.event.evidenceId,
+      event: e.event,
       leafHash: e.leafHash,
       siblingPath: siblingPath(tree.layers, i),
       batchId: batch.batchId,
@@ -151,6 +173,11 @@ function createApp(overrides) {
       txId: null,
       degraded: false,
       error: null,
+      openedAt: new Date(batch.openedAt).toISOString(),
+      closedAt: new Date(batch.closedAt).toISOString(),
+      committedAt: null,
+      forced: batch.forced,
+      delayMs: null,
     };
     batches.set(batch.batchId, rec);
 
@@ -175,6 +202,16 @@ function createApp(overrides) {
       log(`batch ${batch.batchId} root submit failed: ${rec.error}`);
       return;
     }
+    // Anchoring delay = root commit (as observed here) minus each event's
+    // enqueue time. Recorded before the receipt re-PUT: that is bookkeeping.
+    const committedAt = Date.now();
+    const delays = batch.events.map((e) => committedAt - e.enqueuedAt);
+    rec.committedAt = new Date(committedAt).toISOString();
+    rec.delayMs = {
+      min: Math.min(...delays),
+      mean: delays.reduce((a, b) => a + b, 0) / delays.length,
+      max: Math.max(...delays),
+    };
 
     // 3) Re-PUT receipts with the committed rootRef.txId.
     let rePutOk = true;
@@ -186,16 +223,32 @@ function createApp(overrides) {
       rec.receiptStatus = 'degraded';
       rec.degraded = true;
     }
-    log(`batch ${batch.batchId} committed root ${tree.root} tx ${txId}`);
+    log(
+      `batch ${batch.batchId} committed root ${tree.root} tx ${txId} ` +
+      `leafCount=${rec.leafCount} forced=${rec.forced} openedAt=${rec.openedAt} ` +
+      `closedAt=${rec.closedAt} committedAt=${rec.committedAt} ` +
+      `delayMs=${rec.delayMs.min}/${rec.delayMs.mean.toFixed(1)}/${rec.delayMs.max}`
+    );
   }
 
   // Close the open batch for a scope (if non-empty) and start processing it.
-  function trigger(scopeId) {
+  // forced = closed by /flush or the flush timer rather than by size.
+  function trigger(scopeId, forced) {
     const q = queues.get(scopeId);
     if (!q || q.events.length === 0) return;
-    const batch = { batchId: batchIdFor(scopeId, q.seq), scopeId, events: q.events };
+    if (q.timer) clearTimeout(q.timer);
+    const batch = {
+      batchId: batchIdFor(scopeId, q.seq),
+      scopeId,
+      events: q.events,
+      openedAt: q.openedAt,
+      closedAt: Date.now(),
+      forced: Boolean(forced),
+    };
     q.events = [];
     q.ids = new Set();
+    q.openedAt = null;
+    q.timer = null;
     q.seq += 1;
     const p = processBatch(batch)
       .catch((err) => log('processBatch error', err))
@@ -218,12 +271,14 @@ function createApp(overrides) {
       closedBatches: list.length,
       committed: list.filter((b) => b.rootStatus === 'committed').length,
       failed: list.filter((b) => b.rootStatus === 'failed').length,
+      forced: list.filter((b) => b.forced).length,
       receiptDegraded: list.filter((b) => b.receiptStatus === 'degraded').length,
       degraded: list.filter((b) => b.degraded).length,
     };
     return {
       variant: cfg.variant,
       batchSize: batchSize(),
+      flushTimeoutMs: cfg.flushMs,
       queues: queueDepths,
       counters,
       degraded: counters.degraded > 0,
@@ -253,18 +308,26 @@ function createApp(overrides) {
     if (q.ids.has(eventId)) {
       return res.status(409).json({ error: 'duplicate eventId in batch', eventId });
     }
+    const now = Date.now();
+    if (q.events.length === 0) {
+      q.openedAt = now;
+      if (cfg.flushMs > 0) {
+        q.timer = setTimeout(() => trigger(scopeId, true), cfg.flushMs);
+        q.timer.unref();
+      }
+    }
     const batchId = batchIdFor(scopeId, q.seq);
     const leafIndex = q.events.length;
-    q.events.push({ eventId, event, leafHash: leafHash(event), leafIndex });
+    q.events.push({ eventId, event, leafHash: leafHash(event), leafIndex, enqueuedAt: now });
     q.ids.add(eventId);
     res.status(202).json({ batchId, leafIndex });
-    if (q.events.length >= batchSize()) trigger(scopeId);
+    if (q.events.length >= batchSize()) trigger(scopeId, false);
     return undefined;
   });
 
   // Force a batch boundary on every non-empty queue (partial-batch policy).
   app.post('/flush', async (_req, res) => {
-    for (const scopeId of [...queues.keys()]) trigger(scopeId);
+    for (const scopeId of [...queues.keys()]) trigger(scopeId, true);
     await settle();
     res.json(status());
   });
@@ -281,9 +344,12 @@ if (require.main === module) {
   const app = createApp();
   const cfg = app.locals.config;
   app.listen(cfg.port, () => {
+    const size = cfg.batchSize > 0
+      ? cfg.batchSize
+      : (cfg.variant === 'parallel-anchored' ? cfg.batchK : cfg.batchN);
     console.log(
       `[merkle-batcher] listening on :${cfg.port} variant=${cfg.variant} ` +
-      `N=${cfg.batchN} K=${cfg.batchK}`
+      `batchSize=${size} flushTimeoutMs=${cfg.flushMs}`
     );
   });
 }

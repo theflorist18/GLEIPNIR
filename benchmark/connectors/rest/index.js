@@ -57,9 +57,17 @@ class RestGatewayConnector extends ConnectorBase {
     try {
       const resp = await fetch(url, init);
       await resp.text().catch(() => '');         // drain body
-      if (resp.ok) status.SetStatusSuccess(); else status.SetStatusFail();
-    } catch (_err) {
+      if (resp.ok) {
+        status.SetStatusSuccess();
+      } else {
+        // The error string is what workload/lib/txlog.js records as `err`,
+        // so collect.py can classify HTTP_4XX / HTTP_5XX failures.
+        status.SetStatusFail();
+        status.SetErrMsg(0, `HTTP ${resp.status}`);
+      }
+    } catch (err) {
       status.SetStatusFail();
+      status.SetErrMsg(0, (err && err.message) || String(err));
     }
     // No extra time stamping here: SetStatusSuccess()/SetStatusFail() record
     // time_final themselves; TxStatus has no SetTimeFinal in Caliper 0.6.0

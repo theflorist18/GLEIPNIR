@@ -22,6 +22,15 @@ const crypto = require('node:crypto');
 // Charset per docs/CONTRACTS.md §6 — anything else could escape DATA_DIR.
 const SAFE_EVIDENCE_ID = /^[A-Za-z0-9._:-]+$/;
 
+// Constant-time compare of the internal shared secret (OWASP A02): hash both
+// sides to a fixed length so timingSafeEqual never throws on a length mismatch
+// and the guard can't leak the token by timing.
+function safeEqual(a, b) {
+  const ah = crypto.createHash('sha256').update(String(a == null ? '' : a), 'utf8').digest();
+  const bh = crypto.createHash('sha256').update(String(b == null ? '' : b), 'utf8').digest();
+  return crypto.timingSafeEqual(ah, bh);
+}
+
 // Copied byte-identically from gateway/src/ni.js — the SAME hashing scheme the
 // gateway used before this service existed (docs/CONTRACTS.md §4 discipline:
 // one canonical hash implementation, no reinvention).
@@ -79,9 +88,10 @@ function createApp(overrides) {
 
   app.get('/healthz', (_req, res) => res.json({ ok: true }));
 
-  // Shared-secret guard: this service trusts only the gateway.
+  // Shared-secret guard: this service trusts only the gateway. Constant-time
+  // compare (OWASP A02) — see safeEqual above.
   app.use((req, res, next) => {
-    if (req.get('x-gleipnir-internal-token') !== cfg.internalToken) {
+    if (!safeEqual(req.get('x-gleipnir-internal-token'), cfg.internalToken)) {
       return res.status(401).json({ error: 'unauthorized' });
     }
     return next();

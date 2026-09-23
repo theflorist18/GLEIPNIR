@@ -53,7 +53,7 @@ function fakeFabric() {
       if (fn === 'CreateEvidence') push(args[0], { op: 'CREATE', actor: (JSON.parse(args[1]).identity || {}).subject || '' });
       if (fn === 'TransferCustody') push(args[0], { op: 'TRANSFER', actor: args[1] });
       if (fn === 'AccessLog') push(args[0], { op: 'ACCESS', actor: args[1], detail: { action: args[2] } });
-      if (fn === 'RemoveEvidence') push(args[0], { op: 'REMOVE', actor: '' });
+      if (fn === 'DisposeEvidence') push(args[0], { op: 'DISPOSE', actor: '' });
       return `tx-${submits.length}`;
     },
     async evaluate(_channel, fn, args) {
@@ -268,7 +268,7 @@ test('auto-AccessLog: view/download/export each append exactly one ACCESS; servi
   assert.equal(await s.auditLen('service', 'ev-audit'), 4);
 });
 
-test('evidence search scoping and REMOVE status sync', SKIP, async (t) => {
+test('evidence search scoping and DISPOSE status sync', SKIP, async (t) => {
   const s = await bootStack(t);
   await s.upload('ivy', Buffer.from('a'), { evidenceId: 'ev-ivy' });
   await s.upload('mallory', Buffer.from('b'), { evidenceId: 'ev-mal' });
@@ -277,10 +277,10 @@ test('evidence search scoping and REMOVE status sync', SKIP, async (t) => {
   assert.deepEqual((await (await fetch(`${s.url}/api/v1/evidence/search`, { headers: s.as('ivy') })).json()).map((x) => x.evidenceId), ['ev-ivy']);
   assert.equal((await (await fetch(`${s.url}/api/v1/evidence/search`, { headers: s.as('root') })).json()).length, 2);
 
-  // REMOVE syncs the cached status (ledger stays authoritative)
+  // DISPOSE syncs the cached status (ledger stays authoritative)
   assert.equal((await fetch(`${s.url}/api/v1/evidence/ev-ivy`, { method: 'DELETE', headers: s.asJson('ivy'), body: JSON.stringify({ reason: 'disposed' }) })).status, 201);
   const row = (await (await fetch(`${s.url}/api/v1/evidence/search`, { headers: s.as('ivy') })).json())[0];
-  assert.equal(row.status, 'REMOVED');
+  assert.equal(row.status, 'DISPOSED');
 });
 
 test('M15: the auto-log is synchronous — a failed log write fails the view, and no event is half-recorded', SKIP, async (t) => {
@@ -395,14 +395,14 @@ test('M18: admins read metadata and trails everywhere but blob content only as a
   assert.equal((await fetch(`${s.url}/api/v1/evidence/ev-sealed/download`, { headers: s.as('root') })).status, 200);
 });
 
-test('M25: role ladder — remove is lead-only; participant role PATCH policy', SKIP, async (t) => {
+test('M25: role ladder — dispose is lead-only; participant role PATCH policy', SKIP, async (t) => {
   const s = await bootStack(t);
   const c = await (await fetch(`${s.url}/api/v1/cases`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ name: 'ladder' }) })).json();
   await fetch(`${s.url}/api/v1/cases/${c.id}/participants`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ userId: 'ivy', roleInCase: 'contributor' }) });
   await fetch(`${s.url}/api/v1/cases/${c.id}/participants`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ userId: 'mallory', roleInCase: 'viewer' }) });
   await s.upload('ivy', Buffer.from('x'), { evidenceId: 'ev-ladder', caseId: c.id });
 
-  // Contributor (even the uploader) and viewer cannot remove case evidence; the lead can.
+  // Contributor (even the uploader) and viewer cannot dispose case evidence; the lead can.
   const del = (who) => fetch(`${s.url}/api/v1/evidence/ev-ladder`, { method: 'DELETE', headers: s.asJson(who), body: JSON.stringify({ reason: 'x' }) });
   assert.equal((await del('ivy')).status, 403);
   assert.equal((await del('mallory')).status, 403);

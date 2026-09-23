@@ -91,3 +91,73 @@ test('healthz', async (t) => {
   t.after(() => server.close());
   assert.deepEqual(await (await fetch(`${url}/healthz`)).json(), { ok: true });
 });
+
+// ---- per-evidence index + listing (supervisor brief 2026-09-22 §6) ----
+// The receipt now carries `evidenceId` + `event`; the store indexes eventIds
+// under DATA_DIR/idx/<evidenceId>.txt and lists them back in index order.
+// This is an index and an event copy, nothing more — still un-hardened.
+
+function put(url, id, body) {
+  return fetch(`${url}/receipts/${id}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+function receiptFor(eventId, evidenceId, seq) {
+  return {
+    ...sampleReceipt,
+    eventId,
+    evidenceId,
+    event: { eventId, evidenceId, caseId: 'shared', op: 'ACCESS', actor: 'a', detail: { seq }, ts: `2026-09-22T00:00:0${seq}Z` },
+  };
+}
+
+test('GET /receipts?evidenceId lists receipts in first-PUT order; re-PUT is idempotent', async (t) => {
+  const dataDir = tmpDataDir();
+  const app = createApp({ dataDir, logLevel: 'silent' });
+  const { server, url } = await listen(app);
+  t.after(() => server.close());
+
+  assert.equal((await put(url, 'evt-b', receiptFor('evt-b', 'ev-1', 0))).status, 200);
+  assert.equal((await put(url, 'evt-a', receiptFor('evt-a', 'ev-1', 1))).status, 200);
+  assert.equal((await put(url, 'evt-x', receiptFor('evt-x', 'ev-2', 2))).status, 200);
+  // Re-PUT (the txId fill-in) must not duplicate the index entry.
+  const withTx = receiptFor('evt-b', 'ev-1', 0);
+  withTx.rootRef = { ...withTx.rootRef, txId: 'tx-9' };
+  assert.equal((await put(url, 'evt-b', withTx)).status, 200);
+
+  const resp = await fetch(`${url}/receipts?evidenceId=ev-1`);
+  assert.equal(resp.status, 200);
+  const list = await resp.json();
+  assert.deepEqual(list.map((r) => r.eventId), ['evt-b', 'evt-a']);
+  assert.equal(list[0].rootRef.txId, 'tx-9', 'listing returns the latest receipt body');
+  assert.deepEqual(list[1].event.detail, { seq: 1 });
+
+  // The index file is exactly one line per eventId, in PUT order.
+  const idx = fs.readFileSync(path.join(dataDir, 'idx', 'ev-1.txt'), 'utf8');
+  assert.equal(idx, 'evt-b\nevt-a\n');
+  assert.deepEqual((await (await fetch(`${url}/receipts?evidenceId=ev-2`)).json()).map((r) => r.eventId), ['evt-x']);
+});
+
+test('GET /receipts?evidenceId -> [] when unknown; 400 when missing/invalid', async (t) => {
+  const app = createApp({ dataDir: tmpDataDir(), logLevel: 'silent' });
+  const { server, url } = await listen(app);
+  t.after(() => server.close());
+
+  assert.deepEqual(await (await fetch(`${url}/receipts?evidenceId=nobody`)).json(), []);
+  assert.equal((await fetch(`${url}/receipts`)).status, 400);
+  assert.equal((await fetch(`${url}/receipts?evidenceId=..%2Fescape`)).status, 400);
+});
+
+test('receipt without evidenceId is stored but not indexed; bad evidenceId is 400', async (t) => {
+  const app = createApp({ dataDir: tmpDataDir(), logLevel: 'silent' });
+  const { server, url } = await listen(app);
+  t.after(() => server.close());
+
+  assert.equal((await put(url, 'evt-abc', sampleReceipt)).status, 200); // legacy shape
+  assert.equal((await fetch(`${url}/receipts/evt-abc`)).status, 200);
+  assert.equal((await put(url, 'evt-bad', { ...sampleReceipt, evidenceId: '../x' })).status, 400);
+  assert.equal((await fetch(`${url}/receipts/evt-bad`)).status, 404, 'rejected PUT writes nothing');
+});

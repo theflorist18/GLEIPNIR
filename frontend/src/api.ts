@@ -170,7 +170,8 @@ export class GatewayClient {
     );
   }
 
-  removeEvidence(id: string, reason: string) {
+  // DisposeEvidence: terminal status transition (DISPOSED), never a deletion.
+  disposeEvidence(id: string, reason: string) {
     return this.request<Record<string, unknown>>('DELETE', `/evidence/${encodeURIComponent(id)}`, {
       reason,
     });

@@ -8,9 +8,9 @@ Document type: architecture + build plan (no starter code — interface signatur
 
 ## TL;DR
 
-- **Build a single modular monorepo** where the *only* thing that changes between the four variants (Standard, Anchoring, Parallel, Parallel-Anchored) is the write path to the ledger; the Go chaincode interface (`CreateEvidence`/`TransferCustody`/`AccessLog`/`RemoveEvidence`), the `@hyperledger/fabric-gateway` client API, and the Caliper 0.6.0 workload modules stay constant across all four. The variant is selected by configuration and routing, never by forking the contract or the workloads.
+- **Build a single modular monorepo** where the *only* thing that changes between the four variants (Standard, Anchoring, Parallel, Parallel-Anchored) is the write path to the ledger; the Go chaincode interface (`CreateEvidence`/`TransferCustody`/`AccessLog`/`DisposeEvidence` — renamed from `RemoveEvidence` at M26, CONTRACTS §12-10), the `@hyperledger/fabric-gateway` client API, and the Caliper 0.6.0 workload modules stay constant across all four. The variant is selected by configuration and routing, never by forking the contract or the workloads.
 - **Treat lockb0x as a conceptual reference only** — adopt its *Codex Entry* record shape (`id`, `version`, `storage{protocol,location,integrity_proof,jurisdiction}`, `encryption{...}`, `identity{org,process,artifact,subject}`, `anchor{chain,tx_hash,hash_alg}`, `signatures[]`, `previous_id`) and its "signed evidence card + verification badge" UI idiom, but **explicitly de-couple** the concerns that lockb0x fuses into one .NET solution (storage + signing + anchor + verifier). In GLEIPNIR these become independent services with single responsibilities and their own READMEs.
-- **The system answers one core research question** — the latency-vs-storage tradeoff of Merkle anchoring — so *verification/audit latency* (fetch event → recompute the O(log₂N) Merkle branch → verify root) is a first-class metric alongside throughput, write latency, and du-measured ledger/state size. Scalability claims are drawn **only** from the steady-state regime (≥10³ events/channel), never from the smoke test.
+- **The system answers one core research question** — the latency-vs-storage tradeoff of Merkle anchoring — so *verification/audit latency* (fetch event → recompute the O(log₂N) Merkle branch → verify root) is a first-class metric alongside throughput, write latency, and du-measured ledger/state size. Since M26 (supervisor brief 2026-09-22) the measured set also includes success/failure counts + failure rate with a failure-class breakdown, CPU/memory per container, p95 latency from per-transaction capture, **audit reconstruction time** per case and **anchoring delay** (event enqueue → root committed). Scalability claims are drawn **only** from the steady-state regime (≥10³ events/channel), never from the smoke test.
 
 ---
 
@@ -63,7 +63,7 @@ These are the verified external facts the architecture is built on. Where a prac
 
 All Mermaid diagram labels say **"on Hyperledger Fabric 2.5 LTS"**, never "on lockb0x."
 
-**Conjecture flags.** Any single-host throughput figure, and any claim that Parallel scales linearly with channel count, must be marked *conjecture until measured*. The single host is the binding constraint (hence channel sweep capped at {1,2,5}, with 10 deferred).
+**Conjecture flags.** Any single-host throughput figure, and any claim that Parallel scales linearly with channel count, must be marked *conjecture until measured*. The single host is the binding constraint: the E2 channel grid (5–50, `benchmark/sweeps.yaml`) is bounded by the host's core count (Fabric's performance guidance: one CPU core per fully-loaded channel), and the E3 experiments run at the calibrated **baseline** channel count (the median of E2's healthy range, never its maximum — supervisor brief 2026-09-22; `docs/methodology/experiments.md`).
 
 ---
 
@@ -105,16 +105,20 @@ gleipnir/
 │   ├── src/ (routes, connectors, variant-router, auth/users/sessions, serviceClients)
 │   └── README.md
 ├── benchmark/                        # Caliper 0.6.0
-│   ├── networks/                     # per-variant, per-channel network configs
-│   ├── benchmarks/                   # round configs; sweep defs for N, K, channel-count
-│   ├── workload/                     # createEvidence.js, transferCustody.js, accessLog.js, verify.js
+│   ├── sweeps.yaml                   # single source of truth: E1–E3 grids, baseline constants, workload shape
+│   ├── networks/                     # per-variant, per-channel network configs (parallel-c{C} rendered by rounds.py)
+│   ├── benchmarks/                   # committed smoke-<variant>.yaml only; steady rounds render per run
+│   ├── trace/generate.js             # M26 seeded transaction-trace generator (replayed identically across variants)
+│   ├── workload/                     # trace.js, createEvidence/transferCustody/accessLog/disposeEvidence.js, read.js, verify.js, lib/txlog.js
+│   ├── audit/reconstruct.js          # M26 audit-reconstruction harness (host-side, via the gateway)
 │   └── README.md
 ├── frontend/                         # Evidence-library SPA (M14): auth/, components/, pages/{admin,investigator,shared}
 │   └── README.md
-├── orchestration/                    # variant select / provision / teardown / metric checkpoint
-│   ├── up.sh  down.sh  provision-channel.sh  checkpoint.py  sweep.py
+├── orchestration/                    # variant select / provision / ledger reset / experiment driver / metrics
+│   ├── up.sh  down.sh  reset-network.sh  backup-volumes.sh  provision-channel.sh
+│   ├── rounds.py  experiment.py  checkpoint.py  collect.py  report.py
 │   └── README.md
-└── docs/                             # this document, threat model, thesis cross-refs
+└── docs/                             # this document, contracts, as-built, methodology/experiments.md, audit/
 ```
 
 **Methodology hook:** `/network` is version-controlled and every benchmark run records the **commit SHA** of `configtx.yaml`, `core.yaml`, `orderer.yaml` (and the compose files) in its results manifest, so results are reproducible against exact config.
@@ -167,7 +171,7 @@ Interface (Go, contractapi):
 CreateEvidence(ctx, evidenceId, codexEntryJSON string) error
 TransferCustody(ctx, evidenceId, newCustodian, reason string) error
 AccessLog(ctx, evidenceId, actor, action string) error
-RemoveEvidence(ctx, evidenceId, reason string) error
+DisposeEvidence(ctx, evidenceId, reason string) error   // M26: was RemoveEvidence (CONTRACTS §12-10)
 // Anchoring variants only — writes a root, not per-event records:
 CommitAnchorRoot(ctx, batchId, merkleRoot, metaJSON string) error
 // reads (evaluate):
@@ -182,7 +186,7 @@ GetAuditTrail(ctx, evidenceId) (string, error)   // range over sub-keys
 | `CreateEvidence` | **Identification** + first-record of collection — registers a source of potential evidence |
 | `TransferCustody` | **Preservation** — documented custody transfer maintaining integrity |
 | `AccessLog` | **Preservation** — records who accessed/what action (auditability) |
-| `RemoveEvidence` | **Preservation** (disposition) — terminal state, no further mutation |
+| `DisposeEvidence` | **Preservation** (disposition) — terminal status transition to `DISPOSED`; nothing is deleted, no further mutation (op tag `DISPOSE`) |
 
 **MVCC sub-key design (the critical correctness point).** Access-log writes must NOT mutate one evidence record (that guarantees `MVCC_READ_CONFLICT` under concurrent load). Instead, each op appends an immutable event under a composite key:
 ```
@@ -198,21 +202,23 @@ The evidence "head" record stores metadata + the current counter high-watermark;
 Interface (Node):
 ```ts
 enqueue(event: CoCEvent): Promise<{batchId, leafIndex}>
-onBatchBoundary(): Promise<{batchId, merkleRoot, leaves: Hash[]}>   // triggered by size N (or K per-case)
+onBatchBoundary(): Promise<{batchId, merkleRoot, leaves: Hash[]}>   // size BATCH_SIZE, BATCH_FLUSH_MS timer, or POST /flush
 buildTree(leaves: Hash[]): {root: Hash, layers: Hash[][]}
 siblingPath(batchId, leafIndex): Promise<Hash[]>                    // O(log₂N)
+status(): {variant, batchSize, flushTimeoutMs, queues, counters, batches: BatchRecord[]}   // M26
 ```
-Batch sizes: **N ∈ {10, 50, 100, 250}** (Anchoring); **K ∈ {5, 10, 25, 50}** per case (Parallel-Anchored). **Does NOT:** submit to the ledger (delegates to gateway/anchor-client), persist receipts (delegates to receipt-store), or verify. **Failure modes:** partial batch at run end (flush policy required), duplicate enqueue, hash-alg mismatch.
+Batch size: **one grid for both anchored variants**, `batch_sizes: [10, 25, 50, 100, 200]` (`benchmark/sweeps.yaml`; env `BATCH_SIZE`, CONTRACTS §12-13) — Anchoring uses one `shared` queue, Parallel-Anchored one queue per case, at the same size. `BATCH_FLUSH_MS` (0 = size-only) is a held-constant control. Each receipt carries `evidenceId` and the CoC `event` as enqueued (the off-chain trail copy; leaf hash unchanged). Each closed batch keeps `openedAt`/`closedAt`/`committedAt`, `forced` and `delayMs {min, mean, max}` — the **anchoring delay** metric (CONTRACTS §5, §12-17). **Does NOT:** submit to the ledger (delegates to gateway/anchor-client), persist receipts (delegates to receipt-store), verify, or observe the block commit independently (`committedAt` = the submit returned). **Failure modes:** partial batch at run end (`POST /flush`), duplicate enqueue (409), root-submit failure (batch `degraded`, `committedAt` null), hash-alg mismatch.
 
 #### 4.3 Receipt store (`/services/receipt-store`) — Anchoring, Parallel-Anchored
-**Responsibility:** persist each event's off-chain witness = `{leafHash, siblingPath[], batchId, leafIndex, rootRef}`.
+**Responsibility:** persist each event's off-chain witness = `{leafHash, siblingPath[], batchId, leafIndex, rootRef}` **plus** (M26) the CoC event copy `{evidenceId, event}`, and keep a plain per-evidence index so an evidence's off-chain trail can be listed back (CONTRACTS §12-11).
 
 Interface:
 ```ts
-putReceipt(eventId, receipt): Promise<void>
+putReceipt(eventId, receipt): Promise<void>            // also appends eventId to idx/<evidenceId>.txt
 getReceipt(eventId): Promise<Receipt>
+listByEvidence(evidenceId): Promise<Receipt[]>         // GET /receipts?evidenceId= ; first-PUT (leaf) order, [] if none
 ```
-**Explicit integrity caveat (must appear in the thesis):** the receipt store does **not** carry on-chain integrity guarantees. Only the Merkle *root* is on-chain and tamper-evident; the sibling path lives off-chain. This is an **availability exposure of the witness** (losing/corrupting a receipt means you cannot *reconstruct* a proof), **not an integrity exposure of the ledger** (the anchored root cannot be forged). **Does NOT:** compute trees or verify. **Failure modes:** receipt loss (→ unverifiable event), storage full, stale root reference.
+**Explicit integrity caveat (must appear in the thesis):** the receipt store does **not** carry on-chain integrity guarantees. Only the Merkle *root* is on-chain and tamper-evident; the sibling path, the event copy and the index live off-chain — no hashes, signatures or replication on any of them. This is an **availability exposure of the witness** (losing/corrupting a receipt means you cannot *reconstruct* a proof), **not an integrity exposure of the ledger** (the anchored root cannot be forged; a tampered event copy fails root verification because the verifier recomputes the leaf from it). **Does NOT:** compute trees, verify, or sort/reconcile the trail. **Failure modes:** receipt loss (→ unverifiable event), index loss (→ empty trail listing while per-event GETs still work), storage full, stale root reference.
 
 #### 4.4 Anchor-client (`/services/anchor-client`) — Parallel-Anchored ONLY
 **Responsibility:** submit per-case Merkle roots to the dedicated **anchor channel**, because Fabric chaincode in one channel cannot write to another.
@@ -228,9 +234,9 @@ submitRoot(caseId, batchId, merkleRoot, meta): Promise<{txId}>
 
 Interface:
 ```ts
-verifyEvent(eventId): Promise<{ok: boolean, latencyMs: number, steps: {fetch, recompute, compareRoot}}>
+verifyEvent(eventId): Promise<{ok: boolean, latencyMs: number, leafSource: 'event'|'receipt', steps: {fetch, recompute, compareRoot}}>
 ```
-Path: `receipt-store.getReceipt` → recompute leaf→root using sibling path → `evaluateTransaction("ReadAnchorRoot", ...)` → compare. **This is a formal, required metric** — it is the numerator of the latency-vs-storage tradeoff the Anchoring study exists to quantify. **Does NOT:** verify signatures/schema (out of the timed path; keeps the measurement about Merkle verification only). **Failure modes:** missing receipt, root mismatch (tamper signal), anchor-channel read error.
+Path: `receipt-store.getReceipt` → recompute the leaf from the receipt's `event` copy (M26; `leafSource: 'event'` — the stored `leafHash` is used only for pre-M26 receipts) and fold it to a root using the sibling path → `evaluateTransaction("ReadAnchorRoot", ...)` (via the gateway on Anchoring, the anchor-client on Parallel-Anchored) → compare. **This is a formal, required metric** — it is the numerator of the latency-vs-storage tradeoff the Anchoring study exists to quantify. The per-case counterpart — **audit reconstruction time** (fetch every evidence trail of a case, verify every event's branch, read each distinct root once) — is measured host-side by `benchmark/audit/reconstruct.js` through the gateway (`?proofs=1` + `/anchor-roots`), for all four variants (on-chain trail on Standard/Parallel; CONTRACTS §10). **Does NOT:** verify signatures/schema (out of the timed path; keeps the measurement about Merkle verification only), or trust the stored leaf when an event copy is present. **Failure modes:** missing receipt, root mismatch (tamper signal), malformed receipt (422), anchor-channel read error.
 
 #### 4.6 Provisioning orchestrator (`/orchestration`) — Parallel, Parallel-Anchored
 **Responsibility:** automate per-case channel lifecycle and generate matching Caliper configs.
@@ -242,18 +248,19 @@ provision-channel.sh <caseId>   # configtxgen genesis → osnadmin channel join 
                                  # → emit benchmark/networks/<caseId>.yaml
 teardown.sh <caseId>
 ```
-Uses `osnadmin channel join` (mutual-TLS to each orderer admin endpoint); asserts **HTTP 201** on success. Channel-count sweep {1, 2, 5}. **Does NOT:** run benchmarks or collect metrics. **Failure modes:** genesis profile mismatch, orderer not in consenter set, chaincode approval quorum not met, port exhaustion on single host.
+Uses `osnadmin channel join` (mutual-TLS to each orderer admin endpoint); asserts **HTTP 201** on success. Channel counts come from `benchmark/sweeps.yaml` (E2 `channel_counts` 5–50, bounded by host cores; E3 at `baseline.channels`); `experiment.py` provisions whichever `case-NNN` channels a run needs and `reset-network.sh` (M26) gives every run a fresh ledger without touching the library volumes. **Does NOT:** run benchmarks or collect metrics. **Failure modes:** genesis profile mismatch, orderer not in consenter set, chaincode approval quorum not met, port exhaustion on single host.
 
-#### 4.7 Metrics collector (`/orchestration/checkpoint.py`)
-**Responsibility:** aggregate Caliper outputs + filesystem probes into a per-run manifest.
+#### 4.7 Metrics collector (`/orchestration/checkpoint.py`, `collect.py`, `report.py`)
+**Responsibility:** aggregate Caliper outputs, the per-transaction logs, the batcher's batch records, the audit harness output and filesystem probes into a per-run manifest, then into per-experiment tables and charts.
 
 Interface:
 ```
-checkpoint(runId, t)  # du on blockstore (per channel) + du on GoLevelDB dir
-collect(runId)        # parse Caliper report.json → throughput, latency min/avg/max, succ/fail
-regress(runId)        # linear regression of payload bytes over checkpoints → byte-per-log
+checkpoint.py <runPath> --label tK     # du -sb on blockstore (per channel) + GoLevelDB dir + receipt store → checkpoints.jsonl (t0 .. tN, one per round)
+collect.py <run-dir> [--baseline R]    # caliper.log round table + docker resource stats, tx-w*.jsonl percentiles/failure classes,
+                                       # OLS bytes/event over the checkpoint series, anchoring.json, audit.json → manifest.json
+report.py --exp E [--out docs/results/E]   # CSV + Markdown tables (units in headers, mean ± SD over reps) + PNG charts per metric, one line per variant
 ```
-Metrics captured: offered load; throughput (per-channel + aggregate); write latency min/avg/max (submit-to-commit); verification latency (from §4.5); success rate + failure-mode breakdown; ledger size/channel; state DB size; byte-per-log via regression over checkpoints. **Storage compression is reported as reduction in log-PAYLOAD bytes vs Standard, not a clean 1/N of the whole ledger** (block headers, endorsements, and metadata do not compress with N). **Does NOT:** generate load. **Failure modes:** container path drift (mitigated by named volumes), clock skew, Caliper report absent on zero-success rounds.
+Metrics captured (CONTRACTS §10 manifest schema): send rate (configured) and measured send rate; throughput, successful-only (per-channel derived + aggregate for multi-channel cells); write latency min/avg/max (Caliper) + p50/p95/p99 (per-transaction capture, per round and per operation type); success/failure counts, failure rate (%) and the failure classes `MVCC_READ_CONFLICT` / `ENDORSEMENT_POLICY_FAILURE` / `TIMEOUT` / `HTTP_4XX` / `HTTP_5XX` / `OTHER`; CPU (%) and memory (MB) per container from Caliper's docker monitor with `fabric` / `offchain` / `all` groups; verification latency (§4.5, the `VERIFY` op); audit reconstruction time per case (`reconstruct.js`); anchoring delay (batcher batch records, leafCount-weighted, forced batches also reported excluded); ledger size per channel (app + anchor channel), state DB size and off-chain receipt-store size at every checkpoint; bytes/event via OLS regression over the checkpoint series (≥ 3 points) with the t0→tN delta as cross-check. **Storage compression is reported as reduction in log-PAYLOAD bytes vs Standard, not a clean 1/N of the whole ledger** (block headers, endorsements, and metadata do not compress with N), with off-chain bytes shown alongside. **Does NOT:** generate load, or fold the verification service's own `verify.jsonl` into the manifest (a secondary trace). **Failure modes:** container path drift (mitigated by named volumes), clock skew, Caliper results table absent (run marked `incomplete`), fabric-mode failures carry no error string in the tx-log (classified from `caliper.log`).
 
 #### 4.8 Case registry (`/services/case-registry`, port 4005) — evidence library (M13a), all variants
 **Responsibility:** own the OFF-CHAIN Case entity (name/status/participant roster) and the evidence search read-model (`evidence_index`), plus the gateway's per-evidence authz pre-flight. Case-evidence linkage lives here and only here — no chaincode or Codex-Entry change. Case ids are `CASE-<uuid>`, deliberately disjoint from the Parallel variants' `case-NNN` channel key.
@@ -300,7 +307,7 @@ now an admin-gated route.
 | investigator | `EvidenceDetailPage` | `EvidenceCard` + `AuditTrail` + `MerkleBadge` + download/export + transfer/access forms; opening it demonstrates the server-side auto-`AccessLog(view)` |
 | investigator | `SearchPage` | evidence-index + case search, participant-scoped server-side |
 | admin | `UsersPage`, `CasesAdminPage` | user management (deactivate-not-delete); case creation, roster grants, categorize/uncategorize |
-| admin | `DashboardPage` | the operator dashboard: `VariantSelector`, `SweepConfigForm` (N ∈ {10,50,100,250}, K ∈ {5,10,25,50}, channels ∈ {1,2,5}, offered load, N-runs), `RunControl`, `ThroughputChart`, `LatencyChart`, `StorageChart`, `RunHistory`/`RunCompare` |
+| admin | `DashboardPage` | the operator dashboard: `VariantSelector`, the run-request form (ONE `batch size` field + `channels` + `send rate (tx/s)` → `cell: {batchSize, channels, sendRateTps}`, mirroring `sweeps.yaml`; execution is host-side `orchestration/experiment.py`), `RunControl`, `ThroughputChart`, `LatencyChart`, `StorageChart`, `RunHistory`/`RunCompare` |
 
 Routes: `/login` public; `/ingest`, `/cases[/:caseId]`, `/evidence/:evidenceId`,
 `/search` require a session; `/admin/users`, `/admin/cases`, `/admin/dashboard`
@@ -319,8 +326,9 @@ The BFF holds the only `@hyperledger/fabric-gateway` sessions and encapsulates v
 | `POST /evidence` | `CreateEvidence` | **Standard/Parallel:** `submitTransaction` direct. **Anchoring/Parallel-Anchored:** `batcher.enqueue`, root committed at boundary. **Multipart (M13c):** blob → evidence-store, head committed with the store's ni-URI proof, evidence-index row registered; the library caseId never reaches the chain |
 | `POST /evidence/:id/transfer` | `TransferCustody` | same routing rule; user sessions need a writing case role |
 | `POST /evidence/:id/access` | `AccessLog` | same routing rule; user sessions need a writing case role |
-| `DELETE /evidence/:id` | `RemoveEvidence` | same routing rule; best-effort evidence-index status sync |
-| `GET /evidence/:id` | `ReadEvidence` (evaluate) | direct; user sessions: authz-gated + synchronous auto-`AccessLog(view)` |
+| `DELETE /evidence/:id` | `DisposeEvidence` (op `DISPOSE`, status `DISPOSED` — a status transition, never a deletion) | same routing rule; best-effort evidence-index status sync |
+| `GET /evidence/:id` | `ReadEvidence` (evaluate) — **batched variants (M26):** head folded from the off-chain trail, `offChain: true` | direct; user sessions: authz-gated + synchronous auto-`AccessLog(view)` |
+| `GET /evidence/:id/audit?proofs=1`, `GET /anchor-roots/:scopeId/:batchId` | off-chain trail with each event's Merkle witness; the on-chain root record | M26 audit-reconstruction surface (CONTRACTS §6, §12-12); any authenticated principal; the gateway verifies nothing itself |
 | `GET /evidence/:id/download` | evidence-store stream | user sessions: authz-gated + auto-`AccessLog(download)` |
 | `GET /evidence/:id/export` | `{record, auditTrail}` bundle | user sessions: authz-gated + auto-`AccessLog(export)` |
 | `GET /evidence/:id/audit` | `GetAuditTrail` (evaluate) | direct; authz-gated, never auto-logged |
@@ -415,20 +423,20 @@ sequenceDiagram
 
 ### 8. Benchmark integration
 
-**How Caliper 0.6.0 attaches per variant.** One workspace under `/benchmark`; bind `fabric:2.5`; peer-gateway connector. The **same four workload modules** (`createEvidence.js`, `transferCustody.js`, `accessLog.js`, `verify.js`) run against every variant — only the network config and the gateway's routing differ:
+**How Caliper 0.6.0 attaches per variant.** One workspace under `/benchmark`; bind `fabric:fabric-gateway` (the peer-gateway connector; `fabric:2.5` is an alias). The **same workload modules** run against every variant — only the network config, the `mode` round argument and the gateway's routing differ (M26, supervisor brief 2026-09-22; CONTRACTS §10, §12-14):
 
-- **Standard / Parallel:** workloads call `sendRequests({contractId:'evidence', contractFunction:'CreateEvidence', ...})`; for Parallel, `targetChannel`/per-channel network configs are generated by the orchestrator, and results are reported per-channel + aggregate.
-- **Anchoring / Parallel-Anchored:** the create/transfer/access workloads drive the gateway's enqueue path; a dedicated `verify.js` workload exercises the verification service so verification latency is measured under load.
+- **Standard / Parallel** (`mode: fabric`): workloads call `sendRequests({contractId:'evidence', contractFunction, contractArguments, invokerIdentity:'User1', readOnly, channel?})`; for Parallel, the per-channel network config `networks/parallel-c{C}.yaml` is rendered by `orchestration/rounds.py`, load is spread round-robin across `case-001..case-00C` in ONE round, and results are reported aggregate + derived per-channel.
+- **Anchoring / Parallel-Anchored** (`mode: rest`): the same workloads drive the gateway's REST enqueue path through the custom connector (`benchmark/connectors/rest/`); a "committed" write there is the gateway's `202` enqueue acknowledgement (BFF-path latency), and the ledger commit lag is the separate anchoring-delay metric. `verify.js` exercises the verification service so verification latency is measured under load.
 
-**Workload module structure** (all extend `WorkloadModuleBase`): `initializeWorkloadModule` (seed evidence IDs per worker, set counters), `submitTransaction` (assemble and `sendRequests`), `cleanupWorkloadModule` (teardown).
+**Trace replay (the determinism contract).** `benchmark/trace/generate.js` pre-generates one seeded transaction trace per configuration (`seed`, cases, channels, evidence per case, events per case per round, rounds, workers, mix, payload bytes — all from `sweeps.yaml`); `workload/trace.js` replays slice `k` of it per round, identically across all four variants. The per-operation rounds (`createEvidence.js`, `transferCustody.js`, `accessLog.js`, `disposeEvidence.js`, `read.js`, `verify.js`) serve the operation breakdown. All extend `WorkloadModuleBase` (`initializeWorkloadModule` / `submitTransaction` / `cleanupWorkloadModule`) and write one JSON line per timed transaction to `${GLEIPNIR_TXLOG_DIR}/tx-w<worker>.jsonl` from Caliper's own `TxStatus` (never on the timed path) — the source of p95, success/failure counts and failure classes.
 
-**Rate control & metrics.** Use `fixed-rate` (offered-load sweeps) and `fixed-load` (closed-loop) controllers; Caliper reports Succ/Fail, Send Rate, Latency max/min/avg, Throughput. Report **successful-only throughput** explicitly (per issue #1418 ambiguity). Optionally treat `MVCC_READ_CONFLICT` as a distinct, tabulated failure class rather than a hard error (Caliper issue #1397 documents this expected-behavior debate) — but the append-only sub-key design should make it rare.
+**Rate control & metrics.** `fixed-rate` controllers; "send rate" is the configured input, "throughput" the measurement, TPS only a unit. Caliper reports Succ/Fail, Send Rate, Latency max/min/avg, Throughput and (docker monitor) per-container CPU/memory. Report **successful-only throughput** explicitly (per issue #1418 ambiguity). `MVCC_READ_CONFLICT` is a distinct, tabulated failure class rather than a hard error (Caliper issue #1397) — the append-only sub-key design should keep it near zero.
 
-**Sweep automation** (`/orchestration/sweep.py`): iterate N ∈ {10,50,100,250}, K ∈ {5,10,25,50}, channels ∈ {1,2,5}; for each cell, run the **N-runs repetition loop** (repeat each configuration to get mean ± spread for statistical validity) and checkpoint storage between rounds.
+**Experiment automation** (`/orchestration/experiment.py`, rendering only via `rounds.py`; paper-facing procedure and level-selection rules in `docs/methodology/experiments.md`): **E0** pilot (smoke shape, all variants, functional only; `ramp` locates approximate saturation) → **E1** batch-size calibration (Anchoring + Parallel-Anchored over the ONE grid `batch_sizes`, with Standard/Parallel reference runs) → **E2** channel-count calibration (Parallel only over `channel_counts`; Parallel-Anchored inherits, Standard/Anchoring are single-channel by code) → **E3a** scalability vs send rate (all four at `baseline.channels`/`baseline.batch_size`, one round per send rate) and **E3b** vs cases (all four over `case_counts ≤ baseline.channels_max`) → **ops** per-operation breakdown at the E3 point (writes and reads in separate tables). Every cell is repeated `repetitions` (r = 3) times as **one network lifetime each** (`reset-network.sh` ledger-only reset), with storage checkpoints `t0..tN` around every round, a batcher flush + `/status` snapshot, audit reconstruction and `collect.py` per run; results under `benchmark/results/<exp>/<variant>/<levels>/r<rep>/`, tables/charts via `report.py`. Calibrated values are carried forward as **baseline** constants in `sweeps.yaml` (never "optimal").
 
 **Two regimes (claim boundary):**
-- **Smoke test** — 10 cases × 10–25 logs, functional correctness only. Confirms the pipeline works; **no scalability claim may cite it.**
-- **Steady state** — **≥10³ events per channel**; the **only** regime from which scalability/throughput/tradeoff claims are drawn.
+- **Smoke test** — `regimes.smoke`: 10 cases × 10–25 logs at 5 tx/s, functional correctness only (E0). Confirms the pipeline works; **no scalability claim may cite it.**
+- **Steady state** — **≥10³ events per channel** (`regimes.steady.min_events_per_channel`); the **only** regime from which scalability/throughput/tradeoff claims are drawn. A run below the floor is labelled `sub-floor`, never `steady` (ops and ramp runs are, by design).
 
 ---
 
@@ -460,6 +468,8 @@ sequenceDiagram
 | 22 | Ingest wizard (frontend) | `/ingest` becomes a 4-step wizard (case+category / metadata with ITEM-NNN auto-suggest / file + local WebCrypto ni-URI hash with progress / review): the local hash is compared against the returned `integrityProof` — match shows "integrity verified end-to-end", mismatch a danger banner; `lib/ni.ts` is vector-tested byte-identical to `gateway/src/ni.js` |
 | 23 | Tabbed detail pages (frontend) | EvidenceDetail → Overview / Chain of Custody (`AuditTrailTimeline`, replacing the flat trail) / Examiner Notes; CaseDetail → Overview / Evidence (category+flag columns) / Activity (feed on Timeline) / Team (admin-or-case-lead only, add/remove via modal); flag control + notes composer render only for writers; admin Download hidden off-case; render-tested with a mocked client |
 | 24 | CoC export + lead dashboard | `GET /cases/:id/coc-report?format=csv\|json` assembles all exhibit trails (hand-rolled RFC 4180 CSV; one auto-`AccessLog('coc-report')` per exhibit for sessions, none for the service token); `/cases/:id/report` renders the print-optimized court report outside the shell (browser print = PDF); `/lead/dashboard` shows lead cases, flagged evidence, merged team activity; `smoke-library.sh` step 17 passes |
+| 25 | Team roster + persistent case activity (library, M25/M25b) | Case-registry seeds every new case with the preset categories Image/Video/Audio/Document/Text as ordinary lead-editable rows; `PATCH /cases/:id/participants/:userId` changes a participant's case role in place and 409s on the last lead; `GET /users/directory` is admin-or-lead only (investigator session and service token 403) and a lead session never sees admin accounts; `GET /cases/:id/activity` reads the persistent append-only `case_audit_log` — one actor-attributed row per management mutation, actor forwarded gateway→registry via `X-Gleipnir-Actor`; `DELETE /evidence/:id` requires case-lead (or the `uploader` pseudo-role on one's own uncategorized evidence) |
+| 26 | Experimental redesign (supervisor brief 2026-09-22) | CONTRACTS §12-10..17: `RemoveEvidence` → `DisposeEvidence` (`DISPOSE`/`DISPOSED`; `TestDisposeIsTerminal` passes, `smoke-standard.sh` asserts status `DISPOSED`); one `batch_sizes` grid + `BATCH_SIZE`/`BATCH_FLUSH_MS`; receipts carry `evidenceId` + `event`, the receipt store lists by evidence, and `GET /evidence/:id/audit?proofs=1` + `/anchor-roots` serve the off-chain trail on the anchored variants (gateway/batcher/receipt-store/verification suites green, `leafSource` reported); `trace/generate.js` is byte-deterministic (`benchmark npm test`); `rounds.py --static` regenerates the committed smoke/parallel-c* files with zero diff; `experiment.py --exp e3a --dry-run` prints the plan; `collect.py --selftest` passes; and one live E0 run per variant yields a `manifest.json` with `regime: smoke`, tx-log percentiles, failure classes, docker CPU/memory, an `audit.json` and (anchored) an `anchoring.json` with `delayMs` per batch |
 
 ---
 
@@ -470,8 +480,9 @@ sequenceDiagram
 | **Anchor-channel terminology (never "system channel")** | §3, §4.4, §7 (Variant 4), §9 (#8); all Mermaid labels |
 | **GoLevelDB external-validity limit** | §Key Findings 6; state-size probe in §4.7; must be stated as a threat to generalizability |
 | **Receipt-store integrity caveat** | §4.3 — availability exposure of witness, not integrity of ledger |
-| **Smoke-test vs steady-state claim boundary** | §8 — scalability claims only from ≥10³-event steady state |
-| **configtx/core/orderer.yaml by commit SHA** | §2 methodology hook; §4.7 manifest; §9 (#11) |
+| **Smoke-test vs steady-state claim boundary** | §8 — scalability claims only from ≥10³-event steady state; `sub-floor` label for runs below it |
+| **configtx/core/orderer.yaml by commit SHA** | §2 methodology hook; §4.7 manifest; §9 (#11, #26) |
+| **Three-experiment design (E1 → E2 → E3 + ops), one batch grid, "baseline" wording, send rate ≠ throughput** | §8; `benchmark/sweeps.yaml`; `docs/methodology/experiments.md`; CONTRACTS §10, §12-13/14 |
 | **STRIDE surface exposed for the threat model** | The implementation deliberately surfaces the four analyzed components as named, separately-deployed units: **off-chain batcher** (§4.2), **receipt store** (§4.3, tampering/repudiation surface), **anchor-client identity/MSP** (§4.4, spoofing/elevation surface), and **chaincode lifecycle** (§4.1 + §9 approve/commit, tampering/DoS surface). Each is its own Docker service so the threat model maps 1:1 to a deployable artifact. |
 | **Fabric Gateway concurrency** | §Key Findings 7 — default `gatewayService`=500; document if a run raises it toward the LF-benchmark 20,000 to probe the ceiling |
 
@@ -483,9 +494,9 @@ sequenceDiagram
 
 **Stage 2 — Anchoring and the tradeoff metric (Milestones 6, 9).** Implement batcher + receipt-store + verification service. **Gate:** for N=100, one on-chain root must cover 100 receipts, and `verifyEvent` must return a real `latencyMs` and detect a tampered receipt. This is the point at which the thesis's central question becomes measurable.
 
-**Stage 3 — Parallel and Parallel-Anchored (Milestones 7, 8).** Automate per-case channels and the fixed-identity anchor-client. **Gate:** channel sweep {1,2,5} provisions cleanly and per-channel throughput is reported separately from aggregate.
+**Stage 3 — Parallel and Parallel-Anchored (Milestones 7, 8).** Automate per-case channels and the fixed-identity anchor-client. **Gate:** the E2 channel grid provisions cleanly and per-channel throughput is reported separately from aggregate.
 
-**Stage 4 — sweep + write-up (Milestones 10, 11).** Run the full N/K/channel sweep with the N-runs repetition loop; only now draw scalability conclusions, and only from the ≥10³-event steady-state regime.
+**Stage 4 — experiments + write-up (Milestones 10, 11, 26).** Run E0 → E1 → E2 → E3a/E3b → ops with the r = 3 repetition loop (§8); only now draw scalability conclusions, and only from the ≥10³-event steady-state regime.
 
 **Thresholds that change the plan:**
 - If single-host throughput collapses (e.g. latency runs away well below the LF-benchmark envelope) before reaching 10³ events, **reduce offered load and worker count** rather than adding channels — the host, not Fabric, is the bottleneck.
@@ -496,10 +507,10 @@ sequenceDiagram
 
 ## Caveats
 
-- **Single-host is the dominant external-validity limit.** Every throughput/latency number is a single-machine figure; the channel sweep is capped at {1,2,5} precisely because one host cannot fairly exercise 10 channels. Treat cross-variant *ratios* as more trustworthy than absolute TPS.
+- **Single-host is the dominant external-validity limit.** Every throughput/latency number is a single-machine figure; the channel grid is bounded by the host's core count and E3 runs at the median of E2's healthy range precisely because past it one measures the host running out of CPU, not Fabric. Treat cross-variant *ratios* as more trustworthy than absolute throughput.
 - **GoLevelDB choice** removes rich-query cost and isolates write performance, but results do not transfer to CouchDB deployments — state this plainly.
 - **Storage "compression" is payload-relative.** Anchoring reduces *log-payload* bytes versus Standard, not the whole ledger by 1/N; block headers, endorsements, and per-block metadata do not shrink with batch size.
 - **Receipt store is an availability, not integrity, dependency** — losing receipts makes events unverifiable but cannot forge the anchored root.
 - **Caliper throughput semantics are ambiguous in the tool itself** (report.js vs FAQ, issue #1418); GLEIPNIR standardizes on successful-only throughput and must say so in the methodology.
 - **Source-quality note:** the Codex Entry field list is authoritative (IETF `draft-tomlinson-lockb0x` Appendix B, cross-checked against the C# `Lockb0x.Core`), but the lockb0x reference implementation is explicitly early-stage (its own README lists Stellar anchoring as mock/in-memory and the CLI/API as not yet integrated) — so GLEIPNIR borrows the *schema shape and UI idiom only*, which is exactly the intended scope. The "3 vs 1 orderer" and "gateway concurrency 500 vs 20,000" figures are configuration choices, not universal constants; document whichever you actually run.
-- **Conjecture, flagged as such:** any statement that Parallel scales linearly with channel count, or any projected steady-state TPS, is conjecture until measured on your hardware.
+- **Conjecture, flagged as such:** any statement that Parallel scales linearly with channel count, or any projected steady-state throughput, is conjecture until measured on your hardware.

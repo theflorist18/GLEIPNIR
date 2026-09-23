@@ -1,4 +1,5 @@
 import type { EvidenceRecord } from '../types';
+import { isDisposed } from '../lib/format';
 
 // Promoted verbatim from demo.tsx (M14): the lockb0x Codex-Entry presentation
 // idiom — a signed "evidence card". Pure presentational.
@@ -8,7 +9,7 @@ export function EvidenceCard({ record }: { record: EvidenceRecord | null }) {
     <div className="card evidence">
       <div className="evidence-head">
         <span className="mono">{record.id ?? '—'}</span>
-        <span className={`pill ${record.status === 'REMOVED' ? 'removed' : 'active'}`}>{record.status ?? '—'}</span>
+        <span className={`pill ${isDisposed(record.status) ? 'removed' : 'active'}`}>{record.status ?? '—'}</span>
       </div>
       <dl>
         <dt>version</dt><dd>{record.version ?? '—'}</dd>

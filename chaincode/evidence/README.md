@@ -13,7 +13,7 @@ world state — key-value access only, **no rich queries**.
 CreateEvidence(ctx, evidenceId, codexEntryJSON string) error
 TransferCustody(ctx, evidenceId, newCustodian, reason string) error
 AccessLog(ctx, evidenceId, actor, action string) error
-RemoveEvidence(ctx, evidenceId, reason string) error
+DisposeEvidence(ctx, evidenceId, reason string) error
 CommitAnchorRoot(ctx, batchId, merkleRoot, metaJSON string) error   // Anchoring variants
 ReadEvidence(ctx, evidenceId) (string, error)                       // evaluate
 GetAuditTrail(ctx, evidenceId) (string, error)                      // evaluate
@@ -30,14 +30,14 @@ Inputs are strings (JSON where noted); outputs are JSON strings or errors. Recor
 | `CreateEvidence` | Identification + first record of collection |
 | `TransferCustody` | Preservation (documented custody transfer) |
 | `AccessLog` | Preservation (auditability of access) |
-| `RemoveEvidence` | Preservation (disposition — terminal) |
+| `DisposeEvidence` | Preservation (disposition — terminal; nothing is deleted, a status transition to `DISPOSED`) |
 
 These annotations live as comments on the four ops in `contract.go`; keep them on refactor.
 
 ## State-key design (the MVCC-critical part)
 
 - **Head** `("evd", [evidenceId])` — Codex-Entry metadata + custodian + status. Written
-  ONLY by `CreateEvidence`/`TransferCustody`/`RemoveEvidence`, which are semantically
+  ONLY by `CreateEvidence`/`TransferCustody`/`DisposeEvidence`, which are semantically
   serial per evidence (custody is a chain).
 - **Event** `("evt", [evidenceId, sortKey])`, append-only, where
   `sortKey = zeroPad19(txTimestampUnixNanos) + "-" + txID[:12]`. Both parts come from the
@@ -46,10 +46,10 @@ These annotations live as comments on the four ops in `contract.go`; keep them o
 - **Anchor root** `("root", [scopeId, batchId])`, `scopeId = meta.caseId || "shared"`.
 
 **Why `AccessLog` never reads or writes the head:** any head access — even a "reject if
-removed" guard — would reintroduce a read-write conflict point, so concurrent access
+disposed" guard — would reintroduce a read-write conflict point, so concurrent access
 logging to the same evidence would hit `MVCC_READ_CONFLICT`. Instead every access is
 appended under its own distinct event key. Conflict avoidance is **structural, not a retry
-loop**. A consequence, by design: an access logged *after* `RemoveEvidence` is recorded as
+loop**. A consequence, by design: an access logged *after* `DisposeEvidence` is recorded as
 an audit event rather than rejected (auditability over gatekeeping).
 
 ## Endorsement policies (constant across all runs; applied at commit, docs/CONTRACTS.md §3)
@@ -68,7 +68,7 @@ an audit event rather than rejected (auditability over gatekeeping).
 ## Failure modes
 
 - `MVCC_READ_CONFLICT` — only possible on the serial head ops (concurrent
-  transfer/remove of the *same* evidence); correct behavior, not retried here. Access
+  transfer/dispose of the *same* evidence); correct behavior, not retried here. Access
   logging cannot produce it by construction.
 - `ENDORSEMENT_POLICY_FAILURE` — insufficient endorsements at commit.
 - key-not-found — read ops on an unknown evidenceId / (scopeId,batchId).
@@ -84,4 +84,13 @@ docker run --rm -v "$PWD":/src -w /src golang:1.25.5 go test ./... -v
 
 `contract_test.go` uses an in-memory `ChaincodeStubInterface` stub (faithful composite-key
 encoding) and covers create/read, duplicate rejection, transfer, the concurrent-access
-distinct-key gate, terminal removal, audit ordering, and anchor-root scoping. All pass.
+distinct-key gate, terminal disposition (`TestDisposeIsTerminal`), audit ordering, and
+anchor-root scoping. All pass.
+
+## Versioning note (M26 rename `RemoveEvidence` → `DisposeEvidence`)
+
+`CC_VERSION` stays `1.0`. The chaincode runs as ccaas, so the rebuilt binary is served
+under the same package id — no new package/approve/commit cycle — and the git SHA the
+thesis cites pins which code was deployed. Ledgers written before the rename carry
+`op: "REMOVE"` / `status: "REMOVED"` rows; the library treats those as equivalent to
+`DISPOSE` / `DISPOSED` when it reads them back, but this chaincode never writes them again.

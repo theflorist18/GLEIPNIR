@@ -64,7 +64,7 @@ button.small { padding: 3px 8px; font-size: 12px; margin-left: 8px; }
 .trail { list-style: none; margin: 0; padding: 0; }
 .trail li { display: grid; grid-template-columns: 90px 1fr auto; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--line); }
 .op { font-weight: 600; font-size: 12px; }
-.op-create { color: #6cae75; } .op-transfer { color: #4f86c6; } .op-access { color: #c9a227; } .op-remove { color: var(--bad); }
+.op-create { color: #6cae75; } .op-transfer { color: #4f86c6; } .op-access { color: #c9a227; } .op-dispose { color: var(--bad); }
 .ts { color: var(--muted); font-size: 11px; }
 
 .badge { border-radius: 6px; padding: 3px 10px; font-size: 12px; font-weight: 600; }

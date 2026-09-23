@@ -47,17 +47,31 @@ function makeEvent(i) {
   };
 }
 
+function postEvent(url, ev) {
+  return fetch(`${url}/events`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(ev),
+  });
+}
+
+// Stub receipt-store: records the LAST body PUT per eventId.
+function receiptStoreStub(receipts) {
+  return startServer(async (req, res) => {
+    const body = await readBody(req);
+    receipts.set(decodeURIComponent(req.url.replace('/receipts/', '')), body);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end('{"ok":true}');
+  });
+}
+
+const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
 test('anchoring boundary: N events -> receipts stored, one root submitted, receipts re-PUT with txId', async (t) => {
   const receipts = new Map();
   const rootCalls = [];
 
-  const rstore = await startServer(async (req, res) => {
-    const body = await readBody(req);
-    const id = decodeURIComponent(req.url.replace('/receipts/', ''));
-    receipts.set(id, body);
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end('{"ok":true}');
-  });
+  const rstore = await receiptStoreStub(receipts);
   const authHeaders = [];
   const gw = await startServer(async (req, res) => {
     const body = await readBody(req);
@@ -86,11 +100,7 @@ test('anchoring boundary: N events -> receipts stored, one root submitted, recei
 
   const events = [makeEvent(0), makeEvent(1), makeEvent(2)];
   for (let i = 0; i < events.length; i += 1) {
-    const resp = await fetch(`${batcher.url}/events`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(events[i]),
-    });
+    const resp = await postEvent(batcher.url, events[i]);
     assert.equal(resp.status, 202);
     const j = await resp.json();
     assert.equal(j.batchId, 'shared-e0-b000000');
@@ -108,7 +118,8 @@ test('anchoring boundary: N events -> receipts stored, one root submitted, recei
   assert.equal(rootCalls[0].meta.scopeId, 'shared');
   assert.equal(rootCalls[0].meta.leafCount, 3);
 
-  // Three receipts stored, each carrying the committed txId and a valid path.
+  // Three receipts stored, each carrying the committed txId, a valid path,
+  // and (brief 2026-09-22 §6) the evidenceId + the event body as enqueued.
   assert.equal(receipts.size, 3);
   for (let i = 0; i < 3; i += 1) {
     const r = receipts.get(`evt-${i}`);
@@ -116,6 +127,9 @@ test('anchoring boundary: N events -> receipts stored, one root submitted, recei
     assert.equal(r.rootRef.txId, 'tx-anchor-1');
     assert.equal(r.rootRef.scopeId, 'shared');
     assert.equal(r.leafIndex, i);
+    assert.equal(r.evidenceId, `ev-${i}`);
+    assert.deepEqual(r.event, events[i]);
+    assert.equal(r.leafHash, leafHash(r.event), 'leafHash == SHA-256(canonical event)');
     assert.equal(
       verifyPath(r.leafHash, r.siblingPath, expectedRoot),
       true,
@@ -124,9 +138,101 @@ test('anchoring boundary: N events -> receipts stored, one root submitted, recei
   }
 
   const status = await (await fetch(`${batcher.url}/status`)).json();
+  assert.equal(status.batchSize, 3);
+  assert.equal(status.flushTimeoutMs, 0);
   assert.equal(status.counters.committed, 1);
+  assert.equal(status.counters.forced, 0);
   assert.equal(status.counters.degraded, 0);
   assert.equal(status.degraded, false);
+
+  // Size-closed batch: timestamps + delay fields for the anchoring-delay metric.
+  const b = status.batches[0];
+  assert.equal(b.forced, false);
+  for (const k of ['openedAt', 'closedAt', 'committedAt']) {
+    assert.match(b[k], ISO_RE, `${k} is ISO-8601`);
+  }
+  assert.ok(b.openedAt <= b.closedAt && b.closedAt <= b.committedAt);
+  assert.ok(b.delayMs.min >= 0 && b.delayMs.min <= b.delayMs.mean && b.delayMs.mean <= b.delayMs.max);
+});
+
+test('BATCH_SIZE takes precedence over BATCH_N/BATCH_K', async (t) => {
+  const rootCalls = [];
+  const rstore = await receiptStoreStub(new Map());
+  const gw = await startServer(async (req, res) => {
+    rootCalls.push(await readBody(req));
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ txId: 'tx-1' }));
+  });
+  const app = createApp({
+    variant: 'anchoring',
+    batchSize: 2,
+    batchN: 100, // must be ignored
+    receiptStoreUrl: rstore.url,
+    gatewayUrl: gw.url,
+    logLevel: 'silent',
+  });
+  const batcher = await listen(app);
+  t.after(() => { batcher.server.close(); rstore.server.close(); gw.server.close(); });
+
+  await postEvent(batcher.url, makeEvent(0));
+  await postEvent(batcher.url, makeEvent(1));
+  await app.locals.settle();
+  assert.equal(rootCalls.length, 1);
+  assert.equal(rootCalls[0].meta.leafCount, 2);
+  assert.equal((await (await fetch(`${batcher.url}/status`)).json()).batchSize, 2);
+});
+
+test('flush timer closes a partial batch (forced:true); /flush also forces', async (t) => {
+  const rootCalls = [];
+  const rstore = await receiptStoreStub(new Map());
+  const gw = await startServer(async (req, res) => {
+    rootCalls.push(await readBody(req));
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ txId: 'tx-1' }));
+  });
+  const flushMs = 50;
+  const app = createApp({
+    variant: 'anchoring',
+    batchSize: 100, // never reached by size
+    flushMs,
+    receiptStoreUrl: rstore.url,
+    gatewayUrl: gw.url,
+    logLevel: 'silent',
+  });
+  const batcher = await listen(app);
+  t.after(() => { batcher.server.close(); rstore.server.close(); gw.server.close(); });
+
+  const t0 = Date.now();
+  await postEvent(batcher.url, makeEvent(0));
+  // Wait for the TIMER (not /flush) to close the batch.
+  let status;
+  while (Date.now() - t0 < 2000) {
+    status = await (await fetch(`${batcher.url}/status`)).json();
+    if (status.counters.closedBatches === 1) break;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  assert.equal(status.counters.closedBatches, 1, 'timer closed the batch');
+  assert.ok(Date.now() - t0 >= flushMs, 'closed no earlier than the timeout');
+  await app.locals.settle();
+
+  assert.equal(rootCalls.length, 1);
+  assert.equal(rootCalls[0].meta.leafCount, 1);
+  status = await (await fetch(`${batcher.url}/status`)).json();
+  assert.equal(status.flushTimeoutMs, flushMs);
+  const b = status.batches[0];
+  assert.equal(b.forced, true);
+  assert.equal(b.rootStatus, 'committed');
+  assert.ok(b.delayMs.min >= flushMs - 5, `delay ${b.delayMs.min} spans the timeout`);
+  assert.ok(b.delayMs.min <= b.delayMs.max);
+
+  // A second partial batch closed by POST /flush is forced too and starts a
+  // fresh window (new openedAt, new sequence).
+  await postEvent(batcher.url, makeEvent(1));
+  status = await (await fetch(`${batcher.url}/flush`, { method: 'POST' })).json();
+  assert.equal(rootCalls.length, 2);
+  assert.equal(status.counters.forced, 2);
+  assert.equal(status.batches[1].forced, true);
+  assert.ok(status.batches[1].openedAt >= status.batches[0].closedAt);
 });
 
 test('duplicate eventId in the open batch is rejected with 409', async (t) => {
@@ -141,28 +247,15 @@ test('duplicate eventId in the open batch is rejected with 409', async (t) => {
   t.after(() => batcher.server.close());
 
   const ev = makeEvent(7);
-  const first = await fetch(`${batcher.url}/events`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(ev),
-  });
+  const first = await postEvent(batcher.url, ev);
   assert.equal(first.status, 202);
-  const dup = await fetch(`${batcher.url}/events`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(ev),
-  });
+  const dup = await postEvent(batcher.url, ev);
   assert.equal(dup.status, 409);
 });
 
 test('root submit failure keeps receipts and marks the batch degraded', async (t) => {
   const receipts = new Map();
-  const rstore = await startServer(async (req, res) => {
-    const body = await readBody(req);
-    receipts.set(decodeURIComponent(req.url.replace('/receipts/', '')), body);
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end('{"ok":true}');
-  });
+  const rstore = await receiptStoreStub(receipts);
   const gw = await startServer((_req, res) => {
     res.writeHead(500);
     res.end('boom');
@@ -182,13 +275,7 @@ test('root submit failure keeps receipts and marks the batch degraded', async (t
     gw.server.close();
   });
 
-  for (let i = 0; i < 2; i += 1) {
-    await fetch(`${batcher.url}/events`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(makeEvent(i)),
-    });
-  }
+  for (let i = 0; i < 2; i += 1) await postEvent(batcher.url, makeEvent(i));
   await fetch(`${batcher.url}/flush`, { method: 'POST' });
 
   // Receipts were persisted (without txId) even though the root failed.
@@ -199,14 +286,14 @@ test('root submit failure keeps receipts and marks the batch degraded', async (t
   assert.equal(status.counters.failed, 1);
   assert.equal(status.degraded, true);
   assert.equal(status.batches[0].rootStatus, 'failed');
+  // Never committed -> no commit timestamp, no delay.
+  assert.equal(status.batches[0].committedAt, null);
+  assert.equal(status.batches[0].delayMs, null);
 });
 
 test('parallel-anchored routes per-case queues to the anchor-client', async (t) => {
   const rootCalls = [];
-  const rstore = await startServer((req, res) => {
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end('{"ok":true}');
-  });
+  const rstore = await receiptStoreStub(new Map());
   const anchor = await startServer(async (req, res) => {
     rootCalls.push(await readBody(req));
     res.writeHead(201, { 'content-type': 'application/json' });
@@ -230,11 +317,7 @@ test('parallel-anchored routes per-case queues to the anchor-client', async (t) 
 
   for (let i = 0; i < 2; i += 1) {
     const ev = { ...makeEvent(i), caseId: 'case-001' };
-    const resp = await fetch(`${batcher.url}/events`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(ev),
-    });
+    const resp = await postEvent(batcher.url, ev);
     const j = await resp.json();
     assert.equal(j.batchId, 'case-001-e0-b000000');
   }
