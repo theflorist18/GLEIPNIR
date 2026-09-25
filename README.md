@@ -29,7 +29,7 @@ Start here:
 | `services/verification/` | audit-latency path: fetch → recompute branch → verify root |
 | `gateway/` | Node fabric-gateway BFF (REST), variant routing |
 | `benchmark/` | Caliper 0.6.0 workspace: `sweeps.yaml` (single source of truth), seeded trace generator, trace-replay + per-op workloads, REST connector, audit-reconstruction harness, network configs |
-| `frontend/` | React+Vite evidence-library SPA (login, cases, ingest, evidence detail) + admin operator dashboard |
+| `frontend/` | React+Vite evidence-library SPA (login, cases, ingest, evidence detail) |
 | `orchestration/` | up/down, per-case channel provisioning, ledger-only reset, `rounds.py`/`experiment.py` campaign driver (E0–E3 + ops), checkpoints, collect, report |
 | `docs/` | architecture, contracts, as-built, methodology, audit record, research notes |
 
@@ -40,6 +40,7 @@ Start here:
 ./orchestration/up.sh --variant standard
 ./orchestration/smoke-standard.sh          # create → transfer → access → audit → dispose (DISPOSED)
 python orchestration/experiment.py --exp e0 --dry-run   # print the pilot plan
+python orchestration/experiment.py --exp cell --variant parallel --send-rate 50 --cases 10 --dry-run  # one cell at your own levels (parallel: 1 channel per case)
 ./orchestration/down.sh                    # volumes kept; --wipe only with the authors' go-ahead
 ```
 

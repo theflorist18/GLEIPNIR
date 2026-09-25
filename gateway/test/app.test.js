@@ -30,7 +30,6 @@ function fakeDeps(overrides, extra) {
       },
       batcher: { async enqueue() { return { batchId: 'shared-b000000', leafIndex: 0 }; } },
       receipts: { async listByEvidence(id) { return id === 'ev-1' ? [RECEIPT] : []; } },
-      runsStore: { async create(r) { return { runId: 'req-1', status: 'requested', request: r }; }, async list() { return []; }, async get() { return null; } },
       config: { variant: 'standard', token: 'secret-token', defaultChannel: 'coc-main', ...overrides },
       ...extra,
     },
@@ -99,9 +98,9 @@ test('missing/invalid bearer token -> 401', async (t) => {
   const { server, url } = await listen(createApp(deps));
   t.after(() => server.close());
 
-  const noAuth = await fetch(`${url}/api/v1/runs`);
+  const noAuth = await fetch(`${url}/api/v1/evidence/ev-1/audit`);
   assert.equal(noAuth.status, 401);
-  const badAuth = await fetch(`${url}/api/v1/runs`, { headers: { authorization: 'Bearer wrong' } });
+  const badAuth = await fetch(`${url}/api/v1/evidence/ev-1/audit`, { headers: { authorization: 'Bearer wrong' } });
   assert.equal(badAuth.status, 401);
 });
 

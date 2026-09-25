@@ -7,20 +7,19 @@ repetitions: 3            # r; results reported as mean ± SD over repetitions
 
 # ---- swept grids ----
 batch_sizes: [10, 25, 50, 100, 200]               # E1 — ONE grid for Anchoring (N) and Parallel-Anchored (K)
-channel_counts: [5, 10, 20, 30, 40, 50]           # E2 — Parallel only; bounded by host cores (Fabric perf guidance)
+channel_counts: [5, 10, 20, 30, 40, 50]           # E2 — Parallel only; one channel per case, so cases = channels; bounded by host cores
 send_rates_tps: [10, 25, 50, 75, 100, 150, 200]   # E3a — send rate = CONFIGURED offered load (input, not output)
-case_counts: [5, 10, 20, 30, 40, 50]              # E3b — trimmed to ≤ baseline.channels_max before E3b runs
+case_counts: [5, 10, 20, 30, 40, 50]              # E3b — all four variants (parallel*: one channel per case); trimmed to ≤ baseline.channels_max
 
 # ---- calibrated constants carried forward (filled from results; "baseline", never "optimal") ----
 baseline:
   send_rate_tps: 50       # from E0 pilot (sub-saturation) → used by E1, E2, E3b, ops   [PLACEHOLDER until E0]
   batch_size: 50          # from E1 (rule: docs/methodology/experiments.md §4) → E3, ops  [PLACEHOLDER until E1]
-  channels: 20            # from E2: MEDIAN of the healthy range → E3a, ops              [PLACEHOLDER until E2]
+  channels: 20            # the SET case count (= channels on parallel*, one per case): E2 MEDIAN → E1, E3a, ops, ramp, cell default  [PLACEHOLDER until E2]
   channels_max: 50        # from E2: top of the healthy range → E3b upper bound          [PLACEHOLDER until E2]
 
 # ---- controlled workload (identical across variants; recorded in every run.json) ----
 workload:
-  cases: null                     # null → cases = channels (1:1 mapping); integer decouples data from infra
   evidence_per_case: 20
   events_per_case_per_round: 200  # per round; per-worker share = cases*200/workers must be an integer
   rounds: 5                       # trace slices per run (E1/E2/E3b); E3a uses one slice per send rate

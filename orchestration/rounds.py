@@ -248,11 +248,14 @@ def write_static(sweeps):
         "# experiment.py --exp e0 renders the same rounds one launch at a time; this file is for manual launches.",
     )
     for v in VARIANTS:
+        # One channel per case on the parallel variants (channels_for gives 1 to the others).
         doc = render_bench(sweeps, v, f"gleipnir-smoke-{v}",
                            f"Smoke functional check of the {v} variant (labels smoke-*; regime smoke).",
-                           smoke_rounds(sweeps, v), channels=1)
+                           smoke_rounds(sweeps, v), channels=s["cases"])
         rel = f"benchmarks/smoke-{v}.yaml"
-        lines = list(header) + [f"# network config: {network_config(v, 1)}"]
+        lines = list(header) + [f"# network config: {network_config(v, s['cases'])}"
+                                + (f" (needs {channels_for(v, s['cases'])} case channels: up.sh --channels "
+                                   f"{s['cases']})" if v in MULTI_CHANNEL_VARIANTS else "")]
         _write(rel, dump_yaml(doc, lines))
     for c in static_channel_counts(sweeps):
         _write(f"networks/parallel-c{c}.yaml", render_parallel_network(c))

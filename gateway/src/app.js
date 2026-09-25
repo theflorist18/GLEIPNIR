@@ -90,7 +90,7 @@ function buildEvent(op, evidenceId, caseId, actor, detail) {
 }
 
 function createApp(deps) {
-  const { fabric, batcher, receipts, runsStore, users, sessions, caseRegistry, evidenceStore, config } = deps;
+  const { fabric, batcher, receipts, users, sessions, caseRegistry, evidenceStore, config } = deps;
   // anchor-client is reached only by the Parallel-Anchored anchor-roots read
   // below (deps so tests can point it at a fake).
   const anchorClientUrl = deps.anchorClientUrl || 'http://anchor-client:4003';
@@ -932,21 +932,6 @@ function createApp(deps) {
   app.get('/internal/anchor-root/:scopeId/:batchId', auth.requireService, wrap(async (req, res) => {
     const out = await fabric.evaluate(cfg.defaultChannel, 'ReadAnchorRoot', [req.params.scopeId, req.params.batchId]);
     res.type('application/json').send(out);
-  }));
-
-  // ---- runs (request store; execution is host-side experiment.py) ----
-  // Starting a run is an admin action (M12). Reads stay open to any
-  // authenticated principal — experiment.py never uses this API, so the gate
-  // cannot touch the benchmark path.
-  app.post('/api/v1/runs', requireAdmin, wrap(async (req, res) => {
-    const record = await runsStore.create(req.body || {});
-    res.status(201).json(record);
-  }));
-  app.get('/api/v1/runs', wrap(async (_req, res) => res.json(await runsStore.list())));
-  app.get('/api/v1/runs/:id', wrap(async (req, res) => {
-    const r = await runsStore.get(req.params.id);
-    if (!r) return res.status(404).json({ error: 'run not found' });
-    return res.json(r);
   }));
 
   // Terminal error handler (OWASP A05/A09 / N6). Errors thrown in MIDDLEWARE

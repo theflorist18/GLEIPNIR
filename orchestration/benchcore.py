@@ -1,0 +1,400 @@
+#!/usr/bin/env python3
+"""GLEIPNIR Bench core — everything the desktop app (benchapp.pyw) does that is not a widget.
+
+  - WSL command builders: the benchmark itself always runs inside the Ubuntu-22.04 distro
+    (Caliper's native addons are Linux builds; the runner calls bash + docker), driven through
+    `wsl.exe` with an argv list (never a shell string — PowerShell mangles nested quotes).
+  - Runner: one subprocess at a time, its stdout pumped line by line into a queue by a daemon
+    thread (Tk is not thread-safe, so the UI drains the queue with root.after()).
+  - parse_line: turns experiment.py's progress prints into events. experiment.py marks those
+    prints; change their format only together with test_benchapp.py.
+  - set_sweeps_value: edits benchmark/sweeps.yaml IN PLACE, keeping every comment (the thesis
+    cites the file's git blob SHA, so a yaml.safe_dump rewrite is not acceptable).
+  - Backup / restore / stack-up scripts: every benchmark run resets the ledger volumes, which
+    erases the manual-test custody trails, so the app backs up all gleipnir_* volumes first and
+    can put them back. Never `down.sh --wipe`, never `up.sh` on a restore (it would re-create
+    channels that the restored ledger already has).
+
+No tkinter import here: it is tested under WSL's Python too (test_benchapp.py).
+"""
+import json
+import os
+import queue
+import re
+import shlex
+import subprocess
+import threading
+
+import yaml
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SWEEPS = os.path.join(REPO, "benchmark", "sweeps.yaml")
+ENV_FILE = os.path.join(REPO, "network", "compose", ".env")
+RESULTS = os.path.join(REPO, "benchmark", "results")
+BACKUPS = os.path.join(REPO, "backups")
+DISTRO = "Ubuntu-22.04"
+
+
+# ------------------------------------------------------------------ WSL commands
+
+def wsl_path(p):
+    """C:\\a\\b -> /mnt/c/a/b (the repo lives on the Windows drive, WSL sees it under /mnt)."""
+    p = str(p).replace("\\", "/")
+    if re.match(r"^[A-Za-z]:/", p):
+        return f"/mnt/{p[0].lower()}{p[2:]}"
+    return os.path.abspath(p).replace("\\", "/") if os.name != "nt" else wsl_path(os.path.abspath(p))
+
+
+def wsl_argv(script):
+    # --exec, NOT `--`: with `--` wsl.exe re-parses the command line through the default shell, which
+    # expands $vars / $(...) in `script` before bash -lc ever sees them (found live: backup's gzip loop
+    # and stack-up's "${P[@]}" came out empty).
+    return ["wsl", "-d", DISTRO, "-u", "root", "--exec", "bash", "-lc",
+            f"cd {shlex.quote(wsl_path(REPO))} && {script}"]
+
+
+def experiment_args(exp, variants=(), reps=None, resume=False, dry_run=False, verbose=False, send_rates=(),
+                    batch_size=None, cases=None, controls=None, reuse_network=False, no_monitor=False,
+                    no_audit=False):
+    """experiment.py argv (after the script name). `controls` = {"--seed": 7, ...} (cell only)."""
+    a = ["--exp", exp]
+    for v in variants:
+        a += ["--variant", v]
+    if reps:
+        a += ["--reps", str(reps)]
+    if send_rates:
+        a += ["--send-rate", *[str(r) for r in send_rates]]
+    if batch_size:
+        a += ["--batch-size", str(batch_size)]
+    if cases:
+        a += ["--cases", str(cases)]
+    for flag, val in (controls or {}).items():
+        a += [flag, str(val)]
+    a += [f for f, on in (("--resume", resume), ("--dry-run", dry_run), ("--verbose", verbose),
+                          ("--reuse-network", reuse_network), ("--no-monitor", no_monitor),
+                          ("--no-audit", no_audit)) if on]
+    return a
+
+
+# ANY experiment.py (the app's, or one started from a terminal as `python3 -u experiment.py` inside
+# orchestration/ — the README form) but not test_experiment.py. `[e]` keeps pgrep off this command line.
+BUSY_CHECK = "if pgrep -f '(^|[ /])[e]xperiment\\.py( |$)' >/dev/null; then echo '@@busy'; exit 3; fi"
+APP_MARK = "-X benchapp"   # a no-op CPython -X option that tags the app's OWN runs for Cancel
+
+
+def experiment_script(args, wipe):
+    """wipe=True: a real run (ledger resets allowed; its own session so Cancel reaches Caliper too).
+    wipe=False: a preview (--dry-run) — the wipe flag is never set. No BUSY_CHECK in here: this very
+    command line names experiment.py, so pgrep would find itself — the app runs BUSY_CHECK as its own
+    call (run_quick) or inside backup_script() first."""
+    cmd = f"python3 -u {APP_MARK} orchestration/experiment.py " + " ".join(shlex.quote(a) for a in args)
+    if not wipe:
+        return f"exec {cmd}"
+    return f"export GLEIPNIR_ALLOW_LEDGER_WIPE=1 && exec setsid --wait {cmd}"
+
+
+def cancel_script(force=False):
+    """SIGINT (or SIGKILL) to the process group of the APP'S OWN experiment.py (tagged APP_MARK) —
+    Caliper and its workers included. Never a terminal campaign, never a backup or restore in flight."""
+    sig = "KILL" if force else "INT"
+    return (f"for p in $(pgrep -f '[-]X benchapp orchestration/experiment\\.py'); do kill -{sig} -- -$p 2>/dev/null; "
+            f"done; true")
+
+
+_ALPINE = "docker image inspect alpine >/dev/null 2>&1 || docker pull alpine"   # backup-volumes.sh uses it
+
+
+def stack_up_script():
+    """Start the stack the .env names on its EXISTING volumes (profiles as in up.sh) and wait for health."""
+    return ("source orchestration/lib.sh && V=$(grep '^VARIANT=' network/compose/.env | cut -d= -f2) && P=() && "
+            "case \"$V\" in anchoring) P=(--profile anchoring);; parallel-anchored) P=(--profile parallel-anchored);; "
+            "esac && compose \"${P[@]}\" up -d --no-build && wait_healthz 9443 orderer0 && "
+            "wait_healthz 9446 peer0-org1 && wait_healthz 9447 peer0-org2 && "
+            "{ [ \"$V\" != parallel-anchored ] || wait_healthz 9448 peer0-anchor; } && "
+            "curl -sf --retry 30 --retry-delay 2 --retry-all-errors localhost:3000/healthz >/dev/null && "
+            "echo \"@@stack-up $V\"")
+
+
+def backup_script(dst):
+    """Stop the stack (volumes kept), copy every gleipnir_* volume + .env to dst, verify the archives."""
+    d = shlex.quote(wsl_path(dst))
+    return (f"set -euo pipefail; {BUSY_CHECK}; {_ALPINE}; bash orchestration/down.sh; "
+            f"bash orchestration/backup-volumes.sh {d}; cp network/compose/.env {d}/compose.env; "
+            f"for f in {d}/*.tar.gz; do gzip -t \"$f\"; done; echo \"@@backup-ok\"")
+
+
+def restore_script(dst):
+    """Stop the stack, REPLACE every volume from dst, restore its .env, start that stack again."""
+    d = shlex.quote(wsl_path(dst))
+    # `&&`, not `;`: set -e does not fire inside an && list, so a failed stack-up must gate the marker.
+    return (f"set -euo pipefail; {BUSY_CHECK}; {_ALPINE}; bash orchestration/down.sh; "
+            f"bash orchestration/backup-volumes.sh {d} --restore; cp {d}/compose.env network/compose/.env; "
+            f"{stack_up_script()} && echo \"@@restore-ok\"")
+
+
+class Runner:
+    """One WSL process at a time; its output goes to `q` as (tag, "line", text) and finally
+    (tag, "exit", returncode)."""
+
+    def __init__(self):
+        self.q = queue.Queue()
+        self.proc = None
+
+    def busy(self):
+        return self.proc is not None and self.proc.poll() is None
+
+    def start(self, script, tag):
+        if self.busy():
+            raise RuntimeError("another benchmark process is still running")
+        self.proc = subprocess.Popen(wsl_argv(script), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                     stdin=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace",
+                                     bufsize=1, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        threading.Thread(target=self._pump, args=(self.proc, tag), daemon=True).start()
+
+    def _pump(self, proc, tag):
+        for line in proc.stdout:
+            self.q.put((tag, "line", line.rstrip("\r\n").replace("\x00", "")))   # wsl.exe errors are UTF-16
+        self.q.put((tag, "exit", proc.wait()))
+
+
+def run_quick(script, timeout=120):
+    """A short WSL call (cancel, preview helpers); returns (returncode, output)."""
+    p = subprocess.run(wsl_argv(script), capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       stdin=subprocess.DEVNULL, timeout=timeout, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    return p.returncode, (p.stdout + p.stderr).replace("\x00", "")
+
+
+# ------------------------------------------------------------------ progress parsing
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+_NUM = r"(-?[\d.]+|None)"
+_PATTERNS = [
+    ("plan", re.compile(r"^plan (\w+): (\d+) run\(s\), (\d+) to execute")),
+    ("planrow", re.compile(r"^\s+(\S+/r\d+)\s+regime=(\S+)\s+rounds=(\d+)\s+rates=(\[[^\]]*\])")),
+    ("eta", re.compile(r"^ETA: (.+)$")),
+    ("run", re.compile(r"^##### \[run (\d+)/(\d+) \| (\d+) % done \| elapsed (.+?) \| ETA (.+?)\] #####")),
+    ("runstart", re.compile(r"^===== \[run (\d+)/(\d+)\] (\S+) \(regime ([\w-]+)\) =====")),
+    ("round", re.compile(r"^--- \[run \d+/\d+\] round (\d+)/(\d+): (\S+) \| send rate (\S+) tx/s \| (\d+) tx")),
+    ("done", re.compile(r"^\s+done (\S+): success (\d+) \| failure (\d+) \(([\d.]+) %\) \| throughput " + _NUM +
+                        r" TPS at send rate " + _NUM + r" tx/s \| latency avg " + _NUM + r" s \(min " + _NUM +
+                        r" - max " + _NUM + r"\)(?:, p95 " + _NUM + r" s)?")),
+    ("donetext", re.compile(r"^\s+done (\S+): (.*)$")),
+    ("caliper", re.compile(r"\[(\S+) Round \d+ Transaction Info\] - Submitted: (\d+) Succ: (\d+) Fail:\s*(\d+) "
+                           r"Unfinished:\s*(\d+)")),
+    ("csv", re.compile(r"results CSV updated \((\d+)/(\d+) runs\): (.+)$")),
+    ("complete", re.compile(r"^(\w+) complete: (\d+) run\(s\) executed in (.+)\.$")),
+    ("marker", re.compile(r"^@@(\S+)\s*(.*)$")),
+    ("warn", re.compile(r"^\s*! (.+)$")),
+    ("error", re.compile(r"Traceback \(most recent|FATAL:|refusing to|\berror:|Error: ")),
+]
+
+
+def _f(s):
+    try:
+        return float(s)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_line(line):
+    """-> {"kind": ..., fields} for a line the UI reacts to, else None."""
+    line = _ANSI.sub("", line)
+    for kind, rx in _PATTERNS:
+        m = rx.search(line) if kind in ("caliper", "csv", "error") else rx.match(line)
+        if not m:
+            continue
+        g = m.groups()
+        if kind == "plan":
+            return {"kind": kind, "exp": g[0], "runs": int(g[1]), "todo": int(g[2])}
+        if kind == "planrow":
+            return {"kind": kind, "runId": g[0], "regime": g[1], "rounds": int(g[2]), "rates": g[3]}
+        if kind == "eta":
+            return {"kind": kind, "eta": g[0]}
+        if kind == "run":
+            return {"kind": kind, "i": int(g[0]), "n": int(g[1]), "pct": int(g[2]), "elapsed": g[3], "eta": g[4]}
+        if kind == "runstart":
+            return {"kind": kind, "i": int(g[0]), "n": int(g[1]), "runId": g[2], "regime": g[3]}
+        if kind == "round":
+            return {"kind": kind, "j": int(g[0]), "m": int(g[1]), "label": g[2], "sendRate": _f(g[3]), "tx": int(g[4])}
+        if kind == "done":
+            return {"kind": kind, "label": g[0], "succ": int(g[1]), "fail": int(g[2]), "failPct": _f(g[3]),
+                    "throughput": _f(g[4]), "sendRate": _f(g[5]), "latAvg": _f(g[6]), "latMin": _f(g[7]),
+                    "latMax": _f(g[8]), "p95": _f(g[9])}
+        if kind == "donetext":
+            return {"kind": "done", "label": g[0], "text": g[1]}
+        if kind == "caliper":
+            return {"kind": kind, "label": g[0], "submitted": int(g[1]), "succ": int(g[2]), "fail": int(g[3]),
+                    "unfinished": int(g[4])}
+        if kind == "csv":
+            return {"kind": kind, "i": int(g[0]), "n": int(g[1]), "path": g[2]}
+        if kind == "complete":
+            return {"kind": kind, "exp": g[0], "runs": int(g[1]), "wall": g[2]}
+        if kind == "marker":
+            return {"kind": kind, "name": g[0], "arg": g[1]}
+        if kind == "warn":
+            return {"kind": kind, "text": g[0]}
+        return {"kind": "error", "text": line.strip()}
+    return None
+
+
+# ------------------------------------------------------------------ sweeps.yaml, comment-preserving
+
+_KEY = re.compile(r"^(\s*)([A-Za-z_][\w-]*):(.*)$")
+_VAL = re.compile(r"^(\s*)(\{[^}]*\}|\[[^\]]*\]|[^#]*?)(\s*)(#.*)?$")
+_TAG = re.compile(r"\[(PLACEHOLDER[^\]]*|set (?:from|by)[^\]]*)\]")
+
+
+def fmt_value(v):
+    if isinstance(v, bool):
+        raise TypeError("booleans are not sweeps.yaml values")
+    if isinstance(v, int):
+        return str(v)
+    if isinstance(v, float):
+        return repr(v)
+    if isinstance(v, (list, tuple)):
+        return "[" + ", ".join(fmt_value(x) for x in v) + "]"
+    raise TypeError(f"unsupported value {v!r}")
+
+
+def get_path(d, path):
+    for k in path.split("."):
+        d = d[k]
+    return d
+
+
+def _set_path(d, path, value):
+    keys = path.split(".")
+    for k in keys[:-1]:
+        d = d[k]
+    if keys[-1] not in d:
+        raise KeyError(path)
+    d[keys[-1]] = value
+
+
+def _locate(lines, path):
+    """-> (line index, "block" | "inline") of the line holding `path`'s value."""
+    keys, stack = path.split("."), []
+    for i, ln in enumerate(lines):
+        if not ln.strip() or ln.lstrip().startswith("#"):
+            continue
+        m = _KEY.match(ln)
+        if not m:
+            continue
+        indent = len(m.group(1))
+        while stack and stack[-1][0] >= indent:
+            stack.pop()
+        stack.append((indent, m.group(2)))
+        cur = [k for _, k in stack]
+        if cur == keys:
+            return i, "block"
+        if cur == keys[:-1] and m.group(3).strip().startswith("{"):
+            return i, "inline"
+    raise KeyError(path)
+
+
+def set_sweeps_value(text, path, value, tag=None):
+    """Return `text` with `path` (e.g. "workload.mix.dispose_fraction") set to `value`, every comment and
+    all spacing kept. `tag` replaces a baseline's "[PLACEHOLDER ...]" / "[set from ...]" provenance note.
+    Refuses (ValueError) unless the re-parsed result differs from the original at exactly that path."""
+    new_val = fmt_value(value)
+    lines = text.split("\n")
+    i, how = _locate(lines, path)
+    m = _KEY.match(lines[i])
+    head = f"{m.group(1)}{m.group(2)}:"
+    if how == "block":
+        v = _VAL.match(m.group(3))
+        lead, old, gap, comment = v.group(1), v.group(2), v.group(3), v.group(4) or ""
+        if comment:   # keep the comment in its column
+            gap = " " * max(1, len(old) + len(gap) - len(new_val))
+        lines[i] = f"{head}{lead}{new_val}{gap}{comment}"
+    else:
+        key = path.split(".")[-1]
+        rest, n = re.subn(rf"(?<![\w]){re.escape(key)}:(\s*)([^,}}\s]+)", lambda mm: f"{key}:{mm.group(1)}{new_val}",
+                          m.group(3), count=0)
+        if n != 1:
+            raise ValueError(f"{path}: expected exactly one '{key}:' in the inline map, found {n}")
+        lines[i] = f"{head}{rest}"
+    if tag:
+        if _TAG.search(lines[i]):
+            lines[i] = _TAG.sub(f"[{tag}]", lines[i], count=1)
+        else:
+            lines[i] += f"  [{tag}]" if "#" in lines[i] else f"  # [{tag}]"
+    new_text = "\n".join(lines)
+    want = yaml.safe_load(text)
+    _set_path(want, path, value)
+    if yaml.safe_load(new_text) != want:
+        raise ValueError(f"{path}: the edit would change more than that value — refusing to write")
+    return new_text
+
+
+def baseline_provenance(text, path):
+    """The "[...]" provenance note on a baseline line: "PLACEHOLDER until E1", "set from e1 2026-09-25", ..."""
+    lines = text.split("\n")
+    i, _ = _locate(lines, path)
+    m = _TAG.search(lines[i])
+    return m.group(1) if m else ""
+
+
+def git_dirty(rel="benchmark/sweeps.yaml"):
+    try:
+        out = subprocess.run(["git", "status", "--porcelain", "--", rel], cwd=REPO, capture_output=True, text=True,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+        return bool(out.strip())
+    except OSError:
+        return False
+
+
+def read_env():
+    env = {}
+    try:
+        for ln in open(ENV_FILE, encoding="utf-8"):
+            if "=" in ln and not ln.lstrip().startswith("#"):
+                k, v = ln.split("=", 1)
+                env[k.strip()] = v.strip()
+    except OSError:
+        pass
+    return env
+
+
+# ------------------------------------------------------------------ backup bookkeeping
+# backups/<ts>/backup.json marks a COMPLETE backup (written only after "@@backup-ok");
+# backups/state.json says what the live ledger holds now ("test data" unless a benchmark ran).
+
+def _load(path, default):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return default
+
+
+def _dump(path, obj):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(obj, fh, indent=2)
+
+
+def ledger_origin():
+    return _load(os.path.join(BACKUPS, "state.json"), {}).get("origin", "test data")
+
+
+def set_ledger_origin(origin):
+    _dump(os.path.join(BACKUPS, "state.json"), {"origin": origin})
+
+
+def mark_backup(dst, reason, created):
+    _dump(os.path.join(dst, "backup.json"), {"createdAt": created, "reason": reason,
+                                             "variant": read_env().get("VARIANT"), "origin": ledger_origin()})
+
+
+def list_backups():
+    """Complete backups, newest first: [{dir, createdAt, reason, variant, origin, sizeMb}]."""
+    out = []
+    if os.path.isdir(BACKUPS):
+        for name in sorted(os.listdir(BACKUPS), reverse=True):
+            d = os.path.join(BACKUPS, name)
+            meta = _load(os.path.join(d, "backup.json"), None)
+            if meta:
+                size = sum(os.path.getsize(os.path.join(d, f)) for f in os.listdir(d))
+                out.append({"dir": d, **meta, "sizeMb": round(size / 1e6, 1)})
+    return out

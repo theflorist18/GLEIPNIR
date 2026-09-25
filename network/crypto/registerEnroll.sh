@@ -219,6 +219,13 @@ create_orderer_org() {
 
 main() {
   mkdir -p "${ORG_DIR}"
+  if [ "${1:-}" = "anchor-only" ]; then
+    # up.sh --skip-crypto on Parallel-Anchored when the rest of the crypto exists but the
+    # anchor org was never enrolled (the stack was first brought up as another variant).
+    create_peer_org anchor AnchorClientMSP ca-anchor "${CA_ANCHOR_PORT}" peer0.anchor.example.com anchorclient
+    echo "Anchor-org crypto generated under ${ORG_DIR} (other orgs untouched)"
+    return
+  fi
   create_orderer_org
   create_peer_org org1 Org1MSP ca-org1 "${CA_ORG1_PORT}" peer0.org1.example.com
   create_peer_org org2 Org2MSP ca-org2 "${CA_ORG2_PORT}" peer0.org2.example.com

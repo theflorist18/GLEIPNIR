@@ -1,7 +1,7 @@
 'use strict';
 
 // User store for the gateway's session auth (M12). One JSON array file at
-// AUTH_DATA_DIR/users.json — file-backed like runsStore.js, loaded once at boot
+// AUTH_DATA_DIR/users.json — file-backed, loaded once at boot
 // and rewritten on every mutation (user counts are tiny; simplicity wins).
 // Users are deactivated (active:false), NEVER deleted: audit-trail actor
 // attribution must keep resolving to a real username. Passwords are hashed with

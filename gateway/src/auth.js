@@ -25,8 +25,8 @@ function safeEqual(a, b) {
 //     re-fetched from the store on every request so deactivation or a role
 //     change takes effect immediately, not at next login.
 //
-// requireRole gates admin-only routes (user management, case administration,
-// POST /api/v1/runs): the service token is NEVER sufficient there.
+// requireRole gates admin-only routes (user management, case administration):
+// the service token is NEVER sufficient there.
 
 function bearerOf(req) {
   const auth = req.get('authorization') || '';

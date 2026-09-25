@@ -31,7 +31,6 @@ async function fakeDeps(overrides) {
         async evaluate(_channel, _fn, args) { return JSON.stringify({ id: args[0], status: 'ACTIVE' }); },
       },
       batcher: { async enqueue() { return { batchId: 'shared-b000000', leafIndex: 0 }; } },
-      runsStore: { async create(r) { return { runId: 'req-1', status: 'requested', request: r }; }, async list() { return []; }, async get() { return null; } },
       users,
       sessions,
       config: { variant: 'standard', token: 'secret-token', defaultChannel: 'coc-main', ...overrides },
@@ -80,7 +79,7 @@ test('login without a users store -> 503; service token unaffected', async (t) =
   t.after(() => server.close());
 
   assert.equal((await login(url, 'root', 'root-pw')).status, 503);
-  const r = await fetch(`${url}/api/v1/runs`, { headers: { authorization: 'Bearer secret-token' } });
+  const r = await fetch(`${url}/api/v1/evidence/ev-1/audit`, { headers: { authorization: 'Bearer secret-token' } });
   assert.equal(r.status, 200);
 });
 
@@ -168,25 +167,6 @@ test('admin gating: user management requires an admin SESSION — investigator a
   const listed = await fetch(`${url}/api/v1/admin/users`, { headers: asUser(admin) });
   assert.equal(listed.status, 200);
   assert.equal((await listed.json()).length, 2);
-});
-
-test('POST /runs is admin-only; GET /runs stays open to the service token', async (t) => {
-  const { deps } = await fakeDeps();
-  const { server, url } = await listen(createApp(deps));
-  t.after(() => server.close());
-
-  const start = (tok) => fetch(`${url}/api/v1/runs`, { method: 'POST', headers: asUser(tok), body: JSON.stringify({ variant: 'standard' }) });
-
-  assert.equal((await start('secret-token')).status, 403);
-
-  const admin = (await login(url, 'root', 'root-pw')).body.token;
-  await fetch(`${url}/api/v1/admin/users`, { method: 'POST', headers: asUser(admin), body: JSON.stringify({ username: 'ivy', password: 'ivy-pw' }) });
-  const ivy = (await login(url, 'ivy', 'ivy-pw')).body.token;
-  assert.equal((await start(ivy)).status, 403);
-  assert.equal((await start(admin)).status, 201);
-
-  const list = await fetch(`${url}/api/v1/runs`, { headers: asUser('secret-token') });
-  assert.equal(list.status, 200);
 });
 
 test('deactivation kills live sessions and future logins', async (t) => {
@@ -330,7 +310,6 @@ test('M18: lead is a valid user role, but admin routes stay admin-only', async (
     method: 'POST', headers: asUser(lena), body: JSON.stringify({ username: 'x', password: 'x' }),
   });
   assert.equal(denied.status, 403);
-  assert.equal((await fetch(`${url}/api/v1/runs`, { method: 'POST', headers: asUser(lena), body: JSON.stringify({ variant: 'standard' }) })).status, 403);
 
   // Unknown roles are still rejected.
   const junk = await fetch(`${url}/api/v1/admin/users`, {
@@ -412,9 +391,9 @@ test('N1: service token still authenticates after the constant-time swap; near-m
   const { deps } = await fakeDeps();
   const { server, url } = await listen(createApp(deps));
   t.after(() => server.close());
-  assert.equal((await fetch(`${url}/api/v1/runs`, { headers: asUser('secret-token') })).status, 200);
-  assert.equal((await fetch(`${url}/api/v1/runs`, { headers: asUser('secret-tokeX') })).status, 401);
-  assert.equal((await fetch(`${url}/api/v1/runs`, { headers: asUser('secret-token-extra') })).status, 401);
+  assert.equal((await fetch(`${url}/api/v1/evidence/ev-1/audit`, { headers: asUser('secret-token') })).status, 200);
+  assert.equal((await fetch(`${url}/api/v1/evidence/ev-1/audit`, { headers: asUser('secret-tokeX') })).status, 401);
+  assert.equal((await fetch(`${url}/api/v1/evidence/ev-1/audit`, { headers: asUser('secret-token-extra') })).status, 401);
 });
 
 // N3 (OWASP A07): a sliding idle timeout ends an inactive session before its
@@ -472,7 +451,7 @@ test('N4: successful auth emits NO security line (service-token hot path stays q
   const { server, url } = await listen(createApp(deps));
   t.after(() => server.close());
 
-  assert.equal((await fetch(`${url}/api/v1/runs`, { headers: asUser('secret-token') })).status, 200);
+  assert.equal((await fetch(`${url}/api/v1/evidence/ev-1/audit`, { headers: asUser('secret-token') })).status, 200);
   assert.equal((await login(url, 'root', 'root-pw')).status, 200);
   assert.equal(lines.length, 0, 'successful auth must not emit security events');
 });

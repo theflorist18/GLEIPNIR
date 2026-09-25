@@ -203,13 +203,19 @@ Thresholds: confirm with D.
 < 0.9 × the configured send rate (`report.py` flags it; the latency knee is shown
 alongside). The grid must **bracket** saturation: after E0 it is trimmed to keep at
 least two levels below and one level above the saturation point. `baseline.send_rate_tps`
-is a sub-saturation level from the same ramp.
+is a sub-saturation level from the same ramp: per variant, the highest healthy rate at or below
+½ × its saturation point (else its highest healthy rate), and the baseline is the MINIMUM of the
+four variants' values, because E1, E2 and E3b run every variant at that one rate (`report.py`
+`ramp_suggestion` / `suggest_send_rate`; the desktop app suggests it, the authors confirm it).
+Margin, minimum-over-variants reading and thresholds: confirm with D.
 
-4.4 **Cases.** Cases are data, channels are infrastructure. Default mapping is 1:1
-(`workload.cases: null` → cases = channels); data-case c (1-based) routes to channel
-`case-NNN` with NNN = ((c − 1) mod channels) + 1; the single-channel variants route
-every case to the shared channel. A non-default `cases` value decouples the two and
-is recorded in `run.json`. The case count is the same for every variant within a cell.
+4.4 **Cases.** Cases are data, channels are infrastructure — and on Parallel and
+Parallel-Anchored there is **one channel per case** (authors' decision, 24 Sep 2026): data-case
+c (1-based) routes to channel `case-NNN` with NNN = c, so the case count IS the channel count
+there. The single-channel variants route every case to the shared channel. The set case count
+is `baseline.channels` in `sweeps.yaml` (the E2 median); the E2/E3b grids and the ad-hoc
+`experiment.py --exp cell --cases N` change it. The case count is the same for every variant
+within a cell.
 
 ---
 
@@ -326,7 +332,7 @@ spec (§6). Implemented and labelled as defaults; D confirms or overrides.
 |---|---|---|
 | 1 | Batch grid `{10, 25, 50, 100, 200}`, **one grid for N and K** | one grid keeps the two anchored cells comparable in the factorial frame; the chat grid stands until the pilot says otherwise |
 | 2 | Channel calibration on Parallel only; Parallel-Anchored inherits; Standard and Anchoring forced to 1 channel | anchoring is the A factor, channels the B factor — mixing them would confound the calibration |
-| 3 | Harness parameters `cases` and `channels`; data-case c → `case-NNN`, NNN = ((c − 1) mod channels) + 1; default 1:1 | keeps the paper's per-case channel model while allowing cases-per-channel without code change |
+| 3 | One channel per case on the parallel variants (authors, 24 Sep 2026); data-case c → `case-NNN`, NNN = c; one case-count knob | keeps the paper's per-case channel model; a separate channel knob would let infrastructure and data drift apart |
 | 4 | Send-rate grid `{10, 25, 50, 75, 100, 150, 200}`; saturation = first rate with successful throughput < 0.9 × send rate; latency knee alongside | a numeric rule is reproducible; the grid brackets saturation on a laptop-class host and is trimmed after E0 |
 | 5 | r = 3; mean ± SD | keeps the budget ≤ 150 runs; SD conveys spread without over-claiming |
 | 6 | Per-operation breakdown at one point: `baseline.channels` × `baseline.send_rate_tps` × `baseline.batch_size` | the call's "one point" reading; crossing operations with sweeps re-creates the run explosion |

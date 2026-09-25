@@ -291,13 +291,14 @@ Datastore: filesystem only — `DATA_DIR/<id>` blob + `<id>.meta.json` sidecar (
 
 ### 5. Frontend specification
 
-**Stack: plain React + Vite (TypeScript) + react-router v6, served static behind Nginx in one small container.** Vite gives fast local builds and a trivial Docker image; React has first-class charting (Recharts) for the throughput/latency/storage views; nginx's SPA fallback makes deep links refresh-safe. The frontend **talks only to the API gateway** (REST/JSON), never to Fabric.
+**Stack: plain React + Vite (TypeScript) + react-router v6, served static behind Nginx in one small container.** Vite gives fast local builds and a trivial Docker image; nginx's SPA fallback makes deep links refresh-safe. The frontend **talks only to the API gateway** (REST/JSON), never to Fabric.
 
 **M14 reframing:** the original two-scope toggle (dashboard / CoC demo) became a
 multi-page evidence-library app with real login. The old demo's components
 (`EvidenceCard`, `AuditTrail`, `MerkleBadge`, `SessionTrail`, the forms) live on
-inside the library pages; the operator dashboard is unchanged in content but is
-now an admin-gated route.
+inside the library pages. The operator dashboard that M14 kept as an admin route was
+REMOVED in M27 (CONTRACTS §12-19): the benchmark is driven by the desktop app
+`orchestration/benchapp.pyw`, not by the web interface.
 
 | Area | Pages/Components | Does |
 |---|---|---|
@@ -307,11 +308,10 @@ now an admin-gated route.
 | investigator | `EvidenceDetailPage` | `EvidenceCard` + `AuditTrail` + `MerkleBadge` + download/export + transfer/access forms; opening it demonstrates the server-side auto-`AccessLog(view)` |
 | investigator | `SearchPage` | evidence-index + case search, participant-scoped server-side |
 | admin | `UsersPage`, `CasesAdminPage` | user management (deactivate-not-delete); case creation, roster grants, categorize/uncategorize |
-| admin | `DashboardPage` | the operator dashboard: `VariantSelector`, the run-request form (ONE `batch size` field + `channels` + `send rate (tx/s)` → `cell: {batchSize, channels, sendRateTps}`, mirroring `sweeps.yaml`; execution is host-side `orchestration/experiment.py`), `RunControl`, `ThroughputChart`, `LatencyChart`, `StorageChart`, `RunHistory`/`RunCompare` |
 
 Routes: `/login` public; `/ingest`, `/cases[/:caseId]`, `/evidence/:evidenceId`,
-`/search` require a session; `/admin/users`, `/admin/cases`, `/admin/dashboard`
-require the admin role (server-enforced too).
+`/search` require a session; `/admin/users`, `/admin/cases` require the admin
+role (server-enforced too).
 
 Keep it simple and usable; no state-management library beyond React context.
 
@@ -336,7 +336,6 @@ The BFF holds the only `@hyperledger/fabric-gateway` sessions and encapsulates v
 | `GET /evidence/search`, `/cases/search` | case-registry search | participant-scoped unless admin |
 | `POST/GET/PATCH /cases[/:id]`, participants, categorize | case-registry proxy | create/update/roster/categorize admin-only |
 | `POST /auth/login\|logout`, `GET /auth/me`, `/admin/users*` | users/sessions stores (M12) | user management admin-only |
-| `POST /runs` / `GET /runs/:id` | orchestration + metrics | all; `POST` admin-session-only |
 
 **Variant selection changes routing, not contracts:** a single `variantRouter` reads the active variant and either calls `fabricGateway.submit()` (Standard/Parallel — with a `targetChannel` = per-case channel for Parallel) or `batcher.enqueue()` (Anchoring/Parallel-Anchored).
 
@@ -469,6 +468,7 @@ sequenceDiagram
 | 23 | Tabbed detail pages (frontend) | EvidenceDetail → Overview / Chain of Custody (`AuditTrailTimeline`, replacing the flat trail) / Examiner Notes; CaseDetail → Overview / Evidence (category+flag columns) / Activity (feed on Timeline) / Team (admin-or-case-lead only, add/remove via modal); flag control + notes composer render only for writers; admin Download hidden off-case; render-tested with a mocked client |
 | 24 | CoC export + lead dashboard | `GET /cases/:id/coc-report?format=csv\|json` assembles all exhibit trails (hand-rolled RFC 4180 CSV; one auto-`AccessLog('coc-report')` per exhibit for sessions, none for the service token); `/cases/:id/report` renders the print-optimized court report outside the shell (browser print = PDF); `/lead/dashboard` shows lead cases, flagged evidence, merged team activity; `smoke-library.sh` step 17 passes |
 | 25 | Team roster + persistent case activity (library, M25/M25b) | Case-registry seeds every new case with the preset categories Image/Video/Audio/Document/Text as ordinary lead-editable rows; `PATCH /cases/:id/participants/:userId` changes a participant's case role in place and 409s on the last lead; `GET /users/directory` is admin-or-lead only (investigator session and service token 403) and a lead session never sees admin accounts; `GET /cases/:id/activity` reads the persistent append-only `case_audit_log` — one actor-attributed row per management mutation, actor forwarded gateway→registry via `X-Gleipnir-Actor`; `DELETE /evidence/:id` requires case-lead (or the `uploader` pseudo-role on one's own uncategorized evidence) |
+| 27 | Benchmark desktop app + dashboard removal | CONTRACTS §12-19: `orchestration/benchapp.pyw` edits every `sweeps.yaml` value in place (comments kept; `test_benchapp.py` round-trips every editable path byte-identically), previews/runs/resumes/cancels e0·ramp·e1·e2·e3a·e3b·ops·cell through WSL with live per-round rows in the supervisor's columns, lists history, exports the per-round CSV (UTF-8 BOM; decimal-comma option) and the mean ± SD tables/charts, suggests the E0/E1/E2 baselines by the methodology rules (written only on confirm, tagged), and backs up every volume before a ledger reset with a verified restore; the web `DashboardPage` and `/api/v1/runs` are gone (`/api/v1/runs` → 404; gateway 81/81, frontend 32/32 + build) |
 | 26 | Experimental redesign (supervisor brief 2026-09-22) | CONTRACTS §12-10..17: `RemoveEvidence` → `DisposeEvidence` (`DISPOSE`/`DISPOSED`; `TestDisposeIsTerminal` passes, `smoke-standard.sh` asserts status `DISPOSED`); one `batch_sizes` grid + `BATCH_SIZE`/`BATCH_FLUSH_MS`; receipts carry `evidenceId` + `event`, the receipt store lists by evidence, and `GET /evidence/:id/audit?proofs=1` + `/anchor-roots` serve the off-chain trail on the anchored variants (gateway/batcher/receipt-store/verification suites green, `leafSource` reported); `trace/generate.js` is byte-deterministic (`benchmark npm test`); `rounds.py --static` regenerates the committed smoke/parallel-c* files with zero diff; `experiment.py --exp e3a --dry-run` prints the plan; `collect.py --selftest` passes; and one live E0 run per variant yields a `manifest.json` with `regime: smoke`, tx-log percentiles, failure classes, docker CPU/memory, an `audit.json` and (anchored) an `anchoring.json` with `delayMs` per batch |
 
 ---

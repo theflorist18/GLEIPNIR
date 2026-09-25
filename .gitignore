@@ -13,6 +13,8 @@ network/channel-artifacts/
 # benchmark & run outputs (referenced by runId, not committed)
 benchmark/results/
 benchmark/traces/
+# benchapp volume backups (the authors' test data + benchmark ledgers)
+backups/
 # generated per-case network configs only — case-template.yaml is SOURCE and stays tracked (F67)
 benchmark/networks/case-[0-9]*.yaml
 

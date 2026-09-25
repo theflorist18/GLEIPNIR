@@ -42,7 +42,6 @@ services:
       - TLS_CERT_PATH=/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt
       - DEFAULT_CHANNEL=coc-main
       - CC_NAME=evidence
-      - RESULTS_DIR=/results
       # Evidence library (M12–M15): user auth store + internal service links.
       - AUTH_DATA_DIR=/data/auth
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
@@ -56,7 +55,6 @@ services:
       - "3000:3000"
     volumes:
       - ../organizations:/organizations:ro
-      - ../../benchmark/results:/results
       - gateway-auth-data:/data/auth
     networks: [gleipnir-net]
 

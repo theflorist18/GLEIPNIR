@@ -82,7 +82,6 @@ async function bootStack(t) {
   const app = createApp({
     fabric,
     batcher: { async enqueue() { throw new Error('not used in standard'); } },
-    runsStore: { async create(r) { return { runId: 'req-1', request: r }; }, async list() { return []; }, async get() { return null; } },
     users,
     sessions,
     caseRegistry: makeCaseRegistryClient(registry.url, INTERNAL),

@@ -33,8 +33,8 @@ Port **3000**. Node 20, Express.
   actors keep resolving. First admin is seeded from `ADMIN_USERNAME`/
   `ADMIN_PASSWORD` when the store is empty.
 
-Admin-only routes (user management, `POST /runs`) require an **admin session**
-— the service token is never sufficient there.
+Admin-only routes (user management) require an **admin session** — the
+service token is never sufficient there.
 
 ## Public interface (`/api/v1`, JSON)
 
@@ -67,7 +67,6 @@ Admin-only routes (user management, `POST /runs`) require an **admin session**
 | `PUT` | `/evidence/:id/flag` | one strict-enum triage flag or null (M20); write-gated |
 | `GET` | `/cases/:id/activity?limit=` | case audit log (M20 feed; persistent since M25b — the gateway forwards the session username via `X-Gleipnir-Actor` on every registry mutation); case-visibility gate; never auto-logged |
 | `GET` | `/cases/:id/coc-report?format=csv\|json` | per-case CoC report (M24): all exhibit trails + metadata; sessions auto-log one `AccessLog('coc-report')` per exhibit after assembly (never the service token); CSV is hand-rolled RFC 4180 |
-| `POST`/`GET` | `/runs`, `/runs/:id` | run-request store (execution is host-side `orchestration/experiment.py`); `POST` is admin-session-only |
 
 Auto-AccessLog is **synchronous**: a user-session view/download/export succeeds
 only if the log write succeeds. It **never** fires for the service token —
@@ -108,12 +107,12 @@ on-chain root (`?proofs=1` + `/anchor-roots`) — the gateway does not do that.
 - **In:** REST/JSON requests; env config.
 - **Out:** Fabric submit/evaluate on app channels; enqueue POSTs to the batcher;
   receipt-store index reads (batched variants); anchor-client root reads
-  (parallel-anchored); verification proxy; run-request files under `RESULTS_DIR`.
+  (parallel-anchored); verification proxy.
 
 Env: `PORT=3000`, `GLEIPNIR_TOKEN`, `VARIANT`, `BATCHER_URL`, `VERIFICATION_URL`,
 `RECEIPT_STORE_URL=http://receipt-store:4002`, `ANCHOR_CLIENT_URL=http://anchor-client:4003`,
 `PEER_ENDPOINT`, `PEER_HOST_ALIAS`, `MSP_ID`, `CRYPTO_PATH`, `TLS_CERT_PATH`,
-`DEFAULT_CHANNEL=coc-main`, `CC_NAME=evidence`, `RESULTS_DIR=/results`,
+`DEFAULT_CHANNEL=coc-main`, `CC_NAME=evidence`,
 `AUTH_DATA_DIR=/data/auth`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`,
 `SESSION_TTL_SECONDS=28800`, `CASE_REGISTRY_URL=http://case-registry:4005`,
 `EVIDENCE_STORE_URL=http://evidence-store:4006`, `GLEIPNIR_INTERNAL_TOKEN`,
@@ -131,8 +130,8 @@ still starts with user login disabled (service token unaffected).
   anchor-client own those).
 - Verify Merkle branches or roots itself — `?proofs=1` and `/anchor-roots` only hand the
   witness and the root to the caller (verification service / `benchmark/audit`).
-- Execute benchmark runs — `POST /runs` only records a request; `orchestration/experiment.py`
-  runs Caliper and writes the manifest the UI polls.
+- Execute or track benchmark runs — there is no runs API; the benchmark is driven
+  host-side by the desktop app `orchestration/benchapp.pyw` (`orchestration/experiment.py`).
 
 ## Failure modes
 

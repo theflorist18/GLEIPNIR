@@ -262,8 +262,8 @@ reported trails are pre-report, mirroring `/export`; never for the service
 token; CSV is hand-rolled RFC 4180, one row per CoC event; global/system
 audit-log export stays deferred and CASE/UCO JSON-LD stays banned),
 `POST /auth/login|logout`, `GET /auth/me`, `GET/POST /admin/users`,
-`PATCH /admin/users/:id`, `POST /admin/users/:id/reset-password`,
-`POST /runs`, `GET /runs`, `GET /runs/:id`.
+`PATCH /admin/users/:id`, `POST /admin/users/:id/reset-password`.
+(The M12 `POST/GET /runs` run-request store was REMOVED in M27, §12-19.)
 
 **Auth (M12)** — two kinds of principal:
 - **Service token**: static bearer (`GLEIPNIR_TOKEN`, default `dev-token`),
@@ -278,7 +278,7 @@ audit-log export stays deferred and CASE/UCO JSON-LD stays banned),
   Login is brute-force-throttled per (IP, username) — `LOGIN_MAX_ATTEMPTS`(5)/
   `LOGIN_WINDOW_SECONDS`(60) → `429` + `Retry-After` — and unknown usernames do
   full scrypt work against a dummy hash (no timing-based account enumeration).
-  Admin-only: user management and `POST /runs` — the service token is **never**
+  Admin-only: user management — the service token is **never**
   sufficient there. Case create is admin-or-lead (a lead creator lands on the
   roster as case `lead`; an admin may designate one via `leadUserId`); case
   update/roster/categorize is admin-or-that-case's-lead; all case management is
@@ -354,7 +354,6 @@ passed as `deps.anchorClientUrl`, whereas `verificationUrl` lives in `config` �
 as-built), `PEER_ENDPOINT=peer0-org1:7051`,
 `PEER_HOST_ALIAS=peer0.org1.example.com`, `MSP_ID=Org1MSP`, `CRYPTO_PATH`
 (User1@org1 MSP dir), `TLS_CERT_PATH`, `DEFAULT_CHANNEL=coc-main`, `CC_NAME=evidence`,
-`RESULTS_DIR=/results` (runs-API store; compose binds `benchmark/results`);
 library (M12–M15): `AUTH_DATA_DIR=/data/auth` (users.json; volume
 `gateway-auth-data`), `ADMIN_USERNAME`/`ADMIN_PASSWORD` (first-boot admin seed,
 empty-store only), `SESSION_TTL_SECONDS=28800`, `GLEIPNIR_INTERNAL_TOKEN`
@@ -460,10 +459,9 @@ case_counts: [5, 10, 20, 30, 40, 50]              # E3b — trimmed to ≤ basel
 baseline:                 # calibrated constants carried forward ("baseline", never "optimal")
   send_rate_tps: 50       # from E0/ramp (sub-saturation) → E1, E2, E3b, ops   [PLACEHOLDER until E0]
   batch_size: 50          # from E1 → E3, ops                                 [PLACEHOLDER until E1]
-  channels: 20            # from E2: MEDIAN of the healthy range → E3a, ops    [PLACEHOLDER until E2]
+  channels: 20            # the SET case count (= channels on parallel*, one per case): E2 MEDIAN → E1, E3a, ops, ramp, cell default [PLACEHOLDER until E2]
   channels_max: 50        # from E2: top of the healthy range → E3b upper bound [PLACEHOLDER until E2]
 workload:                 # controlled, identical across variants, recorded in every run.json
-  cases: null                     # null → cases = channels (1:1); an integer decouples data from infra
   evidence_per_case: 20
   events_per_case_per_round: 200  # per-worker share cases*200/workers must be an integer
   rounds: 5                       # trace slices per run (E1/E2/E3b); E3a uses one slice per send rate
@@ -526,7 +524,8 @@ ramp: { events_per_case_per_round: 40 }      # E0 short ramp to locate approxima
   (leading slash mandatory — Caliper matches `Names[0]` verbatim); `rateControl: fixed-rate
   tps`. Network config: standard `networks/coc-main.yaml`; parallel
   `networks/parallel-c{C}.yaml` (rendered by `rounds.py --static` for every C in
-  `channel_counts ∪ case_counts ∪ {1, baseline.channels}`; per-channel `contractID:
+  `channel_counts ∪ case_counts ∪ {1, baseline.channels}`; an off-grid `--exp cell` C gets
+  the same rendering written into its run dir; per-channel `contractID:
   evidence-case-NNN` unique alias); anchoring + parallel-anchored
   `networks/rest-gateway.yaml`. Committed static files: `benchmarks/smoke-<variant>.yaml`
   (regimes.smoke) + `networks/parallel-c{C}.yaml`, both with a GENERATED header. Multi-channel
@@ -549,16 +548,18 @@ ramp: { events_per_case_per_round: 40 }      # E0 short ramp to locate approxima
   `@hyperledger/caliper-fabric/lib/connector-versions/peer-gateway/PeerGateway.js`), so `err`
   is `null` for fabric-mode failures; collect.py classifies those from `caliper.log`.
 - **Round labels**: `smoke-create` / `smoke-logs` / `smoke-access-shared-gate` (standard) /
-  `smoke-verify` (anchored) / `smoke-trace` (e0); `rate<R>` (ramp, e3a); `slice<k>` (e1, e2,
-  e3b); `create` / `transfer` / `access` / `dispose` / `read-evidence` / `read-trail` /
+  `smoke-verify` (anchored) / `smoke-trace` (e0); `rate<R>` (ramp, e3a, cell with several send
+  rates); `slice<k>` (e1, e2, e3b, cell with one send rate); `create` / `transfer` / `access` / `dispose` / `read-evidence` / `read-trail` /
   `verify-event` (ops).
 - **Results layout** (gitignored, never edited by hand):
   `benchmark/results/<exp>/<variant>/<levels>/r<rep>/` with `levels =
-  batch<N>-ch<C>-cases<K>[-ref]` (fixed key order, e.g. `batch50-ch20-cases20`) containing
+  batch<N>-ch<C>-cases<K>[-ref]` (fixed key order, e.g. `batch50-ch20-cases20`; `cell` runs append
+  `-rate<R>[-<R>…]` and, with control overrides, `-x<hash>`) containing
   `run.json` (seeded by experiment.py), `rounds/<label>/{bench.yaml, round.json, caliper.log,
   report.html, tx-w<i>.jsonl}`, `checkpoints.jsonl` (`t0..tN`), `anchoring.json` (batcher
   `/status` after the final flush), `audit.json` (reconstruct.js), `manifest.json`
-  (collect.py); plus `benchmark/results/runlog.jsonl` lines `{runId, exp, variant, levels,
+  (collect.py); plus `benchmark/results/<exp>/<exp>-results.csv` (report.export_rounds, rewritten
+  after every run) and `benchmark/results/runlog.jsonl` lines `{runId, exp, variant, levels,
   rep, startedAt, finishedAt, wallSeconds, status: complete|failed}`. `runId =
   '<exp>/<variant>/<levels>/r<rep>'`. Caliper's own `report.json` is not produced;
   `caliper.log` is the tee'd stdout collect.py parses (rows after the LAST `### All test
@@ -569,9 +570,11 @@ ramp: { events_per_case_per_round: 40 }      # E0 short ramp to locate approxima
   setdefault — identity/provenance are never overwritten). Top level: `runId, experiment,
   variant, levels{batchSize, channels, cases, sendRateTps, reference}, repetition,
   regime: smoke|steady|sub-floor, status, trace{hash, params, opCounts, path}, rounds[],
-  storage{}, anchoring, audit, payloadCompressionVsBaseline?, provenance{gitCommit,
-  configShas, sweepsSha, caliper{version, binding, connector}, fabricTag, host{cores,
-  memGb, platform}}, startedAt, finishedAt, wallSeconds` (+ `throughputPolicy`,
+  storage{}, anchoring, audit, payloadCompressionVsBaseline?, controls{workers,
+  evidencePerCase, payloadBytes, auditCases, flushTimeoutMs, monitorIntervalS}, overrides{<sweeps
+  path>: value} (cell CLI controls; {} otherwise), minChannelWriteEvents (actual, from the
+  trace), provenance{gitCommit, configShas, sweepsSha, sweepsPath, caliper{version, binding,
+  connector}, fabricTag, host{cores, memGb, platform}}, startedAt, finishedAt, wallSeconds` (+ `throughputPolicy`,
   `collectedAt`). `rounds[i]`: `label, index, module, slice, sendRateTps, succ, fail,
   sendRateReportedTps, latency{minS, avgS, maxS}, throughputReportedTps,
   throughputSuccessfulOnlyTps, txlog{count, ok, fail, failureRatePct,
@@ -630,19 +633,20 @@ ramp: { events_per_case_per_round: 40 }      # E0 short ramp to locate approxima
 ## 11. Orchestration entry points
 
 ```
-orchestration/up.sh --variant <v> [--channels <n>] [--skip-crypto]  # enroll → compose up → channels → ccaas → commit
+orchestration/up.sh --variant <v> [--channels <n>] [--skip-crypto]  # enroll → compose up → channels → ccaas → commit; with --skip-crypto on parallel-anchored, a missing/partial anchor org is enrolled ALONE (registerEnroll.sh anchor-only; org1/org2/orderer untouched) — §12-19
 orchestration/down.sh [--wipe]                       # teardown; --wipe removes named volumes
 orchestration/provision-channel.sh <caseId>          # genesis → osnadmin join(201) → peer join → commit cc → emit benchmark/networks/<caseId>.yaml
 orchestration/teardown-channel.sh <caseId>
 orchestration/reset-network.sh --variant <v> --channels <C>   # M26 ledger-only reset: needs GLEIPNIR_ALLOW_LEDGER_WIPE=1; down (no -v) → rm ONLY gleipnir_{orderer0,orderer1,orderer2,peer0org1,peer0org2,peer0anchor}-ledger, gleipnir_receipt-data, gleipnir_verify-metrics → rm network/channel-artifacts → unset CCAAS_ID_* → up.sh --skip-crypto (never touches gateway-auth-data, case-registry-data, evidence-blob-data, CA state, network/organizations)
-orchestration/backup-volumes.sh <dir> [--restore]    # tar every gleipnir_* named volume via alpine (one file each); --restore untars them back
+orchestration/backup-volumes.sh <dir> [--restore]    # tar every gleipnir_* named volume via alpine (one file each); --restore REPLACES each volume's contents (empties it first) and refuses while a container uses the volume
+orchestration/benchapp.pyw                           # desktop app (Windows host, Python 3.11 + Tk; drives experiment.py in WSL) — §12-19
 orchestration/smoke-standard.sh                      # REST-path functional gate: create → transfer → access×2 → audit(==4) → dispose → status DISPOSED → transfer-fails
 orchestration/smoke-library.sh                       # library gate (standard variant): login/roles → case+participant → multipart ingest → categorize → search → view/download/export auto-log asserts → authz negatives → trail==4
 orchestration/rounds.py --static                     # the ONLY renderer of Caliper benchconfigs/network configs from sweeps.yaml; writes benchmarks/smoke-<variant>.yaml + networks/parallel-c{C}.yaml; library render_round()/network_config() for experiment.py
-orchestration/experiment.py --exp e0|ramp|e1|e2|e3a|e3b|ops [--variant V]* [--reps N] [--resume] [--dry-run] [--reuse-network] [--no-monitor] [--no-audit]   # the campaign driver (plans cells × reps; one network lifetime per run; lifecycle in §10 / orchestration/README). A FRESH ledger per run is the default; --reuse-network opts out (warned, one ad-hoc run) and --fresh-network still parses as a no-op for old command lines
+orchestration/experiment.py --exp e0|ramp|e1|e2|e3a|e3b|ops|cell [--variant V]* [--reps N] [--resume] [--dry-run] [--reuse-network] [--no-monitor] [--no-audit] [--verbose] [--sweeps FILE] [--send-rate R [R ...]] [--batch-size B] [--cases N] [--seed S] [--workers W] [--rounds K] [--events-per-case E] [--evidence-per-case V] [--transfer-weight T] [--access-weight A] [--dispose-fraction D] [--payload-bytes P] [--audit-cases N] [--flush-timeout-ms F] [--monitor-interval I]   # the campaign driver; the factor AND control flags are --exp cell only (§12-18); prints [run i/n] + ETA and per-round result lines, rewrites results/<exp>/<exp>-results.csv after every run (plans cells × reps; one network lifetime per run; lifecycle in §10 / orchestration/README). A FRESH ledger per run is the default; --reuse-network opts out (warned, one ad-hoc run) and --fresh-network still parses as a no-op for old command lines
 orchestration/checkpoint.py <runPath> [--label tK]   # du -sb probes via docker exec, appends checkpoints.jsonl (runPath = <exp>/<variant>/<levels>/r<rep>)
 orchestration/collect.py <run-dir> [--baseline <run-dir>] | --selftest   # run dir → manifest.json (rounds, per-tx percentiles, failure classes, resources, storage regression, anchoring, audit)
-orchestration/report.py --exp e1|e2|e3a|e3b|ops [--out docs/results/<exp>] [--no-charts]   # CSV + Markdown tables (units in headers, mean ± SD over reps) + PNG charts (matplotlib optional); e3a also writes e3a-saturation.json (saturation = first send rate where successful throughput < 0.9 × send rate; latency knee alongside); ops → ops-writes.* and ops-reads.*; E1 reference rows carry no batch size and print `ref`, never the literal `None`; the per-round tables (e3a, ops) carry a header note that on-chain/off-chain bytes per event, audit time and anchoring delay are measured once per RUN and therefore repeat on every row
+orchestration/report.py --exp e0|ramp|e1|e2|e3a|e3b|ops|cell [--out docs/results/<exp>] [--no-charts] [--decimal-comma]   # ALWAYS benchmark/results/<exp>/<exp>-results.csv (one row per run x round; supervisor column order send rate, throughput, latency min/max/avg/p95, CPU, memory, success, failure, failure rate; UTF-8 BOM; --decimal-comma = ';' + decimal comma); for e1..ops also CSV + Markdown tables (units in headers, mean ± SD over reps; Markdown = one table per variant with ONE latency column `avg (min–max), p95` of means, SDs in the CSV) + PNG charts (matplotlib optional); e3a also writes e3a-saturation.json (saturation = first send rate where successful throughput < 0.9 × send rate; latency knee alongside); ops → ops-writes.* and ops-reads.*; E1 reference rows carry no batch size and print `ref`, never the literal `None`; the per-round tables (e3a, ops) carry a header note that on-chain/off-chain bytes per event, audit time and anchoring delay are measured once per RUN and therefore repeat on every row
 ```
 
 `experiment.py` shells out to: `bash reset-network.sh` (before every run unless
@@ -650,7 +654,7 @@ orchestration/report.py --exp e1|e2|e3a|e3b|ops [--out docs/results/<exp>] [--no
 provision-channel.sh case-NNN` (missing channels), `node benchmark/trace/generate.js … --out
 <path>` (reads the printed sha256, moves the file to `benchmark/traces/<hash>.json`), `python
 checkpoint.py`, `npx caliper launch manager --caliper-workspace . --caliper-benchconfig <abs
-bench.yaml> --caliper-networkconfig <rel> --caliper-report-path <abs>` (cwd `benchmark/`, env
+bench.yaml> --caliper-networkconfig <rel, or the absolute run-dir copy for an off-grid cell C> --caliper-report-path <abs>` (cwd `benchmark/`, env
 `GLEIPNIR_TXLOG_DIR=<run>/rounds/<label>`, `GATEWAY_URL`, `BATCHER_URL`, `GLEIPNIR_TOKEN`),
 `GET $BATCHER_URL/status` (the per-round settle: poll until no root is `pending`) and, on the
 LAST round, `POST $BATCHER_URL/flush` + `GET /status` **before** that round's checkpoint so the
@@ -824,8 +828,13 @@ pick something else.
     count, so it would have labelled the same workload `steady` on the single-channel
     variants and `sub-floor` on the multi-channel ones, mixing labels inside one table);
     send rates are swept ASCENDING in both `ramp` and `e3a`; `run.json` records cores/memory. Cases-per-channel mapping
-    (spec §4 item 5, OPEN): harness params `cases` and `channels`, data-case c → channel
-    `case-NNN`, `NNN = ((c−1) mod channels)+1`, default 1:1 (**confirm with D**, spec §6 Q3).
+    (spec §4 item 5, spec §6 Q3) — **RESOLVED by the authors 2026-09-24: ONE CHANNEL PER CASE on
+    Parallel and Parallel-Anchored, in every plan (E0 included: its 10 smoke cases run on 10
+    case channels).** A plan sets only the case count (`make_run` derives the channel count via
+    `rounds.channels_for`, so the two cannot drift); `baseline.channels` is the set case count;
+    the old `workload.cases` decoupling key is removed. Standard/Anchoring put the same cases on
+    their one shared channel, so the replayed trace stays like-for-like. Data-case c → channel
+    `case-NNN`, NNN = c.
 
 15. **Ledger-only reset between runs** (spec §5.5-6: fresh ledgers for storage measurement
     and independent repetitions). `reset-network.sh` removes exactly the six ledger volumes,
@@ -870,6 +879,102 @@ pick something else.
     secondary per-request trace: it is removed by `reset-network.sh` but not otherwise
     rotated by experiment.py, and collect.py does not fold it into the manifest — the
     manifest's verify numbers come from the `VERIFY` op in the tx-log.
+
+18. **`--exp cell` — one ad-hoc cell with CLI factor levels** (author request 2026-09-24:
+    a reusable runner that can test any level of the experimental variables). The four
+    factors are CLI flags, valid ONLY with `--exp cell`: `--send-rate R [R ...]` (the
+    CONFIGURED send rate in tx/s — rendered as Caliper's `fixed-rate` `opts.tps`, which is
+    that controller's own key name, not a throughput; several rates → one round per rate,
+    ascending, the e3a shape; one rate → `workload.rounds` slices, the e1/e2/e3b shape),
+    `--batch-size` (anchored variants) and `--cases` (the trace's cases, the same for every
+    variant so the replayed operation sequence stays like-for-like — and, per §12-14, the
+    channel count on the parallel variants: there is no separate `--channels`). An omitted
+    factor takes its `sweeps.yaml` baseline (`--cases` → `baseline.channels`). Rejected, never
+    ignored: a factor no selected variant uses (a run labelled with a batch size it never used
+    is mislabelled data), a level < 1, and any factor flag on another `--exp`. Results go to `results/cell/<variant>/<levels>-rate<R…>/r<rep>`
+    — report.py exports them to the per-round CSV only and builds no aggregated table: a cell
+    is a probe, not an E1–E3 datapoint. An off-grid
+    parallel channel count gets its `parallel-c{C}.yaml` rendered by `rounds.py` into the run
+    dir. **Controls** (author request 2026-09-24, brief §5.5-1 "parameterizable"): `--seed
+    --workers --rounds --events-per-case --evidence-per-case --transfer-weight --access-weight
+    --dispose-fraction --payload-bytes --audit-cases --flush-timeout-ms --monitor-interval`,
+    also `--exp cell` only (a campaign's controls stay those of `sweeps.yaml`, or of a
+    `--sweeps` file — resolved to an absolute path — whose own blob SHA is now what `run.json`
+    records), so `sweeps.yaml` stays the single source of every CAMPAIGN constant. They
+    override an in-memory copy, are recorded in `run.json` `overrides` (+ `controls`: workers,
+    evidence/case, payload, audit cases (capped at the cell's cases — reconstruct.js audits
+    only existing cases), flush timeout, monitor interval), tag the run dir
+    `-x<sha256(overrides)[:6]>`, and are checked with `generate.js --dry` at plan time, so a
+    trace the generator refuses fails the `--dry-run`, with the generator's reason. Also new for every plan: `cases × events_per_case_per_round`
+    not divisible by `workers` fails at plan time; the trace is generated BEFORE the ledger
+    reset; a repeated `--variant` is de-duplicated; and the steady floor is judged on the
+    LEAST-loaded channel, not the mean: at plan time on the nominal `rounds × events ×
+    ⌊cases / channels⌋`, then — once the trace exists, before the reset — on the trace's
+    ACTUAL per-channel write events (`minChannelWriteEvents`). The generator fixes the total
+    per worker, not per case, so channels scatter around the nominal: at the committed
+    `sweeps.yaml` (nominal exactly 1000 per channel) 20 cases / 20 channels gives 938–1060
+    with 8 channels below 1000, 50/50 gives 935–1070 with 24 below. Such runs were labelled
+    `steady` and are now `sub-floor` — **OPEN for the authors: raise
+    `workload.events_per_case_per_round` or `rounds` so the least-loaded channel clears the
+    floor** (a `sweeps.yaml` decision, not made here). Progress lines + the per-round CSV
+    export (`report.export_rounds`, rewritten after every run; a write failure — e.g. the CSV
+    open in Excel — only warns, never stops a campaign) are reporting only.
+    Checks: `orchestration/test_experiment.py`.
+
+19. **Desktop benchmark app replaces the web operator dashboard** (author decision 2026-09-24,
+    M27). The admin `DashboardPage`, its run-request form and the gateway `POST/GET /runs`
+    store are REMOVED: nothing ever executed a request, its history scanned one directory
+    level (every M26 result was invisible) and its charts read a `metrics` field nothing
+    wrote. The gateway no longer mounts `benchmark/results` (`RESULTS_DIR` gone) and the SPA
+    no longer depends on recharts. In its place `orchestration/benchapp.pyw` (Tk, Windows host)
+    + `benchcore.py` (no UI; `test_benchapp.py`):
+    - **One driver still.** The app only launches `experiment.py` inside WSL
+      (`wsl --exec bash -lc …` — `--exec`, because `wsl -- …` re-parses the command through
+      the default shell and expands `$vars` first); a real run is
+      `GLEIPNIR_ALLOW_LEDGER_WIPE=1 setsid --wait python3 -u orchestration/experiment.py …`,
+      a Preview is `--dry-run` without the flag. The app's runs carry the no-op CPython option
+      `-X benchapp`, so Cancel = SIGINT to the process group of the APP'S OWN run only (Caliper
+      and its workers included; a terminal campaign is never touched), SIGKILL on a second
+      click after 30 s; during a Preview or backup Cancel only stops what comes next (a finished
+      backup is kept, the stack restarted), and it is unavailable during a restore. The busy
+      check (before any backup/restore/run) sees ANY `experiment.py`, including one started as
+      `python3 -u experiment.py` inside `orchestration/`. Resume = `--resume`; a plan with
+      nothing left to execute stops before the backup. A `--reuse-network` cell resets nothing,
+      so it is not backed up and leaves the ledger-origin record alone. The app refuses to save
+      `sweeps.yaml` or apply a baseline while a benchmark is running, and a restore reports
+      success only when the stack came back healthy.
+    - **sweeps.yaml stays the single source.** Input boxes write it only on an explicit Save
+      or "Use as baseline", IN PLACE with every comment kept (`set_sweeps_value`: line-based,
+      re-parses and refuses unless exactly the edited path changed, refuses if the file
+      changed on disk). Baseline edits are tagged in the line's provenance note: `[set by
+      hand <date>]` or `[set from <exp> <date>]` (replacing `[PLACEHOLDER …]`).
+    - **Suggested baselines, never automatic** — pure functions in report.py
+      (`ramp_suggestion`/`suggest_send_rate`, `suggest_batch_size`, `suggest_channels`)
+      implementing docs/methodology/experiments.md §4.1–4.3 (thresholds `PLATEAU_REL` 5 %,
+      `AUDIT_BOUND` 1.5×, `HEALTHY_TPS_RATIO` 0.95, `HEALTHY_MAX_FAIL_PCT` 1 %,
+      `HEALTHY_CPU_FRAC` 0.9 — **confirm with D**); the send-rate suggestion is the MINIMUM
+      of the per-variant ramp suggestions because E1/E2/E3b run every variant at one rate
+      (**confirm with D**). `report.py --exp ramp|e1|e2` prints the same suggestion.
+    - **Backups before any ledger wipe.** Before a run the app stops the stack (`down.sh`,
+      never `--wipe`), copies every `gleipnir_*` volume + `network/compose/.env` to
+      `backups/<ts>/` (gitignored), `gzip -t`s every archive, and only then starts
+      experiment.py; "Restore my test data" = `down.sh` → `backup-volumes.sh <dir> --restore`
+      → `.env` back → `compose up -d --no-build` for that variant (never `up.sh`, which
+      would re-create channels the restored ledger already has). `backups/state.json`
+      records whether the live ledger holds test data or benchmark data.
+    - **Plan-time floor preview.** `generate.js --dry` now also prints
+      `minChannelWriteEvents`; `experiment.py` shows a `steady` run whose generated trace
+      leaves a channel under the floor as `sub-floor` in the plan (the same check
+      `recheck_floor` applies at run time).
+    - **`up.sh --skip-crypto` on Parallel-Anchored enrols a missing anchor org** (found live
+      2026-09-25: a host whose crypto was generated for another variant has no — or, after a
+      failed start, docker-created empty — anchor-org MSP, so every Parallel-Anchored reset
+      timed out waiting for `peer0-anchor`). Only the anchor org is enrolled
+      (`registerEnroll.sh anchor-only`); org1/org2/orderer material is reused unchanged.
+    Live-verified 2026-09-24/25: backup → restore round trips with the fixture trails, accounts
+    and cases intact; E0 through the app — Resume skipping the complete runs, Cancel at round 2
+    (process group incl. Caliper workers gone, runlog `failed`), Resume to completion
+    (Parallel, 10 case channels), Parallel-Anchored after the anchor-org fix, Restore.
 
 Anything else that seems to require deviating from ARCHITECTURE.md or CLAUDE.md: STOP
 and ask the authors (per CLAUDE.md ground rule 2).

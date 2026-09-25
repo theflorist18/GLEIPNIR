@@ -228,7 +228,7 @@ function main() {
   const channels = pick('channels', 1);
   const params = {
     seed: pick('seed', sw.seed),
-    cases: pick('cases', wl.cases === null || wl.cases === undefined ? channels : wl.cases),
+    cases: pick('cases', channels),   // one channel per case on the parallel variants (sweeps.yaml has no separate cases)
     channels,
     evidencePerCase: pick('evidence-per-case', wl.evidence_per_case),
     eventsPerCasePerRound: pick('events-per-case-per-round', wl.events_per_case_per_round),
@@ -243,7 +243,13 @@ function main() {
   };
   if (a.dry) {
     const t = generateTrace(params);
-    process.stdout.write(`${JSON.stringify({ hash: t.hash, sliceSize: t.sliceSize, opCounts: t.opCounts }, null, 2)}\n`);
+    // Every trace item is a ledger write on its case channel: the least-loaded channel is what
+    // the steady floor (>= 10^3 per channel) is judged on — the generator fixes totals per worker.
+    const perChannel = {};
+    for (const seq of t.workers) for (const it of seq) perChannel[it.caseId] = (perChannel[it.caseId] || 0) + 1;
+    const minChannelWriteEvents = Math.min(...Object.values(perChannel));
+    process.stdout.write(`${JSON.stringify({ hash: t.hash, sliceSize: t.sliceSize, opCounts: t.opCounts,
+      minChannelWriteEvents }, null, 2)}\n`);
     return;
   }
   const hash = writeTrace(params, a.out);

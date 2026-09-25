@@ -48,6 +48,15 @@ if [ "${SKIP_CRYPTO}" != "true" ]; then
   [ "${ENABLE_ANCHOR_ORG}" = "true" ] && compose "${PROFILE_ARGS[@]}" up -d ca-anchor
   sleep 3
   ENABLE_ANCHOR_ORG="${ENABLE_ANCHOR_ORG}" bash "${REPO_ROOT}/network/crypto/registerEnroll.sh"
+elif [ "${ENABLE_ANCHOR_ORG}" = "true" ] && [ -z "$(ls "${REPO_ROOT}/network/organizations/peerOrganizations/anchor.example.com/peers/peer0.anchor.example.com/msp/signcerts" 2>/dev/null)" ]; then
+  # --skip-crypto reuses existing crypto, but a stack first brought up as another variant has
+  # no anchor org (docker may even have created its bind-mount dirs empty): enroll ONLY the
+  # anchor org; org1/org2/orderer material is left untouched.
+  echo "== enrolling the missing anchor-org crypto (other orgs reused) =="
+  rm -rf "${REPO_ROOT}/network/organizations/peerOrganizations/anchor.example.com"
+  compose "${PROFILE_ARGS[@]}" up -d ca-anchor
+  sleep 3
+  bash "${REPO_ROOT}/network/crypto/registerEnroll.sh" anchor-only
 fi
 
 # 2) network
