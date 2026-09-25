@@ -1,32 +1,38 @@
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
+import { Icon, type IconName } from '../ui/Icon';
 
-// Role-aware navigation: everyone gets the library pages; the admin section
-// only renders for admins (the routes are additionally RequireRole-guarded).
+// Role-aware navigation: everyone gets the library pages; groups the user
+// cannot use are not rendered at all (the routes are additionally
+// RequireRole-guarded).
+function Item({ to, icon, label }: { to: string; icon: IconName; label: string }) {
+  return (
+    <NavLink to={to} className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}>
+      <Icon name={icon} size={18} />{label}
+    </NavLink>
+  );
+}
+
 export function Sidebar() {
   const { user } = useAuth();
-  const cls = ({ isActive }: { isActive: boolean }) => (isActive ? 'active' : '');
   return (
-    <nav className="sidebar">
-      <div className="nav-group">
-        <div className="nav-title">Library</div>
-        <NavLink to="/ingest" className={cls}>Ingest evidence</NavLink>
-        <NavLink to="/cases" end className={cls}>My cases</NavLink>
-        <NavLink to="/search" className={cls}>Search</NavLink>
-      </div>
+    <nav className="sidebar" aria-label="Main">
+      <div className="nav-title">Library</div>
+      <Item to="/ingest" icon="nav-ingest" label="Ingest evidence" />
+      <Item to="/cases" icon="nav-cases" label="My cases" />
+      <Item to="/search" icon="nav-search" label="Search" />
       {user?.role === 'lead' && (
-        <div className="nav-group">
+        <>
           <div className="nav-title">Lead</div>
-          <NavLink to="/lead/dashboard" className={cls}>Dashboard</NavLink>
-        </div>
+          <Item to="/lead/dashboard" icon="nav-lead-dashboard" label="Dashboard" />
+        </>
       )}
       {user?.role === 'admin' && (
-        <div className="nav-group">
+        <>
           <div className="nav-title">Administration</div>
-          <NavLink to="/admin/users" className={cls}>Users</NavLink>
-          <NavLink to="/admin/cases" className={cls}>Case admin</NavLink>
-          <NavLink to="/admin/dashboard" className={cls}>Dashboard</NavLink>
-        </div>
+          <Item to="/admin/users" icon="nav-users" label="Users" />
+          <Item to="/admin/cases" icon="nav-case-admin" label="Case admin" />
+        </>
       )}
     </nav>
   );

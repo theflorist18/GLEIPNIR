@@ -13,12 +13,11 @@ import { SearchPage } from './pages/investigator/SearchPage';
 import { LeadDashboardPage } from './pages/lead/LeadDashboardPage';
 import { UsersPage } from './pages/admin/UsersPage';
 import { CasesAdminPage } from './pages/admin/CasesAdminPage';
-import { DashboardPage } from './pages/admin/DashboardPage';
 import { UnauthorizedPage } from './pages/shared/UnauthorizedPage';
 import { NotFoundPage } from './pages/shared/NotFoundPage';
 
-// Multi-page evidence library (M14). The old single-page demo/dashboard scope
-// toggle became real routes: the library pages for any signed-in role, the
+// Multi-page evidence library (M14). The old single-page demo scope toggle
+// became real routes: the library pages for any signed-in role, the
 // admin section RequireRole-gated. nginx's SPA fallback (try_files ->
 // /index.html) makes deep links refresh-safe.
 
@@ -54,7 +53,6 @@ export function App() {
         <Route path="/lead/dashboard" element={<RequireRole roles={['lead', 'admin']}><LeadDashboardPage /></RequireRole>} />
         <Route path="/admin/users" element={<RequireRole roles={['admin']}><UsersPage /></RequireRole>} />
         <Route path="/admin/cases" element={<RequireRole roles={['admin']}><CasesAdminPage /></RequireRole>} />
-        <Route path="/admin/dashboard" element={<RequireRole roles={['admin']}><DashboardPage /></RequireRole>} />
         <Route path="/unauthorized" element={<UnauthorizedPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Route>

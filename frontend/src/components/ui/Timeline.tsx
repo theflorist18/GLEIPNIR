@@ -1,10 +1,12 @@
-import type { ReactNode } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 
 export interface TimelineItem {
   key: string;
   /** Dot content (icon/initial); tone colours the dot. */
   marker?: ReactNode;
   tone?: 'accent' | 'ok' | 'warn' | 'danger' | 'muted';
+  /** Extra dot style, e.g. { '--tl-color': … } for a colour outside the tones. */
+  style?: CSSProperties;
   content: ReactNode;
 }
 
@@ -15,7 +17,7 @@ export function Timeline({ items }: { items: TimelineItem[] }) {
     <ol className="timeline">
       {items.map((it) => (
         <li key={it.key} className="tl-item">
-          <span className={`tl-dot tone-${it.tone ?? 'accent'}`}>{it.marker}</span>
+          <span className={`tl-dot tone-${it.tone ?? 'accent'}`} style={it.style}>{it.marker}</span>
           <div className="tl-content">{it.content}</div>
         </li>
       ))}

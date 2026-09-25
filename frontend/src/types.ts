@@ -1,14 +1,9 @@
 // Shared types for the GLEIPNIR SPA.
 //
 // The record/event shapes mirror docs/CONTRACTS.md §5 (Codex-Entry-inspired
-// evidence head + CoC event). The run manifest / checkpoint shapes mirror
-// docs/CONTRACTS.md §10/§11. CONTRACTS does not pin the exact field names the
-// metrics collector (collect.py / regress.py) writes back into a run, so every
-// metric field here is OPTIONAL and every consumer reads it defensively — a
-// "requested but not yet executed" run legitimately has none of them.
+// evidence head + CoC event).
 
 export type Variant = 'standard' | 'anchoring' | 'parallel' | 'parallel-anchored';
-export type Regime = 'smoke' | 'steady';
 export type Op = 'CREATE' | 'TRANSFER' | 'ACCESS' | 'DISPOSE';
 
 // ---- Evidence head record (CONTRACTS §5, Codex-Entry mapping) ----
@@ -110,85 +105,6 @@ export interface AccessLogRequest {
   actor: string;
   action: string;
   caseId?: string; // required by the gateway in parallel variants (audit F68)
-}
-
-// ---- Runs / sweep (CONTRACTS §10) ----
-
-// One batch-size grid for both anchored variants (supervisor brief 2026-09-22);
-// sendRateTps is the CONFIGURED send rate (input), never a measured throughput.
-export interface SweepCell {
-  batchSize?: number;
-  channels?: number;
-  sendRateTps?: number;
-  repetition?: number;
-}
-
-export interface RunRequest {
-  variant: Variant;
-  regime: Regime;
-  cell: SweepCell;
-  repetitions?: number;
-  notes?: string;
-}
-
-export interface LatencyStat {
-  min?: number;
-  avg?: number;
-  max?: number;
-}
-
-export interface ThroughputMetric {
-  perChannel?: { channel: string; tps: number }[];
-  aggregateTps?: number;
-}
-
-export interface RunMetrics {
-  throughput?: ThroughputMetric;
-  latency?: {
-    writeMs?: LatencyStat; // submit-to-commit write latency (Caliper)
-    verificationMs?: LatencyStat; // audit/verification latency (Anchoring variants)
-  };
-  success?: { succ?: number; fail?: number; failureModes?: Record<string, number> };
-  bytePerLog?: number; // slope from regress() over the checkpoint series
-}
-
-export interface Checkpoint {
-  runId?: string;
-  label?: string; // e.g. "t0", "t1"
-  ts?: string; // legacy alias; collect.py writes tsUtc
-  tsUtc?: string;
-  ledgerBytes?: Record<string, number>; // per-channel block-store bytes (du -sb)
-  stateBytes?: number; // GoLevelDB world-state bytes (summed per container)
-  receiptBytes?: number | null; // receipt-store volume (anchoring variants)
-  events?: number; // cumulative successful events (x-axis for byte-per-log)
-}
-
-export type RunStatus =
-  | 'requested'
-  | 'running'
-  | 'completed'
-  | 'failed'
-  | 'unknown'
-  | string;
-
-export interface RunManifest {
-  runId: string;
-  startedAt?: string;
-  variant?: Variant;
-  regime?: Regime;
-  cell?: SweepCell;
-  gitCommit?: string;
-  configShas?: Record<string, string>;
-  caliper?: { binding?: string; version?: string };
-  notes?: string;
-}
-
-// GET /runs/:id returns the manifest, plus (when available) status, metrics and
-// the checkpoint series. Fields beyond runId may be absent for pending runs.
-export interface RunDetail extends RunManifest {
-  status?: RunStatus;
-  metrics?: RunMetrics;
-  checkpoints?: Checkpoint[];
 }
 
 // ---- Evidence library (M14): auth, cases, evidence index ----

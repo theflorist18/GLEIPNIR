@@ -7,10 +7,11 @@ import { GatewayError } from '../../api';
 import { useErr } from '../../hooks/useErr';
 import { EvidenceCard } from '../../components/EvidenceCard';
 import { AuditTrailTimeline } from '../../components/AuditTrailTimeline';
-import { MerkleBadge, type VerifyState } from '../../components/MerkleBadge';
+import { MerkleBadge, VerifySteps, type VerifyState } from '../../components/MerkleBadge';
 import { SessionTrail, type SessionEvent } from '../../components/SessionTrail';
-import { Badge } from '../../components/ui/Badge';
 import { Tabs } from '../../components/ui/Tabs';
+import { Icon } from '../../components/ui/Icon';
+import { CopyButton, StatusPill } from '../../components/ui/Chips';
 import type { CaseDetail, CoCEvent, EvidenceFlag, EvidenceIndexRow, EvidenceNote, EvidenceRecord, Op } from '../../types';
 
 // Evidence detail (M14; M23 tabbed refresh): Overview / Chain of Custody /
@@ -132,7 +133,7 @@ function TransferCustodyForm({ id, onEvent }: { id: string; onEvent: (ev: Sessio
       }
     });
   return (
-    <div className="card form">
+    <div className="subcard form">
       <h3>Transfer custody</h3>
       <label>new custodian<input value={newCustodian} onChange={(e) => setNewCustodian(e.target.value)} /></label>
       <label>reason<input value={reason} onChange={(e) => setReason(e.target.value)} /></label>
@@ -156,7 +157,7 @@ function AccessLogForm({ id, onEvent }: { id: string; onEvent: (ev: SessionEvent
       }
     });
   return (
-    <div className="card form">
+    <div className="subcard form">
       <h3>Log manual access</h3>
       <p className="hint">Actor is always your username (server-attributed). Views, downloads, and exports are logged automatically.</p>
       <label>action<input value={action} onChange={(e) => setAction(e.target.value)} /></label>
@@ -287,16 +288,19 @@ export function EvidenceDetailPage() {
   // Pending-vs-tamper must never be conflated (F49): a 404 missing-receipt /
   // missing-anchor-root means "batch not closed yet"; only a 200 ok:false
   // root-mismatch is the red badge.
-  const doVerify = (eventId: string) =>
-    run(async () => {
+  const doVerify = async (eventId: string): Promise<VerifyState> => {
+    let result: VerifyState = 'na';
+    await run(async () => {
       if (!anchoring) { setVerify('na'); return; }
       setVerify('pending');
       try {
-        setVerify(await client.verifyEvidence(evidenceId, eventId));
+        result = await client.verifyEvidence(evidenceId, eventId);
+        setVerify(result);
       } catch (e) {
         if (e instanceof GatewayError && e.status === 404) {
           const reason = reasonOf(e.body);
           if (reason === 'missing-receipt' || reason === 'missing-anchor-root') {
+            result = 'notyet';
             setVerify('notyet');
             return;
           }
@@ -305,6 +309,8 @@ export function EvidenceDetailPage() {
         throw e;
       }
     });
+    return result;
+  };
 
   const doDownload = () =>
     run(async () => {
@@ -345,102 +351,183 @@ export function EvidenceDetailPage() {
       setIndexRow(row);
     });
 
+  const [collapse, setCollapse] = useState(true);
+  const title = [indexRow?.label, indexRow?.originalFilename].filter(Boolean).join(' · ') || evidenceId;
+  const flag = indexRow?.flag;
+  const proof = record?.storage?.integrity_proof;
+  const anchorTx = record?.anchor?.tx_hash;
+
   return (
-    <div>
-      <div className="card">
-        <div className="row-between">
-          <h3 className="mono">{evidenceId}</h3>
-          <div>
-            <MerkleBadge state={anchoring ? verify : 'na'} />
-            {indexRow?.flag && <Badge tone={indexRow.flag === 'PROCESSED' ? 'ok' : indexRow.flag === 'HIGH_PRIORITY' ? 'danger' : 'warn'}>{FLAG_LABEL[indexRow.flag]}</Badge>}
+    <div className="page">
+      <nav className="breadcrumb" aria-label="Breadcrumb">
+        <Link to="/cases">My cases</Link>
+        <span aria-hidden="true">›</span>
+        {indexRow?.caseId
+          ? <Link to={`/cases/${encodeURIComponent(indexRow.caseId)}`}>{caseDetail?.name ?? indexRow.caseId}</Link>
+          : <span>uncategorized</span>}
+        <span aria-hidden="true">›</span>
+        <span aria-current="page">{indexRow?.label ?? evidenceId}</span>
+      </nav>
+
+      <header className="ev-head">
+        <span className="file-tile"><Icon name={indexRow?.mimeType?.startsWith('image/') ? 'file-image' : 'file'} size={24} /></span>
+        <div className="ev-title">
+          <h1>{title}</h1>
+          <div className="ev-meta">
+            <span className="mono">{evidenceId}</span>
+            <CopyButton value={evidenceId} label="Copy evidence ID" />
+            {record?.status && <StatusPill status={record.status} />}
+            {flag && <span className={`flag-badge flag-${flag}`}><Icon name="flag" size={12} />{FLAG_LABEL[flag]}</span>}
           </div>
         </div>
-        <div className="btn-row">
-          {canDownload && <button onClick={doDownload}>Download</button>}
-          <button onClick={doExport}>Export (record + trail)</button>
+      </header>
+
+      {record && (
+        <div className="logged-notice">
+          <Icon name="op-access" />
+          Opening this exhibit is recorded in its custody trail — this view was logged as ACCESS (view) under {user?.username}.
         </div>
-        {!canDownload && <p className="hint">Blob content is participant-only — join the case roster to download (metadata and the trail stay visible).</p>}
-        {msg && <div className="err">{msg}</div>}
-        {notFound && <div className="muted">{notFound}</div>}
+      )}
+      {msg && <div className="alert alert-error" role="alert"><Icon name="x-circle" />{msg}</div>}
+      {notFound && <div className="alert alert-info"><Icon name="info" />{notFound}</div>}
 
-        <Tabs
-          tabs={[
-            { id: 'overview', label: 'Overview' },
-            { id: 'coc', label: `Chain of custody (${events.length})` },
-            { id: 'notes', label: 'Examiner notes' },
-          ]}
-          active={tab}
-          onChange={setTab}
-        />
+      <div className="ev-grid">
+        <section className="card ev-main">
+          <Tabs
+            tabs={[
+              { id: 'overview', label: 'Overview' },
+              { id: 'coc', label: `Chain of custody (${events.length})` },
+              { id: 'notes', label: 'Examiner notes' },
+            ]}
+            active={tab}
+            onChange={setTab}
+          />
 
-        {tab === 'overview' && (
-          <div>
-            {indexRow && (
-              <dl className="kv">
-                <dt>item</dt><dd>{indexRow.label ?? '—'}</dd>
-                <dt>file</dt><dd>{indexRow.originalFilename ?? '—'}</dd>
-                <dt>type</dt><dd className="small">{indexRow.mimeType ?? '—'}</dd>
-                <dt>category</dt><dd>{category ?? '—'}</dd>
-                <dt>seized</dt><dd className="small">{indexRow.seizedAt ?? '—'}</dd>
-                <dt>location</dt><dd>{indexRow.acquisitionLocation ?? '—'}</dd>
-                <dt>handed over by</dt><dd>{indexRow.handedOverBy ?? '—'}</dd>
-                <dt>uploaded by</dt><dd>{indexRow.uploadedBy ?? '—'}</dd>
-                <dt>case</dt>
-                <dd>
-                  {indexRow.caseId
-                    ? <Link className="mono small" to={`/cases/${encodeURIComponent(indexRow.caseId)}`}>{indexRow.caseId}</Link>
-                    : <span className="muted">uncategorized</span>}
-                </dd>
-              </dl>
-            )}
-            {canDownload && indexRow && (
-              <EvidencePreview id={evidenceId} mime={indexRow.mimeType} onLogged={refreshTrail} />
-            )}
-            {canWrite && (
-              <div>
-                <h4>Flag</h4>
-                <div className="chips">
-                  {FLAGS.map((f) => (
-                    <button
-                      key={f}
-                      className={`chip ${indexRow?.flag === f ? 'active' : ''}`}
-                      onClick={() => setFlag(indexRow?.flag === f ? null : f)}
-                    >
-                      {FLAG_LABEL[f]}
-                    </button>
-                  ))}
+          {tab === 'overview' && (
+            <div>
+              {indexRow && (
+                <dl className="kv">
+                  <dt>item</dt><dd>{indexRow.label ?? '—'}</dd>
+                  <dt>file</dt><dd>{indexRow.originalFilename ?? '—'}</dd>
+                  <dt>type</dt><dd className="small">{indexRow.mimeType ?? '—'}</dd>
+                  <dt>category</dt><dd>{category ?? '—'}</dd>
+                  <dt>seized</dt><dd className="small">{indexRow.seizedAt ?? '—'}</dd>
+                  <dt>location</dt><dd>{indexRow.acquisitionLocation ?? '—'}</dd>
+                  <dt>handed over by</dt><dd>{indexRow.handedOverBy ?? '—'}</dd>
+                  <dt>uploaded by</dt><dd>{indexRow.uploadedBy ?? '—'}</dd>
+                  <dt>case</dt>
+                  <dd>
+                    {indexRow.caseId
+                      ? <Link className="mono small" to={`/cases/${encodeURIComponent(indexRow.caseId)}`}>{indexRow.caseId}</Link>
+                      : <span className="muted">uncategorized</span>}
+                  </dd>
+                </dl>
+              )}
+              {canDownload && indexRow && (
+                <EvidencePreview id={evidenceId} mime={indexRow.mimeType} onLogged={refreshTrail} />
+              )}
+              {canWrite && (
+                <div>
+                  <h4>Flag</h4>
+                  <div className="chips">
+                    {FLAGS.map((f) => (
+                      <button
+                        key={f}
+                        className={`chip ${indexRow?.flag === f ? 'active' : ''}`}
+                        onClick={() => setFlag(indexRow?.flag === f ? null : f)}
+                      >
+                        {FLAG_LABEL[f]}
+                      </button>
+                    ))}
+                  </div>
+                  {flagErr.msg && <div className="err">{flagErr.msg}</div>}
                 </div>
-                {flagErr.msg && <div className="err">{flagErr.msg}</div>}
-              </div>
-            )}
-            <EvidenceCard record={record} />
-          </div>
-        )}
-
-        {tab === 'coc' && (
-          <div>
-            <div className="btn-row">
-              <button
-                className="small"
-                disabled={!anchoring || sessionEvents.length === 0}
-                title={sessionEvents.length === 0 ? 'Write an event this session first — verification is per event' : 'Verify the latest session event'}
-                onClick={() => doVerify(sessionEvents[sessionEvents.length - 1].eventId)}
-              >
-                Verify latest
-              </button>
+              )}
+              <h4>On-chain record</h4>
+              <EvidenceCard record={record} />
             </div>
-            <AuditTrailTimeline events={events} />
-            <SessionTrail events={sessionEvents} anchoring={anchoring} onVerify={doVerify} />
-            {canWrite && (
-              <div className="demo">
-                <section className="col"><TransferCustodyForm id={evidenceId} onEvent={addSessionEvent} /></section>
-                <section className="col"><AccessLogForm id={evidenceId} onEvent={addSessionEvent} /></section>
-              </div>
-            )}
-          </div>
-        )}
+          )}
 
-        {tab === 'notes' && <NotesTab id={evidenceId} canWrite={canWrite} />}
+          {tab === 'coc' && (
+            <div>
+              <div className="coc-toolbar">
+                <label className="switch">
+                  <input type="checkbox" role="switch" checked={collapse} onChange={(e) => setCollapse(e.target.checked)} />
+                  <span className="switch-track" aria-hidden="true" />
+                  Collapse consecutive ACCESS (view) by same actor
+                </label>
+                <button
+                  className="small"
+                  disabled={!anchoring || sessionEvents.length === 0}
+                  title={sessionEvents.length === 0 ? 'Write an event this session first — verification is per event' : 'Verify the latest session event'}
+                  onClick={() => void doVerify(sessionEvents[sessionEvents.length - 1].eventId)}
+                >
+                  <Icon name="verify" />Verify latest
+                </button>
+              </div>
+              <AuditTrailTimeline events={events} collapseViews={collapse} />
+              <SessionTrail events={sessionEvents} anchoring={anchoring} onVerify={doVerify} />
+              {canWrite && (
+                <div className="coc-forms">
+                  <TransferCustodyForm id={evidenceId} onEvent={addSessionEvent} />
+                  <AccessLogForm id={evidenceId} onEvent={addSessionEvent} />
+                </div>
+              )}
+            </div>
+          )}
+
+          {tab === 'notes' && <NotesTab id={evidenceId} canWrite={canWrite} />}
+        </section>
+
+        <aside className="ev-rail">
+          <div className="card rail-card">
+            <span className="rail-title">Integrity</span>
+            <MerkleBadge state={anchoring ? verify : 'na'} />
+            {typeof verify === 'object' && verify.steps && <VerifySteps steps={verify.steps} />}
+            <div className="field">
+              <span className="field-label"><Icon name="hash" size={14} />integrity_proof</span>
+              <div className="well">
+                <span className="mono">{proof ?? '—'}</span>
+                {proof && <CopyButton value={proof} label="Copy integrity proof" />}
+              </div>
+            </div>
+            <div className="field">
+              <span className="field-label"><Icon name="anchor" size={14} />anchor (tx_hash)</span>
+              <div className="well">
+                <span className="mono" title={anchorTx}>{anchorTx && anchorTx.length > 24 ? `${anchorTx.slice(0, 12)}…${anchorTx.slice(-7)}` : anchorTx ?? '—'}</span>
+                {anchorTx && <CopyButton value={anchorTx} label="Copy anchor transaction hash" />}
+              </div>
+            </div>
+            <dl className="kv rail-kv">
+              <dt>custodian</dt><dd><strong>{record?.custodian ?? record?.identity?.subject ?? '—'}</strong></dd>
+              <dt>version</dt><dd className="tabular">{record?.version ?? '—'}</dd>
+              <dt>status</dt><dd>{record?.status ?? '—'}</dd>
+            </dl>
+          </div>
+
+          <div className="card rail-card">
+            <span className="rail-title">Actions</span>
+            {canDownload
+              ? <button className="btn-block" onClick={doDownload}><Icon name="download" />Download</button>
+              : (
+                <p className="lock-hint">
+                  <Icon name="lock" />
+                  Blob content is participant-only — join the case roster to download (metadata and the trail stay visible).
+                </p>
+              )}
+            <button className="btn-secondary btn-block" onClick={doExport}><Icon name="export" />Export (record + trail)</button>
+            {indexRow?.caseId && (
+              <Link
+                className="btn-secondary btn-block"
+                to={`/cases/${encodeURIComponent(indexRow.caseId)}/report`}
+                title="Case-level report: logs one ACCESS (coc-report) on every exhibit of the case"
+              >
+                <Icon name="report" />Chain-of-Custody report
+              </Link>
+            )}
+            <span className="hint">Each action writes its own ACCESS event (download · export · coc-report).</span>
+          </div>
+        </aside>
       </div>
     </div>
   );

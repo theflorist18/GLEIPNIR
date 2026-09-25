@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { formatTs } from '../../lib/format';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { useErr } from '../../hooks/useErr';
 import { CASE_ROLE_LABELS } from '../../roles';
-import { Badge } from '../../components/ui/Badge';
 import { Modal } from '../../components/ui/Modal';
+import { Icon } from '../../components/ui/Icon';
+import { Avatar, StatusPill } from '../../components/ui/Chips';
 import type { CaseStatus, CaseSummary } from '../../types';
 
 const STATUSES: Array<CaseStatus | ''> = ['', 'OPEN', 'CLOSED', 'ARCHIVED'];
@@ -16,7 +17,8 @@ export function MyCasesPage() {
   const { client, user } = useAuth();
   const { msg, run } = useErr();
   const createErr = useErr();
-  const [cases, setCases] = useState<CaseSummary[]>([]);
+  const nav = useNavigate();
+  const [cases, setCases] = useState<CaseSummary[] | null>(null); // null = first load
   const [q, setQ] = useState('');
   const [status, setStatus] = useState<CaseStatus | ''>('');
 
@@ -28,7 +30,12 @@ export function MyCasesPage() {
 
   const refresh = useCallback(
     () => run(async () => {
-      setCases(await client.listCases({ q: q || undefined, status: status || undefined }));
+      try {
+        setCases(await client.listCases({ q: q || undefined, status: status || undefined }));
+      } catch (e) {
+        setCases((prev) => prev ?? []);
+        throw e;
+      }
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [client, q, status],
@@ -49,43 +56,84 @@ export function MyCasesPage() {
       await refresh();
     });
 
+  // Newest activity first ("Updated (UTC) ↓").
+  const sorted = useMemo(
+    () => (cases ? [...cases].sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? '')) : null),
+    [cases],
+  );
+  const filtered = Boolean(q || status);
+  const newCase = canCreate && <button onClick={() => setCreating(true)}><Icon name="add" />New case</button>;
+
   return (
-    <div>
-      <div className="card form filters">
-        <div className="evidence-head">
-          <h3>My cases</h3>
-          {canCreate && <button onClick={() => setCreating(true)}>New case</button>}
-        </div>
-        <div className="filter-row">
-          <label>search<input value={q} placeholder="name / description" onChange={(e) => setQ(e.target.value)} /></label>
-          <label>status
-            <select value={status} onChange={(e) => setStatus(e.target.value as CaseStatus | '')}>
-              {STATUSES.map((s) => <option key={s} value={s}>{s || 'any'}</option>)}
-            </select>
-          </label>
-          <button onClick={() => void refresh()}>Filter</button>
-        </div>
-        {msg && <div className="err">{msg}</div>}
+    <div className="page">
+      <div className="page-head">
+        <h1>My cases</h1>
+        {newCase}
       </div>
-      {cases.length === 0 ? (
-        <div className="card muted">No cases yet. A lead or admin grants case access.</div>
+      <div className="filter-pills">
+        <label className="pill-field search">
+          <Icon name="nav-search" />
+          <input value={q} placeholder="name / description" aria-label="Search cases by name or description" onChange={(e) => setQ(e.target.value)} />
+        </label>
+        <label className="pill-field">
+          status
+          <select value={status} onChange={(e) => setStatus(e.target.value as CaseStatus | '')}>
+            {STATUSES.map((s) => <option key={s} value={s}>{s || 'any'}</option>)}
+          </select>
+        </label>
+        <button className="btn-secondary" onClick={() => void refresh()}><Icon name="filter" />Filter</button>
+      </div>
+      {msg && <div className="alert alert-error" role="alert"><Icon name="x-circle" />{msg}</div>}
+
+      {sorted && sorted.length === 0 ? (
+        <div className="card empty-state">
+          {filtered ? (
+            <>
+              <span>No cases match the filters.</span>
+              <button className="btn-secondary" onClick={() => { setQ(''); setStatus(''); }}>Clear filters</button>
+            </>
+          ) : (
+            <>
+              <span>No cases yet. A lead or admin grants case access.</span>
+              {newCase}
+            </>
+          )}
+        </div>
       ) : (
-        <div className="card">
+        <div className="card table-card">
           <table className="runs">
-            <thead><tr><th>name</th><th>status</th><th>my role</th><th>created by</th><th>updated</th></tr></thead>
+            <thead>
+              <tr>
+                <th>Name</th><th>Status</th><th>My role</th><th>Created by</th>
+                <th className="num sorted" aria-sort="descending">Updated (UTC) ↓</th>
+                <th className="cell-chevron"><span className="sr-only">Open</span></th>
+              </tr>
+            </thead>
             <tbody>
-              {cases.map((c) => (
-                <tr key={c.id} className="clickable">
-                  <td><Link to={`/cases/${encodeURIComponent(c.id)}`}>{c.name}</Link></td>
-                  <td><span className={`pill ${c.status === 'OPEN' ? 'active' : ''}`}>{c.status}</span></td>
-                  <td>{c.myRoleInCase
-                    ? <Badge tone={c.myRoleInCase === 'lead' ? 'warn' : 'muted'}>{CASE_ROLE_LABELS[c.myRoleInCase]}</Badge>
-                    : <span className="muted small">—</span>}
-                  </td>
-                  <td>{c.createdBy}</td>
-                  <td className="small muted" title={c.updatedAt}>{formatTs(c.updatedAt)}</td>
-                </tr>
-              ))}
+              {sorted === null
+                ? Array.from({ length: 5 }, (_, i) => (
+                  <tr key={i} aria-hidden="true">
+                    {[160, 60, 80, 90, 130, 0].map((w, j) => <td key={j}>{w > 0 && <span className="skeleton" style={{ width: w }} />}</td>)}
+                  </tr>
+                ))
+                : sorted.map((c) => (
+                  <tr key={c.id} className="clickable" onClick={() => nav(`/cases/${encodeURIComponent(c.id)}`)}>
+                    <td>
+                      <div className="cell-name">
+                        <Link to={`/cases/${encodeURIComponent(c.id)}`} onClick={(e) => e.stopPropagation()}>{c.name}</Link>
+                        <span className="cell-id" title={c.id}>{c.id.length > 18 ? `${c.id.slice(0, 18)}…` : c.id}</span>
+                      </div>
+                    </td>
+                    <td><StatusPill status={c.status} /></td>
+                    <td>{c.myRoleInCase
+                      ? <span className={`case-role case-role-${c.myRoleInCase}`}>{CASE_ROLE_LABELS[c.myRoleInCase]}</span>
+                      : <span className="muted small">—</span>}
+                    </td>
+                    <td><span className="cell-person"><Avatar name={c.createdBy} />{c.createdBy}</span></td>
+                    <td className="cell-ts" title={c.updatedAt}>{formatTs(c.updatedAt)}</td>
+                    <td className="cell-chevron"><Icon name="chevron-right" /></td>
+                  </tr>
+                ))}
             </tbody>
           </table>
         </div>

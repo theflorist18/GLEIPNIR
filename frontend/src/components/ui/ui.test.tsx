@@ -47,7 +47,7 @@ describe('Stepper', () => {
     expect(steps[1].className).toContain('done');
     expect(steps[2].className).toContain('active');
     expect(steps[3].className).not.toContain('active');
-    expect(steps[0].textContent).toContain('✓');
+    expect(steps[0].textContent).toContain('completed');
     // a11y: the active step is marked aria-current
     expect(steps[2].getAttribute('aria-current')).toBe('step');
     expect(steps[0].getAttribute('aria-current')).toBeNull();

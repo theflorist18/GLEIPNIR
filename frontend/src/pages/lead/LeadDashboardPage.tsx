@@ -9,6 +9,7 @@ import { Badge } from '../../components/ui/Badge';
 import { Modal } from '../../components/ui/Modal';
 import { Timeline } from '../../components/ui/Timeline';
 import type { CaseActivityEvent, CaseParticipant, CaseRole, CaseSummary, EvidenceIndexRow, User } from '../../types';
+import { StatusPill } from '../../components/ui/Chips';
 
 interface CaseTeam {
   caseId: string;
@@ -121,7 +122,7 @@ export function LeadDashboardPage() {
                 <li key={c.id}>
                   <span>
                     <Link to={`/cases/${encodeURIComponent(c.id)}`}>{c.name}</Link>{' '}
-                    <span className={`pill ${c.status === 'OPEN' ? 'active' : ''}`}>{c.status}</span>
+                    <StatusPill status={c.status} />
                   </span>
                   <Link className="small" to={`/cases/${encodeURIComponent(c.id)}/report`}>CoC report</Link>
                 </li>

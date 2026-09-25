@@ -11,16 +11,27 @@ only).
 
 ## Structure (ARCHITECTURE §5)
 
-- `src/auth/` — `AuthContext` (session token in localStorage, `GatewayClient`
-  owner, 401 → drop session), `LoginPage`, `RequireAuth`, `RequireRole`.
+- `src/auth/` — `AuthContext` (session token in sessionStorage, `GatewayClient`
+  owner, 401 → drop session and flag `sessionEnded`, which the login page shows
+  as "Your session ended — sign in again."), `LoginPage`, `RequireAuth`,
+  `RequireRole`.
 - `src/components/` — `EvidenceCard`, `MerkleBadge`, `SessionTrail`
   (promoted from the old `demo.tsx`), `AuditTrailTimeline` (M21/M23: the CoC
   trail as a vertical timeline — replaced the flat `AuditTrail` list),
   `Layout/TopBar` + `Layout/Sidebar` (role-aware nav).
 - `src/components/ui/` — the M21 in-repo primitive kit: `Tabs`, `Stepper`,
-  `Modal`, `Timeline`, `Badge`. Deliberately NO component library — styled on
-  the existing `styles.css` tokens, covered by vitest + Testing Library
-  (`npm test`, jsdom).
+  `Modal`, `Timeline`, `Badge`, plus `Icon` (+ the PLACEHOLDER `BrandMark`)
+  and `Chips` (`StatusPill`, `Avatar`, `CopyButton`). Deliberately NO
+  component library — covered by vitest + Testing Library (`npm test`, jsdom).
+- **Visual system (Claude Design handoff, 2026-09-25):** `src/tokens.css`
+  (verbatim drop-in, imported first by `styles.css`; legacy `--bg/--panel/…`
+  aliases kept) · `public/icons/sprite.svg` (currentColor symbols, same-origin
+  for the CSP) · `public/fonts/` (self-hosted OFL woff2, latin subset:
+  Figtree, Caprasimo, JetBrains Mono — licences alongside). Light by default,
+  dark follows `prefers-color-scheme` unless the user menu's Theme picker sets
+  `[data-theme]` (localStorage); print always forces light. The mark is the
+  boards' placeholder (direction A) until the authors pick the brand. The
+  design boards are kept for reference in `docs/design/claude-design/`.
 - `src/roles.ts` — display labels for the 3-tier roles and case roles (M18);
   pages never hardcode role strings.
 - `src/lib/ni.ts` — RFC 6920 ni-URI via `crypto.subtle`, byte-identical to
@@ -54,12 +65,10 @@ only).
   member picked from the user directory (`GET /users/directory`; the
   case-lead role offers only global leads; server enforces the last-lead
   409).
-- `src/pages/admin/` — `UsersPage`, `CasesAdminPage` (roster + categorize),
-  `DashboardPage` (the old operator dashboard, now admin-gated: variant
-  selector, the M26 run-request form — ONE `batch size` field + `channels` +
-  `send rate (tx/s)` → `cell: {batchSize, channels, sendRateTps}` — run
-  control, charts, history/compare; execution stays host-side,
-  `orchestration/experiment.py`). `Op` is `CREATE | TRANSFER | ACCESS |
+- `src/pages/admin/` — `UsersPage`, `CasesAdminPage` (roster + categorize).
+  The old operator dashboard page (and the gateway runs API behind it) was
+  removed on 2026-09-24: the benchmark is driven by the desktop app
+  `orchestration/benchapp.pyw`. `Op` is `CREATE | TRANSFER | ACCESS |
   DISPOSE` and the status pill shows `DISPOSED` (legacy `REMOVED` rows
   tolerated).
 - `src/settings.tsx` — trimmed to the display `variant` only; the token input
@@ -67,8 +76,8 @@ only).
 
 Routes: `/login` public; `/ingest`, `/cases[/:caseId]`,
 `/evidence/:evidenceId`, `/search` require a session; `/admin/users`,
-`/admin/cases`, `/admin/dashboard` require the admin role (server-enforced
-too). nginx's `try_files … /index.html` keeps deep links refresh-safe.
+`/admin/cases` require the admin role (server-enforced too). nginx's
+`try_files … /index.html` keeps deep links refresh-safe.
 
 **Verification is per event** (receipts are keyed by eventId), so Verify
 targets on the evidence page come from write responses captured this session
@@ -87,7 +96,8 @@ trail on the evidence page grows as you use it; that is the feature.
 
 - **In:** user actions; a session from `POST /api/v1/auth/login`.
 - **Out:** REST calls to `/api/v1/*` through `src/api.ts` (`GatewayClient`).
-  Run **execution is host-side** — the dashboard only polls the manifest.
+  No benchmark/runs API — benchmarks are driven host-side by the desktop app
+  `orchestration/benchapp.pyw`.
 
 ## Does NOT
 
@@ -101,7 +111,6 @@ trail on the evidence page grows as you use it; that is the feature.
 - 401 anywhere → session dropped, redirected to `/login`.
 - 403/404 on case/evidence pages → "no access" state (server-side scoping).
 - Verify on a non-anchoring variant → badge shows N/A.
-- Missing metric fields → charts render an empty-state note.
 
 ## Build / dev
 

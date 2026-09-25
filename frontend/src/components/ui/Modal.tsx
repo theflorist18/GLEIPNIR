@@ -36,7 +36,7 @@ export function Modal({ title, onClose, children }: { title: ReactNode; onClose:
       >
         <div className="modal-head">
           <h3 id={titleId}>{title}</h3>
-          <button className="small" aria-label="Close" onClick={onClose}>✕</button>
+          <button className="icon-btn" aria-label="Close" onClick={onClose}>✕</button>
         </div>
         {children}
       </div>

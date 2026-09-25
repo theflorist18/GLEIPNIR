@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { useErr } from '../../hooks/useErr';
 import type { CaseDetail, CaseRole, CaseStatus, CaseSummary } from '../../types';
+import { StatusPill } from '../../components/ui/Chips';
 
 // Case administration (M14, admin-only route): create cases, manage the
 // participant roster, categorize/uncategorize evidence, change status.
@@ -96,7 +97,7 @@ export function CasesAdminPage() {
               {cases.map((c) => (
                 <tr key={c.id} className="clickable" onClick={() => void open(c.id)}>
                   <td>{c.name}</td>
-                  <td><span className={`pill ${c.status === 'OPEN' ? 'active' : ''}`}>{c.status}</span></td>
+                  <td><StatusPill status={c.status} /></td>
                 </tr>
               ))}
             </tbody>
@@ -111,7 +112,7 @@ export function CasesAdminPage() {
             <div className="card">
               <div className="row-between">
                 <h3>{detail.name}</h3>
-                <span className={`pill ${detail.status === 'OPEN' ? 'active' : ''}`}>{detail.status}</span>
+                <StatusPill status={detail.status} />
               </div>
               <p className="hint mono small">{detail.id}</p>
               <div className="btn-row">

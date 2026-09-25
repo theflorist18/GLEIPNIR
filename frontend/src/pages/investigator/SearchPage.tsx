@@ -2,8 +2,8 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { useErr } from '../../hooks/useErr';
-import { isDisposed } from '../../lib/format';
 import type { CaseSummary, EvidenceIndexRow } from '../../types';
+import { StatusPill } from '../../components/ui/Chips';
 
 // Search (M15 surface, M14 page): evidence-index and case search, both scoped
 // server-side to the caller's participant cases (admins see everything).
@@ -67,7 +67,7 @@ export function SearchPage() {
                   <td className="small">{r.mimeType ?? '—'}</td>
                   <td>{r.caseId ? <Link className="mono small" to={`/cases/${encodeURIComponent(r.caseId)}`}>{r.caseId.slice(0, 13)}…</Link> : <span className="muted">uncategorized</span>}</td>
                   <td>{r.uploadedBy ?? '—'}</td>
-                  <td><span className={`pill ${isDisposed(r.status) ? 'removed' : 'active'}`}>{r.status}</span></td>
+                  <td><StatusPill status={r.status} /></td>
                 </tr>
               ))}
             </tbody>

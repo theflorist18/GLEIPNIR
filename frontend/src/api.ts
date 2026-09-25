@@ -28,8 +28,6 @@ import type {
   EvidenceSearchParams,
   ExportBundle,
   Role,
-  RunDetail,
-  RunRequest,
   TransferCustodyRequest,
   UploadResult,
   User,
@@ -83,16 +81,6 @@ function normalizeEvents(raw: unknown): CoCEvent[] {
     const obj = v as Record<string, unknown>;
     if (Array.isArray(obj.events)) return obj.events as CoCEvent[];
     if (Array.isArray(obj.audit)) return obj.audit as CoCEvent[];
-  }
-  return [];
-}
-
-function normalizeRuns(raw: unknown): RunDetail[] {
-  const v = parseMaybe(raw) as unknown;
-  if (Array.isArray(v)) return v as RunDetail[];
-  if (v && typeof v === 'object') {
-    const obj = v as Record<string, unknown>;
-    if (Array.isArray(obj.runs)) return obj.runs as RunDetail[];
   }
   return [];
 }
@@ -199,21 +187,6 @@ export class GatewayClient {
       'GET',
       `/evidence/${encodeURIComponent(id)}/verify?eventId=${encodeURIComponent(eventId)}`,
     );
-  }
-
-  // ---- Scope A: runs ----
-
-  startRun(req: RunRequest): Promise<RunDetail> {
-    return this.request<RunDetail>('POST', '/runs', req);
-  }
-
-  async listRuns(): Promise<RunDetail[]> {
-    const raw = await this.request<unknown>('GET', '/runs');
-    return normalizeRuns(raw);
-  }
-
-  getRun(id: string): Promise<RunDetail> {
-    return this.request<RunDetail>('GET', `/runs/${encodeURIComponent(id)}`);
   }
 
   // ---- Auth & users (M14) ----

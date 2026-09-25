@@ -11,6 +11,7 @@ import { Timeline } from '../../components/ui/Timeline';
 import { activityLine, activityTone } from '../../lib/activity';
 import { formatTs, isDisposed } from '../../lib/format';
 import type { CaseActivityEvent, CaseDetail, CaseRole, EvidenceFlag, EvidenceIndexRow, User } from '../../types';
+import { StatusPill } from '../../components/ui/Chips';
 
 const fmtBytes = (n: number | null) => (n == null ? '—' : n >= 1048576 ? `${(n / 1048576).toFixed(1)} MiB` : n >= 1024 ? `${(n / 1024).toFixed(1)} KiB` : `${n} B`);
 
@@ -172,7 +173,7 @@ export function CaseDetailPage() {
       <div className="card">
         <div className="row-between">
           <h3>{detail.name}</h3>
-          <span className={`pill ${detail.status === 'OPEN' ? 'active' : ''}`}>{detail.status}</span>
+          <StatusPill status={detail.status} />
         </div>
         <p className="hint">
           <span className="mono small">{detail.id}</span> · created by {detail.createdBy} · <span title={detail.createdAt}>{formatTs(detail.createdAt)}</span>
@@ -319,7 +320,7 @@ export function CaseDetailPage() {
                         <td>{e.flag ? <Badge tone={FLAG_TONE[e.flag]}>{FLAG_LABEL[e.flag]}</Badge> : <span className="muted small">—</span>}</td>
                         <td className="small">{fmtBytes(e.sizeBytes)}</td>
                         <td>{e.uploadedBy ?? '—'}</td>
-                        <td><span className={`pill ${isDisposed(e.status) ? 'removed' : 'active'}`}>{e.status}</span></td>
+                        <td><StatusPill status={e.status} /></td>
                       </tr>
                     ))}
                   </tbody>

@@ -21,6 +21,8 @@ try { localStorage.removeItem(TOKEN_KEY); } catch { /* storage may be unavailabl
 interface Auth {
   user: User | null;
   ready: boolean; // initial session restore finished
+  /** A signed-in session was dropped by a 401 (expired, gateway restart) — the login page says so. */
+  sessionEnded: boolean;
   client: GatewayClient;
   login: (username: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -31,6 +33,7 @@ const AuthContext = createContext<Auth | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [ready, setReady] = useState(false);
+  const [sessionEnded, setSessionEnded] = useState(false);
   const tokenRef = useRef<string>(sessionStorage.getItem(TOKEN_KEY) ?? '');
 
   const clearSession = useCallback(() => {
@@ -40,7 +43,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const client = useMemo(
-    () => new GatewayClient({ getToken: () => tokenRef.current, onUnauthorized: clearSession }),
+    () => new GatewayClient({
+      getToken: () => tokenRef.current,
+      onUnauthorized: () => {
+        if (tokenRef.current) setSessionEnded(true);
+        clearSession();
+      },
+    }),
     [clearSession],
   );
 
@@ -66,6 +75,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const res = await client.login(username, password);
     tokenRef.current = res.token;
     sessionStorage.setItem(TOKEN_KEY, res.token);
+    setSessionEnded(false);
     setUser(res.user);
   }, [client]);
 
@@ -78,7 +88,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     clearSession();
   }, [client, clearSession]);
 
-  const value = useMemo(() => ({ user, ready, client, login, logout }), [user, ready, client, login, logout]);
+  const value = useMemo(
+    () => ({ user, ready, sessionEnded, client, login, logout }),
+    [user, ready, sessionEnded, client, login, logout],
+  );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 

@@ -1,13 +1,83 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { useErr } from '../../hooks/useErr';
 import { niUri } from '../../lib/ni';
 import { Badge } from '../../components/ui/Badge';
 import { Stepper } from '../../components/ui/Stepper';
+import { Icon, type IconName } from '../../components/ui/Icon';
 import type { CaseSummary, EvidenceCategory, UploadResult } from '../../types';
 
 const STEPS = ['Case & category', 'Metadata', 'File & hash', 'Review & submit'];
+const STEP_ICONS: IconName[] = ['nav-cases', 'note', 'fingerprint', 'verify'];
+
+// Byte counts grouped with thin spaces ("184 336 912"), never rounded: the
+// exact size is part of the exhibit's description.
+const groupDigits = (n: number): string => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, '\u2009');
+
+// web-upload-dropzone: idle → drag-over → hashing (determinate bar) → hashed
+// (local SHA-256) or error. The file input stays the real control; Browse and
+// "Choose another file" open it.
+function Dropzone({ file, pct, proof, err, onPick }: {
+  file: File | null;
+  pct: number | null;
+  proof: string;
+  err: string;
+  onPick: (f: File | null) => void;
+}) {
+  const input = useRef<HTMLInputElement>(null);
+  const [over, setOver] = useState(false);
+  const state = err ? 'error' : proof ? 'hashed' : file ? 'hashing' : 'idle';
+  const browse = () => input.current?.click();
+  return (
+    <div
+      className={`dropzone dz-${state}${over ? ' dz-over' : ''}`}
+      onDragOver={(e) => { e.preventDefault(); setOver(true); }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(e) => { e.preventDefault(); setOver(false); onPick(e.dataTransfer.files?.[0] ?? null); }}
+    >
+      <input ref={input} type="file" className="sr-only" tabIndex={-1} aria-label="file" onChange={(e) => onPick(e.target.files?.[0] ?? null)} />
+      {!file ? (
+        <div className="dz-idle">
+          <Icon name="upload" size={28} />
+          <span>Drop a file here or browse</span>
+          <button type="button" className="small" onClick={browse}>Browse</button>
+        </div>
+      ) : (
+        <>
+          <div className="dz-file">
+            <span className="dz-tile"><Icon name={file.type.startsWith('image/') ? 'file-image' : 'file'} size={22} /></span>
+            <div className="dz-name">
+              <strong>{file.name}</strong>
+              <span className="tabular">Size (bytes) {groupDigits(file.size)}</span>
+            </div>
+            <button type="button" className="link-btn" onClick={browse}>Choose another file</button>
+          </div>
+          {state === 'hashing' && (
+            <div className="dz-progress">
+              <div className="row-between">
+                <span><Icon name="spinner" size={14} /> Hashing locally…</span>
+                <strong className="tabular">{pct ?? 0}%</strong>
+              </div>
+              <div className="progress" role="progressbar" aria-label="Hashing locally" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct ?? 0}>
+                <span style={{ width: `${pct ?? 0}%` }} />
+              </div>
+            </div>
+          )}
+          {state === 'hashed' && (
+            <div className="dz-proof">
+              <span><Icon name="fingerprint" size={14} className="tone-ok" /> local SHA-256</span>
+              <span className="mono">{proof}</span>
+            </div>
+          )}
+          {state === 'error' && (
+            <div className="dz-error-msg" role="alert"><Icon name="x-circle" size={14} />local hashing failed: {err}</div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
 
 // Suggest the next ITEM-NNN label from the labels already in the case.
 export function suggestLabel(labels: Array<string | null | undefined>): string {
@@ -124,9 +194,9 @@ export function IngestPage() {
 
   if (result) {
     return (
-      <div className="page-narrow">
-        <div className="card">
-          <h3>Ingested ✓</h3>
+      <div className="page">
+        <div className="card wizard">
+          <h1>Ingested</h1>
           {proofMatch === true && (
             <p><Badge tone="ok">integrity verified end-to-end</Badge>{' '}
               <span className="small muted">local SHA-256 matches the server-computed proof</span></p>
@@ -150,10 +220,10 @@ export function IngestPage() {
   }
 
   return (
-    <div className="page-narrow">
-      <div className="card form">
-        <h3>Ingest evidence</h3>
-        <Stepper steps={STEPS} current={step} />
+    <div className="page">
+      <div className="card form wizard">
+        <h1>Ingest evidence</h1>
+        <Stepper steps={STEPS} current={step} icons={STEP_ICONS} error={step === 2 && Boolean(hashErr)} />
 
         {step === 0 && (
           <>
@@ -199,20 +269,12 @@ export function IngestPage() {
 
         {step === 2 && (
           <>
-            <label>file
-              <input type="file" onChange={(e) => void pickFile(e.target.files?.[0] ?? null)} />
-            </label>
-            {hashPct !== null && !localProof && !hashErr && (
-              <p className="hint">Hashing locally… {hashPct}%</p>
-            )}
-            {localProof && (
-              <dl className="kv">
-                <dt>local SHA-256</dt>
-                <dd className="mono small">{localProof}</dd>
-              </dl>
-            )}
-            {hashErr && <div className="err">local hashing failed: {hashErr}</div>}
-            <p className="hint">
+            <div className="field">
+              <span className="field-label">file</span>
+              <Dropzone file={file} pct={hashPct} proof={localProof} err={hashErr} onPick={(f) => void pickFile(f)} />
+            </div>
+            <p className="info-hint">
+              <Icon name="info" />
               The hash is computed in your browser before upload; after the server
               stores the bytes, its proof is compared against this value.
             </p>
@@ -239,8 +301,8 @@ export function IngestPage() {
           </>
         )}
 
-        <div className="btn-row">
-          {step > 0 && <button className="small" onClick={() => setStep(step - 1)}>Back</button>}
+        <div className="wizard-actions">
+          {step > 0 ? <button className="btn-secondary" onClick={() => setStep(step - 1)}>Back</button> : <span />}
           {step < 3 && (
             <button
               disabled={step === 2 && (!file || (!localProof && !hashErr))}
@@ -253,7 +315,7 @@ export function IngestPage() {
             <button disabled={!file || busy} onClick={submit}>{busy ? 'Ingesting…' : 'Submit'}</button>
           )}
         </div>
-        {msg && <div className="err">{msg}</div>}
+        {msg && <div className="alert alert-error" role="alert"><Icon name="x-circle" />{msg}</div>}
       </div>
     </div>
   );

@@ -2,30 +2,28 @@ import { useState, type FormEvent } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from './AuthContext';
 import { GatewayError } from '../api';
+import { BrandMark, Icon, type IconName } from '../components/ui/Icon';
 
 // Credentials are handled only here: sent as a JSON POST body over the
 // gateway's login route (never query params, never logged), exchanged for an
 // opaque session token. The page guard is UX — the API enforces auth on every
 // route, with a server-side per-user throttle against brute force.
 
-function EyeIcon({ off }: { off: boolean }) {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12Z" />
-      <circle cx="12" cy="12" r="2.6" />
-      {off && <line x1="4" y1="20" x2="20" y2="4" />}
-    </svg>
-  );
+function loginError(e: unknown): { text: string; icon: IconName } {
+  if (e instanceof GatewayError && e.status === 401) return { text: 'Invalid username or password.', icon: 'x-circle' };
+  if (e instanceof GatewayError && e.status === 429) return { text: 'Too many failed attempts — wait a moment and try again.', icon: 'clock' };
+  if (e instanceof GatewayError && e.status === 503) return { text: 'User login is not configured on this gateway.', icon: 'x-circle' };
+  return { text: 'Could not reach the gateway. Is the network up?', icon: 'offline' };
 }
 
 export function LoginPage() {
-  const { login, user, ready } = useAuth();
+  const { login, user, ready, sessionEnded } = useAuth();
   const nav = useNavigate();
   const loc = useLocation();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPw, setShowPw] = useState(false);
-  const [err, setErr] = useState('');
+  const [err, setErr] = useState<{ text: string; icon: IconName } | null>(null);
   const [busy, setBusy] = useState(false);
 
   const from = (loc.state as { from?: string } | null)?.from ?? '/cases';
@@ -33,16 +31,13 @@ export function LoginPage() {
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    setErr('');
+    setErr(null);
     setBusy(true);
     try {
       await login(username, password);
       nav(from, { replace: true });
     } catch (e2) {
-      if (e2 instanceof GatewayError && e2.status === 401) setErr('Invalid username or password.');
-      else if (e2 instanceof GatewayError && e2.status === 429) setErr('Too many failed attempts — wait a moment and try again.');
-      else if (e2 instanceof GatewayError && e2.status === 503) setErr('User login is not configured on this gateway.');
-      else setErr('Could not reach the gateway. Is the network up?');
+      setErr(loginError(e2));
     } finally {
       setBusy(false);
     }
@@ -50,12 +45,21 @@ export function LoginPage() {
 
   return (
     <div className="login-wrap">
+      <span className="login-backdrop a" aria-hidden="true"><BrandMark size={900} /></span>
+      <span className="login-backdrop b" aria-hidden="true"><BrandMark size={620} /></span>
       <form className="login-card" onSubmit={submit}>
-        <div className="login-brand">GLEIPNIR</div>
-        <p className="login-sub">Evidence library · sign in to continue</p>
+        <div className="lockup-stacked">
+          <BrandMark size={56} />
+          <span className="wordmark">GLEIPNIR</span>
+          <span className="login-sub">Evidence library · sign in to continue</span>
+        </div>
+
+        {sessionEnded && !err && (
+          <div className="alert alert-info" role="status"><Icon name="clock" />Your session ended — sign in again.</div>
+        )}
 
         <label className="login-field">
-          <span>Username</span>
+          Username
           <input
             autoFocus
             autoComplete="username"
@@ -67,8 +71,8 @@ export function LoginPage() {
         </label>
 
         <label className="login-field">
-          <span>Password</span>
-          <div className="pw-wrap">
+          Password
+          <span className="pw-wrap">
             <input
               type={showPw ? 'text' : 'password'}
               autoComplete="current-password"
@@ -83,15 +87,17 @@ export function LoginPage() {
               onClick={() => setShowPw((v) => !v)}
               tabIndex={-1}
             >
-              <EyeIcon off={showPw} />
+              <Icon name={showPw ? 'eye-off' : 'eye'} size={18} />
             </button>
-          </div>
+          </span>
         </label>
 
         <button type="submit" className="login-submit" disabled={busy || !username || !password}>
-          {busy ? 'Signing in…' : 'Sign in'}
+          {busy ? <><Icon name="spinner" />Signing in…</> : 'Sign in'}
         </button>
-        {err && <div className="err login-err">{err}</div>}
+        <div className="login-live" aria-live="polite">
+          {err && <div className="alert alert-error"><Icon name={err.icon} />{err.text}</div>}
+        </div>
       </form>
       <p className="login-foot">Talks only to the API gateway · Hyperledger Fabric 2.5 LTS · localhost thesis demo</p>
     </div>

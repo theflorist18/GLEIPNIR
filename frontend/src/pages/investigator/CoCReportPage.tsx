@@ -85,6 +85,7 @@ export function CoCReportPage() {
             <dt>uploaded</dt><dd className="small">{ev.uploadedAt ?? '—'} by {ev.uploadedBy ?? '—'}</dd>
             <dt>status</dt><dd>{ev.status}</dd>
           </dl>
+          <h4>Chain of custody ({ev.auditTrail.length})</h4>
           <AuditTrailTimeline events={ev.auditTrail} />
         </div>
       ))}
