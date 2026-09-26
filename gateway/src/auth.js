@@ -33,11 +33,7 @@ function bearerOf(req) {
   return auth.startsWith('Bearer ') ? auth.slice(7) : null;
 }
 
-function makeAuth({ token, sessions, users, securityLog }) {
-  // Optional security-event channel (N4). Falls back to no-ops so existing
-  // callers/tests that don't pass one keep working unchanged.
-  const log = securityLog || { authFailure() {}, authzDenied() {} };
-
+function makeAuth({ token, sessions, users, securityLog: log }) {
   function authenticate(req, res, next) {
     const bearer = bearerOf(req);
     if (bearer === null) {
@@ -91,4 +87,4 @@ function makeAuth({ token, sessions, users, securityLog }) {
   return { authenticate, requireUser, requireRole, requireService };
 }
 
-module.exports = { makeAuth, bearerOf, safeEqual };
+module.exports = { makeAuth, bearerOf };

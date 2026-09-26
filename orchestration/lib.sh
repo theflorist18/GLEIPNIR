@@ -37,42 +37,23 @@ cli() {
 }
 
 # Export peer CLI env for a given org inside the cli container (the setGlobals idiom).
-# Prints a shell prelude to be prepended to a cli() command.
+# Prints a shell prelude to be prepended to a cli() command. FABRIC_CFG_PATH is the
+# cli container's own (compose-net.yaml: ${CTN_REPO}/network).
 peer_env() {
-  local org="$1"
-  case "${org}" in
-    org1)
-      cat <<EOF
-export CORE_PEER_TLS_ENABLED=true
-export CORE_PEER_LOCALMSPID=Org1MSP
-export CORE_PEER_ADDRESS=peer0.org1.example.com:7051
-export CORE_PEER_TLS_ROOTCERT_FILE=${CTN_ORG}/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt
-export CORE_PEER_MSPCONFIGPATH=${CTN_ORG}/peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp
-export FABRIC_CFG_PATH=${CTN_REPO}/network
-EOF
-      ;;
-    org2)
-      cat <<EOF
-export CORE_PEER_TLS_ENABLED=true
-export CORE_PEER_LOCALMSPID=Org2MSP
-export CORE_PEER_ADDRESS=peer0.org2.example.com:9051
-export CORE_PEER_TLS_ROOTCERT_FILE=${CTN_ORG}/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt
-export CORE_PEER_MSPCONFIGPATH=${CTN_ORG}/peerOrganizations/org2.example.com/users/Admin@org2.example.com/msp
-export FABRIC_CFG_PATH=${CTN_REPO}/network
-EOF
-      ;;
-    anchor)
-      cat <<EOF
-export CORE_PEER_TLS_ENABLED=true
-export CORE_PEER_LOCALMSPID=AnchorClientMSP
-export CORE_PEER_ADDRESS=peer0.anchor.example.com:11051
-export CORE_PEER_TLS_ROOTCERT_FILE=${CTN_ORG}/peerOrganizations/anchor.example.com/peers/peer0.anchor.example.com/tls/ca.crt
-export CORE_PEER_MSPCONFIGPATH=${CTN_ORG}/peerOrganizations/anchor.example.com/users/Admin@anchor.example.com/msp
-export FABRIC_CFG_PATH=${CTN_REPO}/network
-EOF
-      ;;
-    *) echo "unknown org ${org}" >&2; return 1 ;;
+  local domain="$1.example.com" msp port
+  case "$1" in
+    org1) msp=Org1MSP port=7051 ;;
+    org2) msp=Org2MSP port=9051 ;;
+    anchor) msp=AnchorClientMSP port=11051 ;;
+    *) echo "unknown org $1" >&2; return 1 ;;
   esac
+  cat <<EOF
+export CORE_PEER_TLS_ENABLED=true
+export CORE_PEER_LOCALMSPID=${msp}
+export CORE_PEER_ADDRESS=peer0.${domain}:${port}
+export CORE_PEER_TLS_ROOTCERT_FILE=${CTN_ORG}/peerOrganizations/${domain}/peers/peer0.${domain}/tls/ca.crt
+export CORE_PEER_MSPCONFIGPATH=${CTN_ORG}/peerOrganizations/${domain}/users/Admin@${domain}/msp
+EOF
 }
 
 # Generate a channel genesis block and join all three orderers (assert HTTP 201).
@@ -104,10 +85,39 @@ join_peer() {
 peer channel join -b ${CTN_ARTIFACTS}/${channel}.block"
 }
 
+# Approve (org1 + org2) and commit the app chaincode on one channel. Install is
+# ORG-scoped, not channel-scoped: up.sh installs once (audit F46), before any channel.
+# args: <channel> <package-id>
+deploy_app_chaincode() {
+  local channel="$1" pkgid="$2" policy="OR('Org1MSP.peer','Org2MSP.peer')"
+  for org in org1 org2; do
+    cli "$(peer_env ${org})
+peer lifecycle chaincode approveformyorg -o ${ORDERER0} --ordererTLSHostnameOverride orderer0.example.com \
+  --channelID ${channel} --name ${CC_NAME} --version ${CC_VERSION} --package-id ${pkgid} --sequence 1 \
+  --signature-policy \"${policy}\" --tls --cafile ${ORDERER0_CA}"
+  done
+  cli "$(peer_env org1)
+peer lifecycle chaincode commit -o ${ORDERER0} --ordererTLSHostnameOverride orderer0.example.com \
+  --channelID ${channel} --name ${CC_NAME} --version ${CC_VERSION} --sequence 1 --signature-policy \"${policy}\" \
+  --tls --cafile ${ORDERER0_CA} \
+  --peerAddresses peer0.org1.example.com:7051 --tlsRootCertFiles ${CTN_ORG}/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt \
+  --peerAddresses peer0.org2.example.com:9051 --tlsRootCertFiles ${CTN_ORG}/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt"
+}
+
+# One app channel end to end: genesis + osnadmin join, org1/org2 peer join, Raft
+# leader wait, chaincode approve/commit. args: <channel> <package-id>
+app_channel() {
+  create_channel "$1" AppChannel
+  join_peer org1 "$1"
+  join_peer org2 "$1"
+  wait_raft_leader org1 "$1"
+  deploy_app_chaincode "$1" "$2"
+}
+
 # Package + install ccaas chaincode, returning the package id (written to stdout).
-# args: <ccaas-service-host> <pkg-file>
+# args: <ccaas-service-host>
 package_ccaas() {
-  local ccaas_host="$1" pkg="$2"
+  local ccaas_host="$1"
   # channel-artifacts must already exist here: installs are hoisted before the
   # first create_channel (F46), whose mkdir used to cover this on a clean tree
   # (audit F73, first live bring-up).

@@ -66,14 +66,29 @@ normalize_client_key() {
   cp "${msp}/keystore/${key}" "${msp}/keystore/priv_sk"
 }
 
+# fabric-ca-client against one CA: `caname` is the caller's local (bash dynamic
+# scope — every call runs inside create_peer_org / create_orderer_org).
+fcc() {
+  fabric-ca-client "$@" --caname "${caname}" --tls.certfiles "${FABRIC_CA_DIR}/${caname}/tls-cert.pem"
+}
+
 # enroll_ca_admin <ca-name> <port> <ca-home> : enroll the bootstrap admin so we
 # can register identities against this CA.
 enroll_ca_admin() {
-  local ca_name="$1" port="$2" ca_home="$3"
+  local caname="$1" port="$2" ca_home="$3"
   export FABRIC_CA_CLIENT_HOME="${ca_home}"
-  fabric-ca-client enroll -u "https://admin:adminpw@${CA_HOST}:${port}" \
-    --caname "${ca_name}" \
-    --tls.certfiles "${FABRIC_CA_DIR}/${ca_name}/tls-cert.pem"
+  fcc enroll -u "https://admin:adminpw@${CA_HOST}:${port}"
+}
+
+# enroll_node <id> <secret> <host> <node-dir> : a peer's / orderer's MSP + TLS
+# enrollment (against the caller's caname/caport), TLS material normalised to the
+# conventional filenames.
+enroll_node() {
+  fcc enroll -u "https://$1:$2@${CA_HOST}:${caport}" -M "$4/msp" --csr.hosts "$3,localhost"
+  fcc enroll -u "https://$1:$2@${CA_HOST}:${caport}" -M "$4/tls" --enrollment.profile tls --csr.hosts "$3,localhost"
+  cp "$4/tls/tlscacerts/"* "$4/tls/ca.crt"
+  cp "$4/tls/signcerts/"*   "$4/tls/server.crt"
+  cp "$4/tls/keystore/"*    "$4/tls/server.key"
 }
 
 # ---------------------------------------------------------------------------
@@ -84,43 +99,25 @@ create_peer_org() {
   local org="$1" mspid="$2" caname="$3" caport="$4" peerhost="$5" extra_client="${6:-}"
   local domain="${org}.example.com"
   local org_root="${ORG_DIR}/peerOrganizations/${domain}"
-  local ca_home="${org_root}"
-  local ca_cert_file
   mkdir -p "${org_root}"
 
   echo "==> [${org}] enrolling CA admin"
-  enroll_ca_admin "${caname}" "${caport}" "${ca_home}"
+  enroll_ca_admin "${caname}" "${caport}" "${org_root}"
 
   echo "==> [${org}] registering identities"
-  fabric-ca-client register --caname "${caname}" --id.name "${org}-peer0" --id.secret peer0pw --id.type peer \
-    --tls.certfiles "${FABRIC_CA_DIR}/${caname}/tls-cert.pem"
-  fabric-ca-client register --caname "${caname}" --id.name "${org}-admin" --id.secret adminpw --id.type admin \
-    --tls.certfiles "${FABRIC_CA_DIR}/${caname}/tls-cert.pem"
-  fabric-ca-client register --caname "${caname}" --id.name "${org}-user1" --id.secret user1pw --id.type client \
-    --tls.certfiles "${FABRIC_CA_DIR}/${caname}/tls-cert.pem"
+  fcc register --id.name "${org}-peer0" --id.secret peer0pw --id.type peer
+  fcc register --id.name "${org}-admin" --id.secret adminpw --id.type admin
+  fcc register --id.name "${org}-user1" --id.secret user1pw --id.type client
   if [ -n "${extra_client}" ]; then
-    fabric-ca-client register --caname "${caname}" --id.name "${extra_client}" --id.secret "${extra_client}pw" --id.type client \
-      --tls.certfiles "${FABRIC_CA_DIR}/${caname}/tls-cert.pem"
+    fcc register --id.name "${extra_client}" --id.secret "${extra_client}pw" --id.type client
   fi
 
   # --- org-level MSP (used by configtx) ---
   mkdir -p "${org_root}/msp"
-  ca_cert_file="ca-${CA_HOST}-${caport}.pem" # ignored; we copy the real cacert below
 
   # --- peer0 MSP + TLS ---
   local peer_dir="${org_root}/peers/${peerhost}"
-  export FABRIC_CA_CLIENT_HOME="${org_root}"
-  fabric-ca-client enroll -u "https://${org}-peer0:peer0pw@${CA_HOST}:${caport}" --caname "${caname}" \
-    -M "${peer_dir}/msp" --csr.hosts "${peerhost},localhost" \
-    --tls.certfiles "${FABRIC_CA_DIR}/${caname}/tls-cert.pem"
-  fabric-ca-client enroll -u "https://${org}-peer0:peer0pw@${CA_HOST}:${caport}" --caname "${caname}" \
-    -M "${peer_dir}/tls" --enrollment.profile tls --csr.hosts "${peerhost},localhost" \
-    --tls.certfiles "${FABRIC_CA_DIR}/${caname}/tls-cert.pem"
-
-  # Normalise TLS material to the conventional filenames.
-  cp "${peer_dir}/tls/tlscacerts/"* "${peer_dir}/tls/ca.crt"
-  cp "${peer_dir}/tls/signcerts/"*   "${peer_dir}/tls/server.crt"
-  cp "${peer_dir}/tls/keystore/"*    "${peer_dir}/tls/server.key"
+  enroll_node "${org}-peer0" peer0pw "${peerhost}" "${peer_dir}"
 
   # Derive the org MSP and cacert name from the peer MSP. The CA-admin
   # enrollment above already created ${org_root}/msp/cacerts, so the pem must
@@ -138,23 +135,17 @@ create_peer_org() {
   cp "${org_root}/msp/config.yaml" "${peer_dir}/msp/config.yaml"
 
   # --- admin + User1 ---
-  export FABRIC_CA_CLIENT_HOME="${org_root}"
-  fabric-ca-client enroll -u "https://${org}-admin:adminpw@${CA_HOST}:${caport}" --caname "${caname}" \
-    -M "${org_root}/users/Admin@${domain}/msp" \
-    --tls.certfiles "${FABRIC_CA_DIR}/${caname}/tls-cert.pem"
+  fcc enroll -u "https://${org}-admin:adminpw@${CA_HOST}:${caport}" -M "${org_root}/users/Admin@${domain}/msp"
   cp "${org_root}/msp/config.yaml" "${org_root}/users/Admin@${domain}/msp/config.yaml"
 
-  fabric-ca-client enroll -u "https://${org}-user1:user1pw@${CA_HOST}:${caport}" --caname "${caname}" \
-    -M "${org_root}/users/User1@${domain}/msp" \
-    --tls.certfiles "${FABRIC_CA_DIR}/${caname}/tls-cert.pem"
+  fcc enroll -u "https://${org}-user1:user1pw@${CA_HOST}:${caport}" -M "${org_root}/users/User1@${domain}/msp"
   cp "${org_root}/msp/config.yaml" "${org_root}/users/User1@${domain}/msp/config.yaml"
   normalize_client_key "${org_root}/users/User1@${domain}/msp"
 
   # Fixed anchor-client identity (only for the anchor org).
   if [ -n "${extra_client}" ]; then
-    fabric-ca-client enroll -u "https://${extra_client}:${extra_client}pw@${CA_HOST}:${caport}" --caname "${caname}" \
-      -M "${org_root}/users/${extra_client}@${domain}/msp" \
-      --tls.certfiles "${FABRIC_CA_DIR}/${caname}/tls-cert.pem"
+    fcc enroll -u "https://${extra_client}:${extra_client}pw@${CA_HOST}:${caport}" \
+      -M "${org_root}/users/${extra_client}@${domain}/msp"
     cp "${org_root}/msp/config.yaml" "${org_root}/users/${extra_client}@${domain}/msp/config.yaml"
     normalize_client_key "${org_root}/users/${extra_client}@${domain}/msp"
   fi
@@ -175,27 +166,16 @@ create_orderer_org() {
 
   echo "==> [orderer] registering identities"
   for i in 0 1 2; do
-    fabric-ca-client register --caname "${caname}" --id.name "orderer${i}" --id.secret "orderer${i}pw" --id.type orderer \
-      --tls.certfiles "${FABRIC_CA_DIR}/${caname}/tls-cert.pem"
+    fcc register --id.name "orderer${i}" --id.secret "orderer${i}pw" --id.type orderer
   done
-  fabric-ca-client register --caname "${caname}" --id.name "orderer-admin" --id.secret adminpw --id.type admin \
-    --tls.certfiles "${FABRIC_CA_DIR}/${caname}/tls-cert.pem"
+  fcc register --id.name "orderer-admin" --id.secret adminpw --id.type admin
 
   mkdir -p "${org_root}/msp/tlscacerts"
 
   for i in 0 1 2; do
     local host="orderer${i}.example.com"
     local odir="${org_root}/orderers/${host}"
-    export FABRIC_CA_CLIENT_HOME="${org_root}"
-    fabric-ca-client enroll -u "https://orderer${i}:orderer${i}pw@${CA_HOST}:${caport}" --caname "${caname}" \
-      -M "${odir}/msp" --csr.hosts "${host},localhost" \
-      --tls.certfiles "${FABRIC_CA_DIR}/${caname}/tls-cert.pem"
-    fabric-ca-client enroll -u "https://orderer${i}:orderer${i}pw@${CA_HOST}:${caport}" --caname "${caname}" \
-      -M "${odir}/tls" --enrollment.profile tls --csr.hosts "${host},localhost" \
-      --tls.certfiles "${FABRIC_CA_DIR}/${caname}/tls-cert.pem"
-    cp "${odir}/tls/tlscacerts/"* "${odir}/tls/ca.crt"
-    cp "${odir}/tls/signcerts/"*   "${odir}/tls/server.crt"
-    cp "${odir}/tls/keystore/"*    "${odir}/tls/server.key"
+    enroll_node "orderer${i}" "orderer${i}pw" "${host}" "${odir}"
 
     if [ "${i}" = "0" ]; then
       # Flat copy for the same reason as create_peer_org (audit F72).
@@ -209,10 +189,7 @@ create_orderer_org() {
     cp "${org_root}/msp/config.yaml" "${odir}/msp/config.yaml"
   done
 
-  export FABRIC_CA_CLIENT_HOME="${org_root}"
-  fabric-ca-client enroll -u "https://orderer-admin:adminpw@${CA_HOST}:${caport}" --caname "${caname}" \
-    -M "${org_root}/users/Admin@${domain}/msp" \
-    --tls.certfiles "${FABRIC_CA_DIR}/${caname}/tls-cert.pem"
+  fcc enroll -u "https://orderer-admin:adminpw@${CA_HOST}:${caport}" -M "${org_root}/users/Admin@${domain}/msp"
   cp "${org_root}/msp/config.yaml" "${org_root}/users/Admin@${domain}/msp/config.yaml"
   echo "==> [orderer] done (OrdererMSP)"
 }

@@ -91,7 +91,7 @@ Internal (no `/api/v1` prefix, still bearer-authed): `POST /internal/anchor-root
 Reads (M26): **standard / parallel** evaluate the chaincode directly, on `coc-main` or
 the `?caseId=` case channel. **anchoring / parallel-anchored** keep no per-event
 record on the app channel (only the Merkle root is committed), so `ReadEvidence` and
-`GetAuditTrail` are served from the **off-chain trail**: `receiptsClient.js` lists the
+`GetAuditTrail` are served from the **off-chain trail**: `serviceClients.js` lists the
 receipt store's per-evidence index (`GET /receipts?evidenceId=`), each receipt carrying
 the CoC `event` it witnesses. The trail is those events in receipt order; the head is
 folded from them (`id`, `version`, `storage` from CREATE, `identity.subject` = CREATE
@@ -143,12 +143,10 @@ still starts with user login disabled (service token unaffected).
   multipart without a `file` part; unsafe evidenceId.
 - `409` — duplicate username; multipart ingest of an existing evidenceId.
 - `413` — multipart file over `MAX_UPLOAD_BYTES`.
-- `503` — login attempted while the users store is unavailable; library route
-  without the case-registry/evidence-store clients configured.
+- `503` — login attempted while the users store is unavailable.
 - `404` — read of an unknown key (mapped from the chaincode not-found error); batched
   variant `ReadEvidence` with no off-chain events; `/anchor-roots` on a direct variant
   (no roots exist) or an unknown `(scopeId, batchId)`.
-- `503` — batched-variant read without a receipts client injected (misconfigured deps).
 - `502` — Fabric submit/evaluate error, batcher / receipt-store / anchor-client
   unreachable, or verification proxy error.
 

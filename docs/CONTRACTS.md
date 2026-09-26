@@ -83,7 +83,8 @@ ReadAnchorRoot(ctx, scopeId, batchId) (string, error)   // scopeId: caseId, or "
     `TransferCustody`, `DisposeEvidence` (semantically serial per evidence — custody is a
     chain). **`AccessLog` never reads or writes the head.**
   - event records: `CreateCompositeKey("evt", [evidenceId, sortKey])`, append-only, where
-    `sortKey = zeroPad19(txTimestampUnixNanos) + "-" + txID[:12]`. Both components come
+    `sortKey = fmt.Sprintf("%019d", txTimestampUnixNanos) + "-" + txID[:12]` (19-digit zero
+    pad = the width of MaxInt64). Both components come
     from the signed proposal, so they are deterministic across endorsers, unique per tx,
     and require **no shared counter key**. This realizes ARCHITECTURE §4.1's
     "client-derived monotonic counter" without adding a counter argument to the binding
@@ -205,8 +206,8 @@ the batch's events (`null` when not committed).
 | receipt-store | **4002** | `PUT /receipts/:eventId` (indexes into `DATA_DIR/idx/<evidenceId>.txt` when the body carries a valid `evidenceId`; 400 on an invalid one); `GET /receipts/:eventId` (404 if missing); **M26** `GET /receipts?evidenceId=X` → JSON array of full receipts in first-PUT (leaf) order, `[]` if none, 400 `{error:'evidenceId query required'}` if missing/invalid |
 | anchor-client | **4003** | `POST /roots` `{caseId,batchId,merkleRoot,meta}` → `201 {txId}` (submit on `anchor-main`); `GET /roots/:caseId/:batchId` (evaluate on `anchor-main`) |
 | verification | **4004** | `GET /verify/:eventId` → `{ok,reason?,latencyMs,leafSource:"event"\|"receipt",steps:{fetchMs,recomputeMs,compareRootMs}}`; **M26**: when `receipt.event` is present the leaf is recomputed from it inside `recomputeMs` (`leafSource:"event"`), else the stored `leafHash` is used (`"receipt"`, legacy); `reason`: `root-mismatch` (200, tamper signal), `missing-receipt`/`missing-anchor-root` (404, not yet anchored), `malformed-receipt` (422 — the un-hardened witness stored junk; the `leafHash` hex-64 shape check still runs even when `event` is present), 502 upstream. With `VERIFY_METRICS_PATH` set, one JSONL line per completed verify: `{ts,eventId,ok,leafSource,fetchMs,recomputeMs,compareRootMs,latencyMs}` |
-| case-registry | **4005** | internal-only (via gateway; `X-Gleipnir-Internal-Token` after `/healthz`): `POST/GET/PATCH /cases[/:caseId]`, `POST/PATCH/DELETE /cases/:caseId/participants[/:userId]` (PATCH = M25 in-place role change; policy in the gateway), `POST/DELETE /cases/:caseId/evidence[/:evidenceId]` (categorize; idempotent same-case, 409 cross-case; un-assign also clears `categoryId`), `POST/GET/PATCH/DELETE /cases/:caseId/categories[/:categoryId]` (M19 taxonomy; name unique per case → 409; delete refused 409 while referenced), `POST/GET/PATCH /evidence-index[/:evidenceId]` (accepts the M19 metadata fields; `categoryId` must belong to the evidence's case), `GET /evidence-index?caseId=&q=&uploadedBy=&type=&from=&to=&visibleToUserId=`, `GET /internal/authz?userId=&evidenceId=` → `{allowed,caseId,roleInCase}` |
-| evidence-store | **4006** | internal-only (via gateway; `X-Gleipnir-Internal-Token` after `/healthz`): `PUT /blobs/:evidenceId` (raw body + `X-Content-Type`/`X-Original-Filename`) → `201 {integrityProof,sizeBytes,storedAt}`, `409` if exists (immutable), `413` over `MAX_UPLOAD_BYTES`; `GET /blobs/:evidenceId` (attachment stream); `GET /blobs/:evidenceId/meta`; `GET /blobs/:evidenceId/verify?expected=<ni-uri>`; `DELETE /blobs/:evidenceId` (ingest-rollback only) |
+| case-registry | **4005** | internal-only (via gateway; `X-Gleipnir-Internal-Token` after `/healthz`): `POST/GET/PATCH /cases[/:caseId]`, `POST/PATCH/DELETE /cases/:caseId/participants[/:userId]` (PATCH = M25 in-place role change; policy in the gateway), `POST/DELETE /cases/:caseId/evidence[/:evidenceId]` (categorize; idempotent same-case, 409 cross-case; un-assign also clears `categoryId`), `POST/PATCH/DELETE /cases/:caseId/categories[/:categoryId]` (M19 taxonomy; name unique per case → 409; delete refused 409 while referenced; categories are read via `GET /cases/:caseId`, its `.categories` array), `POST /evidence-index` + `PATCH /evidence-index/:evidenceId` (accept the M19 metadata fields; `categoryId` must belong to the evidence's case; no single-row GET — rows are read through the search below), `GET /evidence-index?caseId=&q=&uploadedBy=&type=&from=&to=&visibleToUserId=`, `GET /internal/authz?userId=&evidenceId=` → `{allowed,caseId,roleInCase}`. `GET /cases` and the evidence-index search return at most 500 rows (S19 fixed cap; no `?limit`) |
+| evidence-store | **4006** | internal-only (via gateway; `X-Gleipnir-Internal-Token` after `/healthz`): `PUT /blobs/:evidenceId` (raw body + `X-Content-Type`/`X-Original-Filename`) → `201 {integrityProof,sizeBytes,storedAt,rollbackToken}`, `409` if exists (immutable), `413` over `MAX_UPLOAD_BYTES`; `GET /blobs/:evidenceId` (attachment stream); `DELETE /blobs/:evidenceId` (ingest-rollback only; requires the `x-gleipnir-rollback-token` header carrying the token that blob's PUT returned — no query-string fallback) |
 | frontend (nginx) | **8081** | serves SPA; `GET /healthz`; proxies `/api/*` → `gateway:3000` |
 
 **Gateway public API** (prefix `/api/v1`, per ARCHITECTURE §6): `POST /evidence`
@@ -293,7 +294,7 @@ audit-log export stays deferred and CASE/UCO JSON-LD stays banned),
 **Library wire shapes (M13, pinned):**
 - **User** `{id, username, name, role: admin|lead|investigator, active,
   createdAt, updatedAt}` — `name` was `displayName` until the M17 rename
-  (§12-8; pre-M17 `users.json` records are upgraded in place on load);
+  (§12-8);
   `passwordHash` never leaves the gateway's store; users are deactivated,
   never deleted. User identity in case-registry payloads is the immutable
   `username`.
@@ -361,17 +362,15 @@ empty-store only), `SESSION_TTL_SECONDS=28800`, `GLEIPNIR_INTERNAL_TOKEN`
 `CASE_REGISTRY_URL=http://case-registry:4005`,
 `EVIDENCE_STORE_URL=http://evidence-store:4006`, `MAX_UPLOAD_BYTES=26214400`.
 Batcher: `PORT=4001`, **`BATCH_SIZE`** (int > 0; ONE grid for Anchoring and
-Parallel-Anchored, §12-13; compose default 100, `.env` 50, overridden per run by
-experiment.py), `BATCH_N` / `BATCH_K` (legacy per-variant fallback, read only when
-`BATCH_SIZE` is unset/0 — experiment.py writes all three to the same value),
+Parallel-Anchored, §12-13; code and compose default 100, `.env` 50, overridden per run by
+experiment.py),
 **`BATCH_FLUSH_MS`** (int; `0` = size-only batching, the experiment constant; > 0 arms a
 timer at the first enqueue of an open batch), `BATCH_EPOCH` (optional; namespaces
 batchIds per batcher lifetime — experiment.py sets `<runId>-<unix>` per run, empty ⇒
 start-time default), `GLEIPNIR_TOKEN` (bearer for the gateway's authed
 `/internal/anchor-root`), `RECEIPT_STORE_URL=http://receipt-store:4002`,
 `GATEWAY_URL=http://gateway:3000`, `ANCHOR_CLIENT_URL=http://anchor-client:4003`.
-(`createApp` overrides use camelCase: `batchSize`, `batchN`, `batchK`, `flushMs`,
-`batchEpoch`.)
+(`createApp` overrides use camelCase: `batchSize`, `flushMs`, `batchEpoch`.)
 Receipt-store: `PORT=4002`, `DATA_DIR=/data` (receipts `<eventId>.json`; index
 `idx/<evidenceId>.txt`).
 Anchor-client: `PORT=4003`, `PEER_ENDPOINT=peer0-anchor:11051`,
@@ -381,9 +380,9 @@ Verification: `PORT=4004`, `RECEIPT_STORE_URL`, `GATEWAY_URL`, `ANCHOR_CLIENT_UR
 `GLEIPNIR_TOKEN` (bearer for the gateway's authed root-read endpoint),
 `VERIFY_METRICS_PATH` (compose: `/verify-metrics/verify.jsonl` on the `verify-metrics`
 volume; empty = off).
-Case-registry: `PORT=4005`, `DATA_DIR=/data`, `GLEIPNIR_INTERNAL_TOKEN`, `LOG_LEVEL`.
+Case-registry: `PORT=4005`, `DATA_DIR=/data`, `GLEIPNIR_INTERNAL_TOKEN`.
 Evidence-store: `PORT=4006`, `DATA_DIR=/data`, `GLEIPNIR_INTERNAL_TOKEN`,
-`MAX_UPLOAD_BYTES=26214400`, `LOG_LEVEL`.
+`MAX_UPLOAD_BYTES=26214400`.
 **Host-side (benchmark + orchestration, M26):** `GLEIPNIR_TXLOG_DIR` (per-round directory
 the workloads append `tx-w<workerIndex>.jsonl` to; unset = no per-transaction logging),
 `GATEWAY_URL` (default `http://localhost:3000`), `BATCHER_URL` (default
@@ -490,7 +489,10 @@ ramp: { events_per_case_per_round: 40 }      # E0 short ramp to locate approxima
   lifecycle order CREATE → (TRANSFER|ACCESS)* → [DISPOSE]; each worker holds exactly
   `rounds × S` items, `S = cases × eventsPerCasePerRound / workers` (integer, asserted);
   round `k` replays items `[k·S, (k+1)·S)`. DISPOSE count per worker =
-  `round(dispose_fraction × owned evidence)` (a documented default).
+  `round(dispose_fraction × owned evidence)`, `dispose_fraction` from `sweeps.yaml`
+  `workload.mix`. The generator reads no `sweeps.yaml` and holds no param defaults: every
+  param flag is required (`--cases` defaults to `--channels`), a missing one throws, and
+  experiment.py passes them all from `sweeps.yaml`.
 - **Workload modules** (identical across variants; `mode` selects the write path):
   `workload/trace.js` (mixed-workload replay), `createEvidence.js`, `transferCustody.js`,
   `accessLog.js`, `disposeEvidence.js` (per-operation writes), `read.js` (`ReadEvidence` /
@@ -510,8 +512,7 @@ ramp: { events_per_case_per_round: 40 }      # E0 short ramp to locate approxima
   `payloads.caseSelector` suppresses the `case-NNN` spread **by variant name**, so a round
   rendered without it falls back to `channels: 1` → `case-001`, which routes Standard's fabric
   requests at a channel absent from `networks/coc-main.yaml` and stamps Anchoring's events with
-  a caseId instead of the `shared` batch scope). Per-round: `caseId` /
-  `channel` (single-target legacy); `trace <abs path>`, `slice k`, `sliceSize S` (trace.js
+  a caseId instead of the `shared` batch scope). Per-round: `trace <abs path>`, `slice k`, `sliceSize S` (trace.js
   throws on file/worker mismatch or exhaustion); `pool P` (transfer/access/dispose/read;
   **per worker**, so the per-operation rounds pass `ceil(P_total / workers)` with
   `P_total = evidence_per_case × cases` — the round's target set is `P_total` and each seeded
@@ -522,13 +523,12 @@ ramp: { events_per_case_per_round: 40 }      # E0 short ramp to locate approxima
   Benchconfig shape: `test.{name, description, workers.number, rounds[1]}` +
   `monitors.resource[{module: docker, options:{interval, containers:['/peer0.org1.example.com', …]}}]`
   (leading slash mandatory — Caliper matches `Names[0]` verbatim); `rateControl: fixed-rate
-  tps`. Network config: standard `networks/coc-main.yaml`; parallel
-  `networks/parallel-c{C}.yaml` (rendered by `rounds.py --static` for every C in
-  `channel_counts ∪ case_counts ∪ {1, baseline.channels}`; an off-grid `--exp cell` C gets
-  the same rendering written into its run dir; per-channel `contractID:
-  evidence-case-NNN` unique alias); anchoring + parallel-anchored
-  `networks/rest-gateway.yaml`. Committed static files: `benchmarks/smoke-<variant>.yaml`
-  (regimes.smoke) + `networks/parallel-c{C}.yaml`, both with a GENERATED header. Multi-channel
+  tps`. Network config: standard `networks/coc-main.yaml`; parallel `parallel-c{C}.yaml`,
+  rendered by `rounds.render_parallel_network(C)` into the run dir for EVERY parallel run
+  (per-channel `contractID: evidence-case-NNN` unique alias); anchoring + parallel-anchored
+  `networks/rest-gateway.yaml`. Nothing generated is committed under `benchmark/`: smoke (E0)
+  rounds are rendered per launch into `rounds/<label>/bench.yaml` like every other round.
+  Multi-channel
   rounds spread load round-robin across `case-001..case-00C` in ONE Caliper round, so round
   throughput is the **aggregate across channels**; `perChannelTpsDerived = aggregate / C`.
 - **Per-transaction log** (`workload/lib/txlog.js`, `${GLEIPNIR_TXLOG_DIR}/tx-w<workerIndex>.jsonl`,
@@ -566,8 +566,9 @@ ramp: { events_per_case_per_round: 40 }      # E0 short ramp to locate approxima
   results ###` marker; `### docker resource stats ###` table by header name). Smoke
   artifacts live under `results/e0/` labelled `regime: smoke` and are never mixed with
   steady data.
-- **Run manifest** (`manifest.json`; collect.py merges INTO the seeded `run.json` with
-  setdefault — identity/provenance are never overwritten). Top level: `runId, experiment,
+- **Run manifest** (`manifest.json`; collect.py merges INTO the seeded `run.json` —
+  identity/provenance come only from `run.json`: experiment.py is their one writer, and a run
+  dir without `run.json` no longer gets runId/levels/provenance backfilled by collect.py). Top level: `runId, experiment,
   variant, levels{batchSize, channels, cases, sendRateTps, reference}, repetition,
   regime: smoke|steady|sub-floor, status, trace{hash, params, opCounts, path}, rounds[],
   storage{}, anchoring, audit, payloadCompressionVsBaseline?, controls{workers,
@@ -635,15 +636,14 @@ ramp: { events_per_case_per_round: 40 }      # E0 short ramp to locate approxima
 ```
 orchestration/up.sh --variant <v> [--channels <n>] [--skip-crypto]  # enroll → compose up → channels → ccaas → commit; with --skip-crypto on parallel-anchored, a missing/partial anchor org is enrolled ALONE (registerEnroll.sh anchor-only; org1/org2/orderer untouched) — §12-19
 orchestration/down.sh [--wipe]                       # teardown; --wipe removes named volumes
-orchestration/provision-channel.sh <caseId>          # genesis → osnadmin join(201) → peer join → commit cc → emit benchmark/networks/<caseId>.yaml
-orchestration/teardown-channel.sh <caseId>
+orchestration/provision-channel.sh <caseId>          # genesis → osnadmin join(201) → peer join → approve/commit cc with CCAAS_ID_APP (install is org-scoped, done once by up.sh); writes no Caliper config
 orchestration/reset-network.sh --variant <v> --channels <C>   # M26 ledger-only reset: needs GLEIPNIR_ALLOW_LEDGER_WIPE=1; down (no -v) → rm ONLY gleipnir_{orderer0,orderer1,orderer2,peer0org1,peer0org2,peer0anchor}-ledger, gleipnir_receipt-data, gleipnir_verify-metrics → rm network/channel-artifacts → unset CCAAS_ID_* → up.sh --skip-crypto (never touches gateway-auth-data, case-registry-data, evidence-blob-data, CA state, network/organizations)
 orchestration/backup-volumes.sh <dir> [--restore]    # tar every gleipnir_* named volume via alpine (one file each); --restore REPLACES each volume's contents (empties it first) and refuses while a container uses the volume
 orchestration/benchapp.pyw                           # desktop app (Windows host, Python 3.11 + Tk; drives experiment.py in WSL) — §12-19
 orchestration/smoke-standard.sh                      # REST-path functional gate: create → transfer → access×2 → audit(==4) → dispose → status DISPOSED → transfer-fails
 orchestration/smoke-library.sh                       # library gate (standard variant): login/roles → case+participant → multipart ingest → categorize → search → view/download/export auto-log asserts → authz negatives → trail==4
-orchestration/rounds.py --static                     # the ONLY renderer of Caliper benchconfigs/network configs from sweeps.yaml; writes benchmarks/smoke-<variant>.yaml + networks/parallel-c{C}.yaml; library render_round()/network_config() for experiment.py
-orchestration/experiment.py --exp e0|ramp|e1|e2|e3a|e3b|ops|cell [--variant V]* [--reps N] [--resume] [--dry-run] [--reuse-network] [--no-monitor] [--no-audit] [--verbose] [--sweeps FILE] [--send-rate R [R ...]] [--batch-size B] [--cases N] [--seed S] [--workers W] [--rounds K] [--events-per-case E] [--evidence-per-case V] [--transfer-weight T] [--access-weight A] [--dispose-fraction D] [--payload-bytes P] [--audit-cases N] [--flush-timeout-ms F] [--monitor-interval I]   # the campaign driver; the factor AND control flags are --exp cell only (§12-18); prints [run i/n] + ETA and per-round result lines, rewrites results/<exp>/<exp>-results.csv after every run (plans cells × reps; one network lifetime per run; lifecycle in §10 / orchestration/README). A FRESH ledger per run is the default; --reuse-network opts out (warned, one ad-hoc run) and --fresh-network still parses as a no-op for old command lines
+orchestration/rounds.py                              # library only (no CLI): the ONLY renderer of Caliper benchconfigs/network configs from sweeps.yaml — render_round()/network_config()/render_parallel_network(), called by experiment.py, which writes every rendered config into the run dir (nothing rendered is committed)
+orchestration/experiment.py --exp e0|ramp|e1|e2|e3a|e3b|ops|cell [--variant V]* [--reps N] [--resume] [--dry-run] [--reuse-network] [--no-monitor] [--no-audit] [--verbose] [--sweeps FILE] [--send-rate R [R ...]] [--batch-size B] [--cases N] [--seed S] [--workers W] [--rounds K] [--events-per-case E] [--evidence-per-case V] [--transfer-weight T] [--access-weight A] [--dispose-fraction D] [--payload-bytes P] [--audit-cases N] [--flush-timeout-ms F] [--monitor-interval I]   # the campaign driver; the factor AND control flags are --exp cell only (§12-18); prints [run i/n] + ETA and per-round result lines, rewrites results/<exp>/<exp>-results.csv after every run (plans cells × reps; one network lifetime per run; lifecycle in §10 / orchestration/README). A FRESH ledger per run is the default; --reuse-network opts out (warned, one ad-hoc run)
 orchestration/checkpoint.py <runPath> [--label tK]   # du -sb probes via docker exec, appends checkpoints.jsonl (runPath = <exp>/<variant>/<levels>/r<rep>)
 orchestration/collect.py <run-dir> [--baseline <run-dir>] | --selftest   # run dir → manifest.json (rounds, per-tx percentiles, failure classes, resources, storage regression, anchoring, audit)
 orchestration/report.py --exp e0|ramp|e1|e2|e3a|e3b|ops|cell [--out docs/results/<exp>] [--no-charts] [--decimal-comma]   # ALWAYS benchmark/results/<exp>/<exp>-results.csv (one row per run x round; supervisor column order send rate, throughput, latency min/max/avg/p95, CPU, memory, success, failure, failure rate; UTF-8 BOM; --decimal-comma = ';' + decimal comma); for e1..ops also CSV + Markdown tables (units in headers, mean ± SD over reps; Markdown = one table per variant with ONE latency column `avg (min–max), p95` of means, SDs in the CSV) + PNG charts (matplotlib optional); e3a also writes e3a-saturation.json (saturation = first send rate where successful throughput < 0.9 × send rate; latency knee alongside); ops → ops-writes.* and ops-reads.*; E1 reference rows carry no batch size and print `ref`, never the literal `None`; the per-round tables (e3a, ops) carry a header note that on-chain/off-chain bytes per event, audit time and anchoring delay are measured once per RUN and therefore repeat on every row
@@ -654,12 +654,12 @@ orchestration/report.py --exp e0|ramp|e1|e2|e3a|e3b|ops|cell [--out docs/results
 provision-channel.sh case-NNN` (missing channels), `node benchmark/trace/generate.js … --out
 <path>` (reads the printed sha256, moves the file to `benchmark/traces/<hash>.json`), `python
 checkpoint.py`, `npx caliper launch manager --caliper-workspace . --caliper-benchconfig <abs
-bench.yaml> --caliper-networkconfig <rel, or the absolute run-dir copy for an off-grid cell C> --caliper-report-path <abs>` (cwd `benchmark/`, env
+bench.yaml> --caliper-networkconfig <rel for standard/anchoring/parallel-anchored; for parallel ALWAYS the absolute run-dir rendering <run>/parallel-c<C>.yaml> --caliper-report-path <abs>` (cwd `benchmark/`, env
 `GLEIPNIR_TXLOG_DIR=<run>/rounds/<label>`, `GATEWAY_URL`, `BATCHER_URL`, `GLEIPNIR_TOKEN`),
 `GET $BATCHER_URL/status` (the per-round settle: poll until no root is `pending`) and, on the
 LAST round, `POST $BATCHER_URL/flush` + `GET /status` **before** that round's checkpoint so the
 run-end partial batch is inside the `t0→tN` delta, `node benchmark/audit/reconstruct.js`,
-`python collect.py <run-dir>`. Anchored runs get `BATCH_SIZE`, `BATCH_N`, `BATCH_K` (same value),
+`python collect.py <run-dir>`. Anchored runs get `BATCH_SIZE`,
 `BATCH_FLUSH_MS`, `BATCH_EPOCH` written to `.env` and the batcher recreated with `docker
 compose -p gleipnir … --profile anchoring --profile parallel-anchored up -d --force-recreate
 merkle-batcher`. Volume names assume compose project `gleipnir`.
@@ -718,13 +718,16 @@ it is one GoLevelDB directory shared by all of a peer's channels).
 
 8. **Library RBAC v2 and the `name` rename (M17–M18, authorized by the authors).**
    The pinned User wire field `displayName` is renamed to **`name`** across the
-   store, API payloads, and SPA; `users.json` is upgraded in place on load
-   (idempotent — legacy records are mapped once and persisted; `passwordHash`
-   handling is unchanged). The user role set is extended to **`admin` | `lead` |
+   store, API payloads, and SPA. (The one-time in-place `users.json` upgrade was
+   removed 2026-09-26 in the ponytail refactor, §12-20: every live store had already
+   been loaded, and so rewritten, by a post-M17 gateway, and the volume was re-seeded
+   on 2026-07-24. A legacy record would now load with `name` unset; `passwordHash`
+   handling is unchanged, so login still works.) The user role set is extended to **`admin` | `lead` |
    `investigator`** (UI labels "System Administrator" / "Lead Investigator" /
    "Investigator") and the per-case role set to **`viewer` | `contributor` |
-   `lead`** — a guarded, transactional table rebuild, since SQLite cannot alter
-   a CHECK constraint on the live `case-registry-data` volume. Case creation
+   `lead`** (in the `case_participants` CHECK from CREATE; the one-time guarded
+   in-place table rebuild for pre-M18 databases was removed 2026-09-26 in the ponytail
+   refactor, §12-20, after every live volume had it). Case creation
    opens from admin-only to **admin-or-lead**: a lead who creates a case is
    auto-added to its roster as case `lead` and manages participants and
    evidence assignment **only on cases where they hold that role**; admins may
@@ -745,8 +748,10 @@ it is one GoLevelDB directory shared by all of a peer's channels).
    taxonomy) and five **off-chain** ingest-metadata fields on the
    evidence-index read-model: `label` (human-readable item number, not
    unique-enforced — the on-chain key stays the uuid), `categoryId`,
-   `seizedAt`, `acquisitionLocation`, `handedOverBy`. The columns land via
-   idempotent `PRAGMA table_info` guards on the live volume. Multipart ingest
+   `seizedAt`, `acquisitionLocation`, `handedOverBy`. The columns are declared in
+   the `evidence_index` CREATE TABLE; the one-time `PRAGMA table_info` / ALTER guards
+   for pre-M19 databases were removed 2026-09-26 (ponytail refactor, §12-20) once every
+   live volume carried the columns. Multipart ingest
    accepts the same fields and validates the category **before** any write
    (a bad category must not surface after the append-only chain commit).
    `buildHead`/`buildEvent` are untouched: the Codex-Entry head and the CoC
@@ -801,8 +806,8 @@ pick something else.
 13. **One batch-size grid for N and K** (spec §4 item 2 — identical-grid rule RESOLVED,
     values **confirm with D**): `batch_sizes: [10, 25, 50, 100, 200]` replaces the paper's
     separate N ∈ {10,50,100,250} and K ∈ {5,10,25,50}. The batcher reads `BATCH_SIZE`
-    (`BATCH_N`/`BATCH_K` kept only as a fallback when it is unset) and `BATCH_FLUSH_MS`
-    (0 = size-only, held constant); experiment.py writes all of them per run. Channel
+    (default 100) and `BATCH_FLUSH_MS` (0 = size-only, held constant); experiment.py writes
+    both per run. (The `BATCH_N`/`BATCH_K` fallback was removed 2026-09-26, §12-20.) Channel
     calibration is Parallel-only, Parallel-Anchored inherits, and Standard/Anchoring are
     code-enforced single-channel (`rounds.channels_for`; spec §4 item 18 — **confirm with
     D**, it corrects N's "all except Standard" remark).
@@ -848,7 +853,8 @@ pick something else.
     hygiene. `--reuse-network` opts out for a single warned, ad-hoc run, and then the running
     stack must match (`.env VARIANT`, and **exactly** the case channels the cell uses —
     missing ones are provisioned, extra ones abort the run) or the run aborts.
-    `--fresh-network` is retained as a no-op so old command lines keep working. A re-executed
+    (The no-op `--fresh-network` flag was removed 2026-09-26, §12-20; it is now an argparse
+    error.) A re-executed
     run's `rounds/`, `checkpoints.jsonl`, `anchoring.json`, `audit.json` and `manifest.json`
     are cleared first, because tx logs and checkpoints are APPENDED and a retry would
     otherwise be collected together with the previous attempt.
@@ -893,9 +899,9 @@ pick something else.
     ignored: a factor no selected variant uses (a run labelled with a batch size it never used
     is mislabelled data), a level < 1, and any factor flag on another `--exp`. Results go to `results/cell/<variant>/<levels>-rate<R…>/r<rep>`
     — report.py exports them to the per-round CSV only and builds no aggregated table: a cell
-    is a probe, not an E1–E3 datapoint. An off-grid
-    parallel channel count gets its `parallel-c{C}.yaml` rendered by `rounds.py` into the run
-    dir. **Controls** (author request 2026-09-24, brief §5.5-1 "parameterizable"): `--seed
+    is a probe, not an E1–E3 datapoint. Every parallel run (any channel count) gets its
+    `parallel-c{C}.yaml` rendered by `rounds.py` into the run dir (none are committed).
+    **Controls** (author request 2026-09-24, brief §5.5-1 "parameterizable"): `--seed
     --workers --rounds --events-per-case --evidence-per-case --transfer-weight --access-weight
     --dispose-fraction --payload-bytes --audit-cases --flush-timeout-ms --monitor-interval`,
     also `--exp cell` only (a campaign's controls stay those of `sweeps.yaml`, or of a
@@ -975,6 +981,59 @@ pick something else.
     and cases intact; E0 through the app — Resume skipping the complete runs, Cancel at round 2
     (process group incl. Caliper workers gone, runlog `failed`), Resume to completion
     (Parallel, 10 case channels), Parallel-Anchored after the anchor-org fix, Restore.
+
+20. **Ponytail audit + refactor** (2026-09-26, branch `ponytail-refactor`; every contract
+    change below signed off by the authors under CLAUDE.md ground rule 2). A whole-repo
+    over-engineering audit, then deletions and simplifications across every module. The
+    contract-visible changes:
+    - **benchmark/**: no generated file is committed any more — `benchmarks/smoke-*.yaml`,
+      `networks/parallel-c*.yaml` and `networks/case-template.yaml` are gone, as are
+      `rounds.py --static` and the `launch:smoke` npm script. `rounds.py` is a library with no
+      CLI; experiment.py renders every round (E0 smoke included) and every parallel network
+      config (`parallel-c{C}.yaml`, `render_parallel_network`) into the run dir (§10, §11).
+      The legacy per-round `caseId` / `channel` arguments are gone (the case target comes only
+      from `channels` + `variant` via `payloads.caseSelector`). `trace/generate.js` no longer
+      reads `sweeps.yaml` or holds defaults — every param flag is required — and emits traces
+      byte-identical to the old generator's for the same params.
+    - **orchestration/**: `teardown-channel.sh` removed (`reset-network.sh` changes a stack's
+      channel set); `provision-channel.sh` no longer emits a Caliper config;
+      `--fresh-network` removed (argparse error); `.env` no longer carries `BATCH_N` /
+      `BATCH_K`; collect.py takes identity/provenance only from `run.json` (no backfill).
+    - **services/**: batcher `BATCH_N` / `BATCH_K` fallback removed (`BATCH_SIZE` default 100,
+      = compose); evidence-store `GET /blobs/:id/meta`, `GET /blobs/:id/verify` and the
+      `?rollbackToken=` DELETE fallback removed (header only); case-registry
+      `GET /cases/:id/categories` and `GET /evidence-index/:id` removed (read via
+      `GET /cases/:id` and the search), `?limit` removed (fixed 500-row cap); `LOG_LEVEL` no
+      longer read by case-registry / evidence-store (§6, §7). Spent one-time boot migrations
+      removed: the M18 CHECK rebuild, the M19 column guards, the M25 preset-category backfill
+      and the M25b case-audit-history backfill (every live `case-registry-data` volume already
+      carries their effects; §12-8, §12-9).
+    - **gateway/**: the M17 `users.json` in-place upgrade removed (§12-8);
+      `SESSION_IDLE_TTL_SECONDS` removed (sliding idle timeout fixed at 30 min); the
+      `batcherClient` / `receiptsClient` modules folded into `serviceClients.js`. No public
+      route changed.
+    - **network/compose/**: the three files share `x-*` anchors; the merged `docker compose
+      config` differs from the pre-refactor one only by dropped keys — `ORDERER_` /
+      `CORE_METRICS_PROVIDER=prometheus` (nothing scraped it; `orderer.yaml` / `core.yaml`
+      say `disabled`) and env/keys that restated image or yaml defaults (`FABRIC_CA_HOME`,
+      `FABRIC_LOGGING_SPEC`, `ORDERER_GENERAL_BOOTSTRAPMETHOD`, `CORE_PEER_PROFILE_ENABLED`,
+      ccaas `hostname` / `CORE_CHAINCODE_ID_NAME`, the peers' unused
+      `CHAINCODE_AS_A_SERVICE_BUILDER_CONFIG`, cli `GOPATH`/tty). These files are in `run.json`
+      `configShas`, so runs after this commit carry new compose SHAs.
+    - **frontend/**: `settings.tsx` (a client-side variant setting) removed, as are the unused
+      NotFound/Unauthorized pages and CasesAdminPage's create-case and participant cards
+      (admins create cases from MyCasesPage and manage rosters in CaseDetailPage's Team tab).
+      **Bug fix:** the evidence-detail MerkleBadge / Verify controls now derive "anchoring"
+      from the per-event `batched: true` flag of the gateway's write response (202 on
+      Anchoring / Parallel-Anchored) instead of a client setting that could disagree with the
+      running variant. No gateway or §6 wire change.
+    - **chaincode/**: the `zeroPad19` helper became `fmt.Sprintf("%019d", …)` — the event
+      sortKey is byte-identical (§3); `CC_VERSION` stays `1.0`.
+    The chaincode and workload edits are behaviour-preserving (chaincode `go test`, benchmark
+    `npm test`, and `collect.py` re-run on copies of the four E0 run dirs giving manifests
+    identical to the pre-refactor ones apart from `collectedAt`). Because the chaincode, workloads and compose
+    files changed, **E0 must be re-smoked for all four variants before any steady-state
+    sweep**; the earlier E0 results stay valid for the commit they cite.
 
 Anything else that seems to require deviating from ARCHITECTURE.md or CLAUDE.md: STOP
 and ask the authors (per CLAUDE.md ground rule 2).

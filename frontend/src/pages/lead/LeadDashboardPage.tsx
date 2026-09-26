@@ -2,12 +2,11 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { useErr } from '../../hooks/useErr';
-import { ALL_CASE_ROLES, CASE_ROLE_LABELS } from '../../roles';
 import { activityLine, activityTone } from '../../lib/activity';
 import { formatTs } from '../../lib/format';
 import { Badge } from '../../components/ui/Badge';
-import { Modal } from '../../components/ui/Modal';
 import { Timeline } from '../../components/ui/Timeline';
+import { AddMemberModal, RosterList } from '../../components/TeamRoster';
 import type { CaseActivityEvent, CaseParticipant, CaseRole, CaseSummary, EvidenceIndexRow, User } from '../../types';
 import { StatusPill } from '../../components/ui/Chips';
 
@@ -32,8 +31,6 @@ export function LeadDashboardPage() {
   const [directory, setDirectory] = useState<User[]>([]);
 
   const [addingTo, setAddingTo] = useState<CaseTeam | null>(null);
-  const [pUser, setPUser] = useState('');
-  const [pRole, setPRole] = useState<CaseRole>('viewer');
 
   const loadTeams = async (mine: CaseSummary[]) => {
     const rosters = await Promise.all(mine.slice(0, 10).map(async (c) => {
@@ -81,23 +78,13 @@ export function LeadDashboardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client]);
 
-  const addMember = () =>
+  const addMember = (userId: string, roleInCase: CaseRole) =>
     teamErr.run(async () => {
       if (!addingTo) return;
-      await client.addParticipant(addingTo.caseId, pUser, pRole);
+      await client.addParticipant(addingTo.caseId, userId, roleInCase);
       setAddingTo(null);
-      setPUser('');
       await loadTeams(leadCases);
     });
-
-  // Candidates: active users not yet on the roster; the case-lead role can
-  // only be granted to users holding the global lead role (server-enforced —
-  // the picker just avoids offering a guaranteed 400).
-  const candidates = addingTo
-    ? directory.filter((u) =>
-        !addingTo.participants.some((p) => p.userId === u.username)
-        && (pRole !== 'lead' || u.role === 'lead'))
-    : [];
 
   const removeMember = (caseId: string, userId: string) =>
     teamErr.run(async () => {
@@ -137,29 +124,15 @@ export function LeadDashboardPage() {
             <div key={team.caseId}>
               <div className="row-between">
                 <h4><Link to={`/cases/${encodeURIComponent(team.caseId)}`}>{team.caseName}</Link></h4>
-                <button className="small" onClick={() => { setAddingTo(team); setPUser(''); setPRole('viewer'); }}>Add member</button>
+                <button className="small" onClick={() => setAddingTo(team)}>Add member</button>
               </div>
-              <ul className="plain-list">
-                {team.participants.map((p) => (
-                  <li key={p.userId}>
-                    <span>
-                      {p.userId}{' '}
-                      <Badge tone={p.roleInCase === 'lead' ? 'warn' : 'muted'}>{CASE_ROLE_LABELS[p.roleInCase]}</Badge>
-                    </span>
-                    <span className="btn-row">
-                      <select
-                        value={p.roleInCase}
-                        aria-label={`role of ${p.userId} in ${team.caseName}`}
-                        onChange={(e) => changeMemberRole(team.caseId, p.userId, e.target.value as CaseRole)}
-                      >
-                        {ALL_CASE_ROLES.map((r) => <option key={r} value={r}>{CASE_ROLE_LABELS[r]}</option>)}
-                      </select>
-                      <button className="small" onClick={() => removeMember(team.caseId, p.userId)}>Remove</button>
-                    </span>
-                  </li>
-                ))}
-                {team.participants.length === 0 && <li className="muted small">No participants yet.</li>}
-              </ul>
+              <RosterList
+                participants={team.participants}
+                manage
+                label={(u) => `role of ${u} in ${team.caseName}`}
+                onRole={(u, r) => changeMemberRole(team.caseId, u, r)}
+                onRemove={(u) => removeMember(team.caseId, u)}
+              />
             </div>
           ))}
           <p className="hint">A case keeps at least one lead; removals are server-checked.</p>
@@ -205,29 +178,14 @@ export function LeadDashboardPage() {
       </section>
 
       {addingTo && (
-        <Modal title={`Add member — ${addingTo.caseName}`} onClose={() => setAddingTo(null)}>
-          <div className="form">
-            <label>user
-              <select value={pUser} onChange={(e) => setPUser(e.target.value)}>
-                <option value="">— pick a user —</option>
-                {candidates.map((u) => (
-                  <option key={u.id} value={u.username}>{u.username}{u.name && u.name !== u.username ? ` — ${u.name}` : ''} ({u.role})</option>
-                ))}
-              </select>
-            </label>
-            {candidates.length === 0 && <p className="hint">{pRole === 'lead' ? 'No global-lead users are available to add.' : 'Every active user is already on this roster.'}</p>}
-            <label>role in case
-              <select value={pRole} onChange={(e) => { const r = e.target.value as CaseRole; setPRole(r); if (r === 'lead' && !directory.some((u) => u.username === pUser && u.role === 'lead')) setPUser(''); }}>
-                {ALL_CASE_ROLES.map((r) => <option key={r} value={r}>{CASE_ROLE_LABELS[r]}</option>)}
-              </select>
-            </label>
-            <div className="btn-row">
-              <button disabled={!pUser} onClick={addMember}>Grant access</button>
-              <button className="small" onClick={() => setAddingTo(null)}>Cancel</button>
-            </div>
-            {teamErr.msg && <div className="err">{teamErr.msg}</div>}
-          </div>
-        </Modal>
+        <AddMemberModal
+          title={`Add member — ${addingTo.caseName}`}
+          roster={addingTo.participants}
+          directory={directory}
+          onAdd={addMember}
+          onClose={() => setAddingTo(null)}
+          err={teamErr.msg}
+        />
       )}
     </div>
   );

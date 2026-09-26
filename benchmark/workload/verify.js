@@ -11,7 +11,7 @@
 //
 // Seeding/flush use direct fetch (they need response bodies and are not part
 // of the measurement); only the verify GETs go through sutAdapter.
-// roundArguments: { label, seedCount, variant?, channels?, caseId?, payloadBytes? }.
+// roundArguments: { label, seedCount, variant?, channels?, payloadBytes? }.
 // With `channels: C` (Parallel-Anchored) seeds are spread across
 // case-001..case-00C; the verify GET itself is caseId-free (the receipt's
 // rootRef carries the scope). Env: GATEWAY_URL, BATCHER_URL, GLEIPNIR_TOKEN.
@@ -38,7 +38,7 @@ class VerifyWorkload extends WorkloadModuleBase {
     const headers = { 'content-type': 'application/json', authorization: `Bearer ${this.token}` };
     for (let i = 0; i < seedCount; i += 1) {
       const id = `ev-verify-w${workerIndex}-r${roundIndex}-${i}-${crypto.randomUUID().slice(0, 8)}`;
-      const caseId = nextCase ? nextCase() : (roundArguments.caseId || null);
+      const caseId = nextCase ? nextCase() : null;
       const body = createRestBody(id, `custodian-${workerIndex}`, caseId, filler(id, this.payloadBytes));
       const resp = await fetch(`${this.gatewayUrl}/api/v1/evidence`, { method: 'POST', headers, body: JSON.stringify(body) });
       const j = await resp.json().catch(() => ({}));

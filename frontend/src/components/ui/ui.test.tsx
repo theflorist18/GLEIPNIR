@@ -12,14 +12,12 @@ describe('Tabs', () => {
   const tabs = [
     { id: 'a', label: 'Overview' },
     { id: 'b', label: 'Notes' },
-    { id: 'c', label: 'Team', hidden: true },
   ];
 
-  it('renders visible tabs, marks the active one, and reports clicks', () => {
+  it('renders the tabs, marks the active one, and reports clicks', () => {
     const onChange = vi.fn();
     render(<Tabs tabs={tabs} active="a" onChange={onChange} />);
     expect(screen.getByRole('tab', { name: 'Overview' }).className).toContain('active');
-    expect(screen.queryByRole('tab', { name: 'Team' })).toBeNull(); // hidden
     fireEvent.click(screen.getByRole('tab', { name: 'Notes' }));
     expect(onChange).toHaveBeenCalledWith('b');
   });
@@ -30,11 +28,11 @@ describe('Tabs', () => {
     expect(screen.getByRole('tab', { name: 'Notes' }).getAttribute('tabindex')).toBe('-1');
   });
 
-  it('ArrowRight moves selection to the next visible tab (wrapping)', () => {
+  it('ArrowRight moves selection to the next tab (wrapping)', () => {
     const onChange = vi.fn();
     render(<Tabs tabs={tabs} active="a" onChange={onChange} />);
     fireEvent.keyDown(screen.getByRole('tab', { name: 'Overview' }), { key: 'ArrowRight' });
-    expect(onChange).toHaveBeenCalledWith('b'); // 'c' is hidden, so next after 'a' is 'b'
+    expect(onChange).toHaveBeenCalledWith('b');
   });
 });
 

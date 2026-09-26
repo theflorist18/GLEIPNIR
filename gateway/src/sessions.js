@@ -18,7 +18,7 @@ const crypto = require('node:crypto');
 
 function makeSessions({ ttlSeconds = 28800, idleTtlSeconds = 1800 } = {}) {
   const sessions = new Map(); // token -> { userId, expiresAt, lastSeenAt (epoch ms) }
-  const idleMs = idleTtlSeconds > 0 ? idleTtlSeconds * 1000 : Infinity;
+  const idleMs = idleTtlSeconds * 1000;
 
   function create(userId) {
     const now = Date.now();
@@ -50,11 +50,9 @@ function makeSessions({ ttlSeconds = 28800, idleTtlSeconds = 1800 } = {}) {
   // the immediate-propagation model auth.js already gives deactivation and
   // role change (the user is re-fetched per request).
   function destroyForUser(userId) {
-    let n = 0;
     for (const [token, s] of sessions) {
-      if (s.userId === userId) { sessions.delete(token); n += 1; }
+      if (s.userId === userId) sessions.delete(token);
     }
-    return n;
   }
 
   return { create, get, destroy, destroyForUser };

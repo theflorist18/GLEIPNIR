@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { formatTs } from '../../lib/format';
+import { saveBlob } from '../../lib/save';
 import { Link, useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
-import { useSettings } from '../../settings';
 import { GatewayError } from '../../api';
 import { useErr } from '../../hooks/useErr';
+import { FLAG_LABEL, FLAGS } from '../../roles';
 import { EvidenceCard } from '../../components/EvidenceCard';
 import { AuditTrailTimeline } from '../../components/AuditTrailTimeline';
 import { MerkleBadge, VerifySteps, type VerifyState } from '../../components/MerkleBadge';
@@ -19,13 +20,6 @@ import type { CaseDetail, CoCEvent, EvidenceFlag, EvidenceIndexRow, EvidenceNote
 // gateway auto-logs as ACCESS(view) under the signed-in username — the trail
 // includes it. Blob download is participant-only since M18: the button is
 // hidden for admins outside the case (the server enforces it regardless).
-
-const FLAGS: Array<Exclude<EvidenceFlag, null>> = ['HIGH_PRIORITY', 'PROCESSED', 'NEEDS_LEAD_REVIEW'];
-const FLAG_LABEL: Record<Exclude<EvidenceFlag, null>, string> = {
-  HIGH_PRIORITY: 'High priority',
-  PROCESSED: 'Processed',
-  NEEDS_LEAD_REVIEW: 'Needs lead review',
-};
 
 // M25: which simple file types the browser can render inline. Anything else
 // stays download-only. Text previews are capped so a huge log file cannot
@@ -220,7 +214,6 @@ function NotesTab({ id, canWrite }: { id: string; canWrite: boolean }) {
 export function EvidenceDetailPage() {
   const { evidenceId = '' } = useParams();
   const { client, user } = useAuth();
-  const { variant } = useSettings();
   const { msg, run } = useErr();
   const [tab, setTab] = useState('overview');
   const [record, setRecord] = useState<EvidenceRecord | null>(null);
@@ -232,7 +225,9 @@ export function EvidenceDetailPage() {
   const [notFound, setNotFound] = useState('');
   const flagErr = useErr();
 
-  const anchoring = variant === 'anchoring' || variant === 'parallel-anchored';
+  // The gateway flags each write it batched (Anchoring / Parallel-Anchored
+  // answer 202 {batched: true}); only those events have a receipt to verify.
+  const anchoring = sessionEvents.some((e) => e.batched);
   const addSessionEvent = (ev: SessionEvent) => setSessionEvents((prev) => [...prev, ev]);
 
   const refresh = useCallback(
@@ -315,25 +310,14 @@ export function EvidenceDetailPage() {
   const doDownload = () =>
     run(async () => {
       const { blob, filename } = await client.downloadEvidence(evidenceId);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      a.click();
-      URL.revokeObjectURL(url);
+      saveBlob(blob, filename);
       await refreshTrail(); // the download auto-logged itself; show it without logging again
     });
 
   const doExport = () =>
     run(async () => {
       const bundle = await client.exportEvidence(evidenceId);
-      const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${evidenceId}-export.json`;
-      a.click();
-      URL.revokeObjectURL(url);
+      saveBlob(new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' }), `${evidenceId}-export.json`);
       await refreshTrail(); // the export auto-logged itself; show it without logging again
     });
 

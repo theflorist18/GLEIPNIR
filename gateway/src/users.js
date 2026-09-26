@@ -23,12 +23,7 @@ const USERNAME_RE = /^[A-Za-z0-9._-]{1,64}$/;
 // investigator — leads may create cases and manage the cases they lead.
 const ROLES = ['admin', 'lead', 'investigator'];
 
-class UserError extends Error {
-  constructor(status, message) {
-    super(message);
-    this.status = status;
-  }
-}
+const userError = (status, message) => Object.assign(new Error(message), { status });
 
 async function hashPassword(password) {
   const salt = crypto.randomBytes(16);
@@ -50,7 +45,7 @@ async function verifyHash(password, stored) {
 function requirePassword(password) {
   // Local-dev posture: non-empty is the only strength rule (documented).
   if (typeof password !== 'string' || password.length === 0) {
-    throw new UserError(400, 'password is required');
+    throw userError(400, 'password is required');
   }
 }
 
@@ -80,20 +75,6 @@ function makeUsersStore(authDataDir) {
     fs.writeFileSync(file, JSON.stringify(users, null, 2), 'utf8');
   }
 
-  // M17: the pinned wire field `displayName` was renamed to `name`
-  // (CONTRACTS §12-8). Upgrade pre-M17 records in place, once, on load.
-  {
-    let migrated = false;
-    for (const u of users) {
-      if (u.displayName !== undefined) {
-        if (u.name === undefined) u.name = u.displayName;
-        delete u.displayName;
-        migrated = true;
-      }
-    }
-    if (migrated) persist();
-  }
-
   function findById(id) {
     return users.find((u) => u.id === id) || null;
   }
@@ -104,12 +85,12 @@ function makeUsersStore(authDataDir) {
 
   async function create({ username, password, name, role }) {
     if (typeof username !== 'string' || !USERNAME_RE.test(username)) {
-      throw new UserError(400, 'username must match ^[A-Za-z0-9._-]{1,64}$');
+      throw userError(400, 'username must match ^[A-Za-z0-9._-]{1,64}$');
     }
     requirePassword(password);
     const r = role === undefined ? 'investigator' : role;
-    if (!ROLES.includes(r)) throw new UserError(400, `role must be one of: ${ROLES.join(', ')}`);
-    if (findByUsername(username)) throw new UserError(409, 'username already exists');
+    if (!ROLES.includes(r)) throw userError(400, `role must be one of: ${ROLES.join(', ')}`);
+    if (findByUsername(username)) throw userError(409, 'username already exists');
     const passwordHash = await hashPassword(password);
     const now = new Date().toISOString();
     const user = {
@@ -154,18 +135,18 @@ function makeUsersStore(authDataDir) {
 
   function update(id, patch) {
     const user = findById(id);
-    if (!user) throw new UserError(404, 'user not found');
+    if (!user) throw userError(404, 'user not found');
     const p = patch || {};
     if (p.role !== undefined) {
-      if (!ROLES.includes(p.role)) throw new UserError(400, `role must be one of: ${ROLES.join(', ')}`);
+      if (!ROLES.includes(p.role)) throw userError(400, `role must be one of: ${ROLES.join(', ')}`);
       user.role = p.role;
     }
     if (p.name !== undefined) {
-      if (typeof p.name !== 'string' || !p.name) throw new UserError(400, 'name must be a non-empty string');
+      if (typeof p.name !== 'string' || !p.name) throw userError(400, 'name must be a non-empty string');
       user.name = p.name;
     }
     if (p.active !== undefined) {
-      if (typeof p.active !== 'boolean') throw new UserError(400, 'active must be a boolean');
+      if (typeof p.active !== 'boolean') throw userError(400, 'active must be a boolean');
       user.active = p.active;
     }
     user.updatedAt = new Date().toISOString();
@@ -175,7 +156,7 @@ function makeUsersStore(authDataDir) {
 
   async function resetPassword(id, newPassword) {
     const user = findById(id);
-    if (!user) throw new UserError(404, 'user not found');
+    if (!user) throw userError(404, 'user not found');
     requirePassword(newPassword);
     user.passwordHash = await hashPassword(newPassword);
     user.updatedAt = new Date().toISOString();
@@ -190,4 +171,4 @@ function makeUsersStore(authDataDir) {
   return { seedAdmin, create, verifyPassword, get, getByUsername, update, resetPassword, list };
 }
 
-module.exports = { makeUsersStore, UserError };
+module.exports = { makeUsersStore };

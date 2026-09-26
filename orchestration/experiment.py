@@ -77,7 +77,6 @@ library volumes (see reset-network.sh).
 """
 import argparse
 import copy
-import glob
 import hashlib
 import json
 import os
@@ -136,7 +135,6 @@ CONFIG_FILES = [
     "network/compose/compose-net.yaml", "network/compose/compose-ca.yaml", "network/compose/compose-services.yaml",
 ]
 PEER_CHAINS = "/var/hyperledger/production/ledgersData/chains/chains"
-SATURATION_RATIO = REP.SATURATION_RATIO   # brief §1 Q4: saturated = successful throughput < 0.9 x send rate
 
 
 # ------------------------------------------------------------------ small helpers
@@ -534,9 +532,7 @@ def ensure_network(run, fresh):
 
 
 def set_batcher_env(run, sweeps):
-    bs = run["levels"]["batchSize"]
-    for key in ("BATCH_SIZE", "BATCH_N", "BATCH_K"):   # BATCH_N/K = legacy fallback names
-        set_env_var(key, bs)
+    set_env_var("BATCH_SIZE", run["levels"]["batchSize"])
     set_env_var("BATCH_FLUSH_MS", sweeps["anchoring"]["flush_timeout_ms"])
     set_env_var("BATCH_EPOCH", f"{run['runId'].replace('/', '-')}-{int(time.time())}")
 
@@ -557,14 +553,8 @@ def trace_argv(t, out):
             "--out", out]
 
 
-_trace_cache = {}
-
-
 def ensure_trace(t):
     """Generate (deterministic, cheap) -> benchmark/traces/<hash>.json; returns (path, doc)."""
-    key = json.dumps(t, sort_keys=True)
-    if key in _trace_cache:
-        return _trace_cache[key]
     os.makedirs(TRACES_DIR, exist_ok=True)
     pending = os.path.join(TRACES_DIR, f"pending-{os.getpid()}.json")
     try:
@@ -582,7 +572,6 @@ def ensure_trace(t):
     doc = load_json(final) or sys.exit(f"FATAL: cannot read trace {final}")
     if doc.get("hash") != m[-1]:
         sys.exit(f"FATAL: trace hash mismatch: printed {m[-1]}, file says {doc.get('hash')}")
-    _trace_cache[key] = (final, doc)
     return final, doc
 
 
@@ -658,12 +647,11 @@ def checkpoint(run, label):
 
 
 def network_config_path(run):
-    """Relative to benchmark/ — except a parallel cell off the committed parallel-c{C}.yaml set
-    (a --exp cell channel count), which gets the same rounds.py rendering written into its run
-    dir and passed as that ABSOLUTE path; the paths inside resolve against the Caliper
-    workspace, not the file's location."""
+    """Relative to benchmark/ — except parallel, whose parallel-c{C}.yaml rounds.py renders
+    into the run dir, passed as that ABSOLUTE path; the paths inside resolve against the
+    Caliper workspace, not the file's location."""
     rel = R.network_config(run["variant"], run["levels"]["channels"])
-    if run["variant"] != "parallel" or os.path.exists(os.path.join(BENCH_DIR, rel)):
+    if run["variant"] != "parallel":
         return rel
     path = os.path.join(run["dir"], os.path.basename(rel))
     with open(path, "w", encoding="utf-8", newline="\n") as fh:
@@ -838,7 +826,7 @@ def ramp_summary(manifest):
     for rate, tps, ratio, p95 in rows:
         print(f"  {rate:>6} | {tps:>8.1f} | {ratio:5.2f} | {p95 if p95 is None else round(p95, 1)}")
     sat, suggested = REP.ramp_suggestion(rows)
-    print(f"  saturation (throughput < {SATURATION_RATIO}x send rate): {sat or 'not reached'}; "
+    print(f"  saturation (throughput < {REP.SATURATION_RATIO}x send rate): {sat or 'not reached'}; "
           f"suggested baseline.send_rate_tps = {suggested} (confirm with D)")
 
 
@@ -879,8 +867,6 @@ def main():
                     help="do NOT reset the ledger before the run (default: reset-network.sh before every run, "
                          "which needs GLEIPNIR_ALLOW_LEDGER_WIPE=1). Valid for a single ad-hoc run only — the "
                          "replayed trace collides with the evidence ids already on the ledger")
-    ap.add_argument("--fresh-network", action="store_true",
-                    help="(default since M26; kept so existing command lines keep working)")
     ap.add_argument("--no-monitor", action="store_true", help="omit the Caliper docker resource monitor")
     ap.add_argument("--no-audit", action="store_true", help="skip audit reconstruction")
     ap.add_argument("--sweeps", default=R.SWEEPS_PATH, help="experiment constants file (default benchmark/sweeps.yaml)")

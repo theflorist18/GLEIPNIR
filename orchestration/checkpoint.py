@@ -28,11 +28,7 @@ from datetime import datetime, timezone
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LEDGER = "/var/hyperledger/production/ledgersData"
-PEERS = [
-    ("peer0.org1.example.com", "Org1"),
-    ("peer0.org2.example.com", "Org2"),
-    ("peer0.anchor.example.com", "Anchor"),
-]
+PEERS = ["peer0.org1.example.com", "peer0.org2.example.com", "peer0.anchor.example.com"]
 
 
 def docker_exec(container, cmd):
@@ -52,17 +48,11 @@ def docker_exec(container, cmd):
 
 def du_bytes(container, path):
     out = docker_exec(container, f"du -sb {path} 2>/dev/null | cut -f1")
-    if out is None or out == "":
-        return None
-    try:
-        return int(out.splitlines()[0])
-    except (ValueError, IndexError):
-        return None
+    return int(out) if out and out.isdigit() else None
 
 
 def list_channels(container):
-    out = docker_exec(container, f"ls {LEDGER}/chains/chains 2>/dev/null")
-    return [c for c in (out.split() if out else []) if c]
+    return (docker_exec(container, f"ls {LEDGER}/chains/chains 2>/dev/null") or "").split()
 
 
 def main():
@@ -88,7 +78,7 @@ def main():
             "receiptBytes": receipts,
         }
 
-    for container, _org in PEERS:
+    for container in PEERS:
         channels = list_channels(container)
         if not channels:
             continue

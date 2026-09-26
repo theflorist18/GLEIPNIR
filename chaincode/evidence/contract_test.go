@@ -63,8 +63,6 @@ func (m *memStub) PutState(key string, value []byte) error {
 	return nil
 }
 
-func (m *memStub) DelState(key string) error { delete(m.state, key); return nil }
-
 func (m *memStub) GetTxID() string { return m.txID }
 
 func (m *memStub) GetTxTimestamp() (*timestamppb.Timestamp, error) { return m.ts, nil }

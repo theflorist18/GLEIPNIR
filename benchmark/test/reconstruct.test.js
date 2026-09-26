@@ -29,7 +29,10 @@ function eventsWithProofs(docs) {
 }
 
 // trace: 2 cases on 2 channels, 1 evidence each -> cases=1 reconstructs ev-c001-e001 on case-001
-const TRACE = generateTrace({ seed: 1, cases: 2, channels: 2, evidencePerCase: 1, eventsPerCasePerRound: 2, rounds: 1, workers: 1 });
+const TRACE = generateTrace({
+  seed: 1, cases: 2, channels: 2, evidencePerCase: 1, eventsPerCasePerRound: 2, rounds: 1, workers: 1,
+  mix: { transfer_weight: 0.15, access_weight: 0.85, dispose_fraction: 0.5 }, payloadBytes: 0,
+});
 
 function fakeGateway({ audit, root }) {
   const calls = [];

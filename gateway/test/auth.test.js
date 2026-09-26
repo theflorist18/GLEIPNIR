@@ -8,7 +8,6 @@ const path = require('node:path');
 const { createApp } = require('../src/app');
 const { makeUsersStore } = require('../src/users');
 const { makeSessions } = require('../src/sessions');
-const { safeEqual } = require('../src/auth');
 const { makeSecurityLog } = require('../src/securityLog');
 
 function tmpAuthDir() {
@@ -31,6 +30,8 @@ async function fakeDeps(overrides) {
         async evaluate(_channel, _fn, args) { return JSON.stringify({ id: args[0], status: 'ACTIVE' }); },
       },
       batcher: { async enqueue() { return { batchId: 'shared-b000000', leafIndex: 0 }; } },
+      // Per-evidence authz stub: every user session is a contributor.
+      caseRegistry: { async request() { return { status: 200, body: { allowed: true, roleInCase: 'contributor' } }; } },
       users,
       sessions,
       config: { variant: 'standard', token: 'secret-token', defaultChannel: 'coc-main', ...overrides },
@@ -345,48 +346,9 @@ test('M25: /users/directory — admin and lead sessions see active users only; i
   assert.equal((await fetch(`${url}/api/v1/users/directory`, { headers: asUser('secret-token') })).status, 403);
 });
 
-test('M17 upgrade: a pre-rename users.json (displayName) is migrated to name in place, once', async () => {
-  const dir = tmpAuthDir();
-  const legacy = [{
-    id: 'usr-legacy-1',
-    username: 'old-root',
-    passwordHash: 'scrypt:00:00', // never verified in this test
-    displayName: 'Old Root',
-    role: 'admin',
-    active: true,
-    createdAt: '2026-07-01T00:00:00.000Z',
-    updatedAt: '2026-07-01T00:00:00.000Z',
-  }];
-  fs.writeFileSync(path.join(dir, 'users.json'), JSON.stringify(legacy), 'utf8');
-
-  const store = makeUsersStore(dir);
-  const user = store.getByUsername('old-root');
-  assert.equal(user.name, 'Old Root');
-  assert.equal(user.displayName, undefined);
-
-  // The file on disk was rewritten without displayName (idempotent reopen).
-  const onDisk = JSON.parse(fs.readFileSync(path.join(dir, 'users.json'), 'utf8'));
-  assert.equal(onDisk[0].name, 'Old Root');
-  assert.equal(onDisk[0].displayName, undefined);
-  assert.equal(makeUsersStore(dir).getByUsername('old-root').name, 'Old Root');
-});
-
-// N1 (OWASP A02/A07): the service/internal token comparison is constant-time.
-// safeEqual hashes both sides to a fixed length, so it returns a correct
-// boolean for equal, differing, and length-mismatched inputs without throwing
-// (a raw timingSafeEqual throws on unequal-length buffers).
-test('N1: safeEqual is a correct constant-time-style compare (no throw on length mismatch)', () => {
-  assert.equal(safeEqual('dev-token', 'dev-token'), true);
-  assert.equal(safeEqual('dev-token', 'dev-tokeX'), false);      // same length, differs
-  assert.equal(safeEqual('dev-token', 'dev-token-longer'), false); // different length, no throw
-  assert.equal(safeEqual('', ''), true);
-  assert.equal(safeEqual('secret', ''), false);
-  assert.equal(safeEqual(undefined, 'secret'), false);
-  assert.equal(safeEqual(null, null), true); // both coerce to '' — only reachable when a real token is unset
-});
-
-// Byte-compat guard for N1: a correct service token still authenticates and a
-// near-miss is refused, proving the constant-time swap didn't change behavior.
+// N1 (OWASP A02/A07): the service-token comparison is constant-time. A correct
+// token still authenticates and a near-miss is refused — equal, same-length-
+// differs, and length-mismatch (a raw timingSafeEqual would throw -> 500).
 test('N1: service token still authenticates after the constant-time swap; near-miss -> 401', async (t) => {
   const { deps } = await fakeDeps();
   const { server, url } = await listen(createApp(deps));
@@ -408,14 +370,6 @@ test('N3: idle timeout expires an inactive token; activity slides the window', a
   assert.equal(s.get(tok)?.userId, 'usr-1');            // slid again (80 ms since last activity)
   await new Promise((r) => setTimeout(r, 220));
   assert.equal(s.get(tok), null);                        // idle > 150 ms -> expired
-});
-
-test('N3: idleTtlSeconds=0 disables the idle clock; absolute TTL still enforced', () => {
-  const noIdle = makeSessions({ ttlSeconds: 3600, idleTtlSeconds: 0 });
-  const t1 = noIdle.create('usr-1');
-  assert.equal(noIdle.get(t1)?.userId, 'usr-1');         // never idle-expires
-  const absolute = makeSessions({ ttlSeconds: 0, idleTtlSeconds: 0 });
-  assert.equal(absolute.get(absolute.create('usr-2')), null); // absolute clock still fires
 });
 
 // N4 (OWASP A09): security-relevant failures are logged as structured lines,

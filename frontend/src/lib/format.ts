@@ -13,9 +13,7 @@ export function formatTs(iso: string | null | undefined): string {
   if (!iso) return '—';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return String(iso);
-  const p = (n: number): string => String(n).padStart(2, '0');
-  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} `
-    + `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())} UTC`;
+  return `${d.toISOString().slice(0, 19).replace('T', ' ')} UTC`;
 }
 
 // Evidence head status → terminal? 'DISPOSED' since M26 (DisposeEvidence);
@@ -23,12 +21,3 @@ export function formatTs(iso: string | null | undefined): string {
 // meaning, so pills and filters treat both alike.
 export const isDisposed = (status: string | null | undefined): boolean =>
   status === 'DISPOSED' || status === 'REMOVED';
-
-// Date-only variant for coarse columns ("2026-07-21").
-export function formatDate(iso: string | null | undefined): string {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return String(iso);
-  const p = (n: number): string => String(n).padStart(2, '0');
-  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}`;
-}

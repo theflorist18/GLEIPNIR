@@ -15,11 +15,13 @@
 // round k replays items [k·S, (k+1)·S); (d) per-evidence further-op counts are
 // drawn so totals hit the length exactly.
 //
-// CLI: node trace/generate.js --cases 25 --channels 25 [--evidence-per-case 20
+// CLI: node trace/generate.js --channels 25 [--cases 25] --evidence-per-case 20
 //   --events-per-case-per-round 200 --rounds 5 --workers 4 --seed 20260922
 //   --payload-bytes 256 --transfer-weight .15 --access-weight .85
-//   --dispose-fraction .5] [--out <path>] [--dry]
-// Defaults come from sweeps.yaml. Prints the hash (or, with --dry, opCounts).
+//   --dispose-fraction .5 [--out <path>] [--dry]
+// Every param flag is required (--cases defaults to --channels); a missing one
+// throws. experiment.py passes them all from sweeps.yaml. Prints the hash (or,
+// with --dry, opCounts).
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -41,7 +43,6 @@ function mulberry32(seed) {
 const pad2 = (n) => String(n).padStart(2, '0');
 const pad3 = (n) => String(n).padStart(3, '0');
 const ACTIONS = ['view', 'download', 'export', 'annotate'];
-const DEFAULT_MIX = { transfer_weight: 0.15, access_weight: 0.85, dispose_fraction: 0.5 };
 
 function intParam(v, name, min) {
   const n = Number(v);
@@ -49,8 +50,8 @@ function intParam(v, name, min) {
   return n;
 }
 
-function numParam(v, name, dflt) {
-  const n = v === undefined || v === null ? dflt : Number(v);
+function numParam(v, name) {
+  const n = Number(v);
   if (!Number.isFinite(n) || n < 0) throw new Error(`trace: ${name} must be a non-negative number (got ${v})`);
   return n;
 }
@@ -67,11 +68,11 @@ function normalize(p) {
     rounds: intParam(p.rounds, 'rounds', 1),
     workers: intParam(p.workers, 'workers', 1),
     mix: {
-      transfer_weight: numParam(mix.transfer_weight, 'mix.transfer_weight', DEFAULT_MIX.transfer_weight),
-      access_weight: numParam(mix.access_weight, 'mix.access_weight', DEFAULT_MIX.access_weight),
-      dispose_fraction: numParam(mix.dispose_fraction, 'mix.dispose_fraction', DEFAULT_MIX.dispose_fraction),
+      transfer_weight: numParam(mix.transfer_weight, 'mix.transfer_weight'),
+      access_weight: numParam(mix.access_weight, 'mix.access_weight'),
+      dispose_fraction: numParam(mix.dispose_fraction, 'mix.dispose_fraction'),
     },
-    payloadBytes: intParam(p.payloadBytes === undefined ? 0 : p.payloadBytes, 'payloadBytes', 0),
+    payloadBytes: intParam(p.payloadBytes, 'payloadBytes', 0),
   };
 }
 
@@ -197,49 +198,27 @@ function writeTrace(params, outPath) {
 
 // ---- CLI ----
 
-function parseArgs(argv) {
-  const out = {};
-  for (let i = 0; i < argv.length; i += 1) {
-    const a = argv[i];
-    if (!a.startsWith('--')) throw new Error(`trace: unexpected argument ${a}`);
-    const key = a.slice(2);
-    if (key === 'dry') { out.dry = true; continue; }
-    out[key] = argv[i + 1];
-    i += 1;
-  }
-  return out;
-}
-
-function sweepsDefaults() {
-  let yaml;
-  try { yaml = require('js-yaml'); } catch (_e) { return {}; }
-  try {
-    return yaml.load(fs.readFileSync(path.join(__dirname, '..', 'sweeps.yaml'), 'utf8')) || {};
-  } catch (_e) {
-    return {};
-  }
-}
+const FLAGS = ['seed', 'cases', 'channels', 'evidence-per-case', 'events-per-case-per-round', 'rounds', 'workers',
+  'payload-bytes', 'transfer-weight', 'access-weight', 'dispose-fraction', 'out'];
 
 function main() {
-  const a = parseArgs(process.argv.slice(2));
-  const sw = sweepsDefaults();
-  const wl = sw.workload || {};
-  const pick = (flag, dflt) => (a[flag] !== undefined ? a[flag] : dflt);
-  const channels = pick('channels', 1);
+  const { values: a } = require('node:util').parseArgs({
+    options: { ...Object.fromEntries(FLAGS.map((f) => [f, { type: 'string' }])), dry: { type: 'boolean' } },
+  });
   const params = {
-    seed: pick('seed', sw.seed),
-    cases: pick('cases', channels),   // one channel per case on the parallel variants (sweeps.yaml has no separate cases)
-    channels,
-    evidencePerCase: pick('evidence-per-case', wl.evidence_per_case),
-    eventsPerCasePerRound: pick('events-per-case-per-round', wl.events_per_case_per_round),
-    rounds: pick('rounds', wl.rounds),
-    workers: pick('workers', sw.workers),
+    seed: a.seed,
+    cases: a.cases ?? a.channels,   // one channel per case on the parallel variants (sweeps.yaml has no separate cases)
+    channels: a.channels,
+    evidencePerCase: a['evidence-per-case'],
+    eventsPerCasePerRound: a['events-per-case-per-round'],
+    rounds: a.rounds,
+    workers: a.workers,
     mix: {
-      transfer_weight: pick('transfer-weight', (wl.mix || {}).transfer_weight),
-      access_weight: pick('access-weight', (wl.mix || {}).access_weight),
-      dispose_fraction: pick('dispose-fraction', (wl.mix || {}).dispose_fraction),
+      transfer_weight: a['transfer-weight'],
+      access_weight: a['access-weight'],
+      dispose_fraction: a['dispose-fraction'],
     },
-    payloadBytes: pick('payload-bytes', wl.payload_bytes),
+    payloadBytes: a['payload-bytes'],
   };
   if (a.dry) {
     const t = generateTrace(params);
@@ -261,4 +240,4 @@ if (require.main === module) {
   try { main(); } catch (err) { process.stderr.write(`${err.message}\n`); process.exit(1); }
 }
 
-module.exports = { generateTrace, writeTrace, mulberry32, defaultTracePath };
+module.exports = { generateTrace, writeTrace };

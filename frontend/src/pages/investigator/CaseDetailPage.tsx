@@ -3,13 +3,14 @@ import { Link, useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { GatewayError } from '../../api';
 import { useErr } from '../../hooks/useErr';
-import { ALL_CASE_ROLES, CASE_ROLE_LABELS } from '../../roles';
+import { FLAG_LABEL, FLAGS } from '../../roles';
 import { Badge } from '../../components/ui/Badge';
-import { Modal } from '../../components/ui/Modal';
 import { Tabs } from '../../components/ui/Tabs';
 import { Timeline } from '../../components/ui/Timeline';
+import { AddMemberModal, RosterList } from '../../components/TeamRoster';
 import { activityLine, activityTone } from '../../lib/activity';
 import { formatTs, isDisposed } from '../../lib/format';
+import { saveBlob } from '../../lib/save';
 import type { CaseActivityEvent, CaseDetail, CaseRole, EvidenceFlag, EvidenceIndexRow, User } from '../../types';
 import { StatusPill } from '../../components/ui/Chips';
 
@@ -20,16 +21,9 @@ const FLAG_TONE: Record<Exclude<EvidenceFlag, null>, 'danger' | 'ok' | 'warn'> =
   PROCESSED: 'ok',
   NEEDS_LEAD_REVIEW: 'warn',
 };
-const FLAG_LABEL: Record<Exclude<EvidenceFlag, null>, string> = {
-  HIGH_PRIORITY: 'High priority',
-  PROCESSED: 'Processed',
-  NEEDS_LEAD_REVIEW: 'Needs lead review',
-};
-const FLAGS: Array<Exclude<EvidenceFlag, null>> = ['HIGH_PRIORITY', 'PROCESSED', 'NEEDS_LEAD_REVIEW'];
 
-// M25: the same general file-type presets case-registry seeds into new cases
-// (and backfills into zero-category ones). Shown as one-click adds for
-// partially-curated cases where the lead wants one back.
+// M25: the same general file-type presets case-registry seeds into new cases.
+// Shown as one-click adds for partially-curated cases where the lead wants one back.
 const PRESET_CATEGORIES = ['Image', 'Video', 'Audio', 'Text', 'Document', 'PDF', 'Spreadsheet', 'Archive', 'Other'];
 
 // M25: the evidence-tab export is CLIENT-side CSV over exactly the filtered
@@ -71,8 +65,6 @@ export function CaseDetailPage() {
   const [tab, setTab] = useState('overview');
 
   const [adding, setAdding] = useState(false);
-  const [pUser, setPUser] = useState('');
-  const [pRole, setPRole] = useState<CaseRole>('viewer');
   const [directory, setDirectory] = useState<User[]>([]);
 
   const catErr = useErr();
@@ -122,21 +114,13 @@ export function CaseDetailPage() {
     return true;
   });
 
-  const exportFilteredCsv = () => {
-    const blob = new Blob([evidenceCsv(filteredEvidence, catNameOf)], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${detail.name.replace(/[^A-Za-z0-9._-]+/g, '_')}-evidence.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
+  const exportFilteredCsv = () =>
+    saveBlob(new Blob([evidenceCsv(filteredEvidence, catNameOf)], { type: 'text/csv' }), `${detail.name.replace(/[^A-Za-z0-9._-]+/g, '_')}-evidence.csv`);
 
-  const addParticipant = () =>
+  const addParticipant = (userId: string, roleInCase: CaseRole) =>
     teamErr.run(async () => {
-      await client.addParticipant(caseId, pUser, pRole);
+      await client.addParticipant(caseId, userId, roleInCase);
       setAdding(false);
-      setPUser('');
       setActivity(null); // stale
       await refresh();
     });
@@ -251,29 +235,13 @@ export function CaseDetailPage() {
                     }}>Add participant</button>
                   </div>
                 )}
-                <ul className="plain-list">
-                  {detail.participants.map((p) => (
-                    <li key={p.userId}>
-                      <span>
-                        {p.userId}{' '}
-                        <Badge tone={p.roleInCase === 'lead' ? 'warn' : 'muted'}>{CASE_ROLE_LABELS[p.roleInCase]}</Badge>
-                      </span>
-                      {canManageTeam && (
-                        <span className="btn-row">
-                          <select
-                            value={p.roleInCase}
-                            aria-label={`role of ${p.userId}`}
-                            onChange={(e) => changeRole(p.userId, e.target.value as CaseRole)}
-                          >
-                            {ALL_CASE_ROLES.map((r) => <option key={r} value={r}>{CASE_ROLE_LABELS[r]}</option>)}
-                          </select>
-                          <button className="small" onClick={() => removeParticipant(p.userId)}>Remove</button>
-                        </span>
-                      )}
-                    </li>
-                  ))}
-                  {detail.participants.length === 0 && <li className="muted small">No participants yet.</li>}
-                </ul>
+                <RosterList
+                  participants={detail.participants}
+                  manage={canManageTeam}
+                  label={(u) => `role of ${u}`}
+                  onRole={changeRole}
+                  onRemove={removeParticipant}
+                />
                 {canManageTeam && <p className="hint">Viewer = view/export · Contributor = + add evidence &amp; annotations · Case Lead = everything incl. removal &amp; this roster. A case keeps at least one lead.</p>}
                 {teamErr.msg && <div className="err">{teamErr.msg}</div>}
               </div>
@@ -355,41 +323,14 @@ export function CaseDetailPage() {
       </div>
 
       {adding && (
-        <Modal title="Add participant" onClose={() => setAdding(false)}>
-          <div className="form">
-            {(() => {
-              // Candidates: active users not yet on the roster; case-lead
-              // grants need a global-lead target (server-enforced — the
-              // picker just avoids offering a guaranteed 400).
-              const candidates = directory.filter((u) =>
-                !detail.participants.some((p) => p.userId === u.username)
-                && (pRole !== 'lead' || u.role === 'lead'));
-              return (
-                <>
-                  <label>user
-                    <select value={pUser} onChange={(e) => setPUser(e.target.value)}>
-                      <option value="">— pick a user —</option>
-                      {candidates.map((u) => (
-                        <option key={u.id} value={u.username}>{u.username}{u.name && u.name !== u.username ? ` — ${u.name}` : ''} ({u.role})</option>
-                      ))}
-                    </select>
-                  </label>
-                  {candidates.length === 0 && <p className="hint">{pRole === 'lead' ? 'No global-lead users are available to add.' : 'Every active user is already on this roster.'}</p>}
-                </>
-              );
-            })()}
-            <label>role in case
-              <select value={pRole} onChange={(e) => { const r = e.target.value as CaseRole; setPRole(r); if (r === 'lead' && !directory.some((u) => u.username === pUser && u.role === 'lead')) setPUser(''); }}>
-                {ALL_CASE_ROLES.map((r) => <option key={r} value={r}>{CASE_ROLE_LABELS[r]}</option>)}
-              </select>
-            </label>
-            <div className="btn-row">
-              <button disabled={!pUser} onClick={addParticipant}>Grant access</button>
-              <button className="small" onClick={() => setAdding(false)}>Cancel</button>
-            </div>
-            {teamErr.msg && <div className="err">{teamErr.msg}</div>}
-          </div>
-        </Modal>
+        <AddMemberModal
+          title="Add participant"
+          roster={detail.participants}
+          directory={directory}
+          onAdd={addParticipant}
+          onClose={() => setAdding(false)}
+          err={teamErr.msg}
+        />
       )}
     </div>
   );

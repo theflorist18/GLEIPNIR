@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { formatTs } from '../../lib/format';
+import { saveBlob } from '../../lib/save';
 import { Link, useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { GatewayError } from '../../api';
@@ -32,12 +33,7 @@ export function CoCReportPage() {
   const downloadCsv = () =>
     run(async () => {
       const { blob, filename } = await client.downloadCocReportCsv(caseId);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      a.click();
-      URL.revokeObjectURL(url);
+      saveBlob(blob, filename);
     });
 
   if (err) return <div className="report-page"><div className="card err">{err}</div></div>;

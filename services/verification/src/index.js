@@ -46,15 +46,6 @@ function loadConfig() {
   };
 }
 
-// Append one metric line per completed 3-step verify. Fire-and-forget and OFF
-// the timed path: the step values are already captured (process.hrtime) before
-// this runs, and the async append never blocks the event loop, so it cannot
-// perturb the latency it records. Failures (e.g. no volume mounted) are ignored.
-function recordVerifyMetric(cfg, line) {
-  if (!cfg.metricsPath) return;
-  fsp.appendFile(cfg.metricsPath, `${JSON.stringify(line)}\n`).catch(() => {});
-}
-
 const msSince = (start) => Number(process.hrtime.bigint() - start) / 1e6;
 
 function createApp(overrides) {
@@ -65,25 +56,16 @@ function createApp(overrides) {
   // through the gateway's internal endpoint (bearer-authed); Parallel-Anchored
   // reads it from the anchor-client. Returns the merkleRoot string.
   async function readAnchoredRoot(scopeId, batchId) {
-    if (cfg.variant === 'parallel-anchored') {
-      const resp = await fetch(
-        `${cfg.anchorClientUrl}/roots/${encodeURIComponent(scopeId)}/${encodeURIComponent(batchId)}`,
-      );
-      if (resp.status === 404) return null;
-      if (!resp.ok) throw new Error(`anchor-client /roots -> ${resp.status}`);
-      return (await resp.json()).merkleRoot;
-    }
-    const resp = await fetch(
-      `${cfg.gatewayUrl}/internal/anchor-root/${encodeURIComponent(scopeId)}/${encodeURIComponent(batchId)}`,
-      { headers: { authorization: `Bearer ${cfg.token}` } },
-    );
+    const key = `${encodeURIComponent(scopeId)}/${encodeURIComponent(batchId)}`;
+    const resp = cfg.variant === 'parallel-anchored'
+      ? await fetch(`${cfg.anchorClientUrl}/roots/${key}`)
+      : await fetch(`${cfg.gatewayUrl}/internal/anchor-root/${key}`, { headers: { authorization: `Bearer ${cfg.token}` } });
     if (resp.status === 404) return null;
-    if (!resp.ok) throw new Error(`gateway /internal/anchor-root -> ${resp.status}`);
+    if (!resp.ok) throw new Error(`anchor root read ${resp.url} -> ${resp.status}`);
     return (await resp.json()).merkleRoot;
   }
 
   const app = express();
-  app.use(express.json({ limit: '1mb' }));
 
   app.get('/healthz', (_req, res) => res.json({ ok: true }));
 
@@ -164,16 +146,12 @@ function createApp(overrides) {
     const ok = anchoredRoot === recomputedRoot;
     // RQ2: record the complete 3-step measurement (only the 200 path ran all
     // three steps; error paths have partial timings and are not recorded).
-    recordVerifyMetric(cfg, {
-      ts: new Date().toISOString(),
-      eventId,
-      ok,
-      leafSource,
-      fetchMs: steps.fetchMs,
-      recomputeMs: steps.recomputeMs,
-      compareRootMs: steps.compareRootMs,
-      latencyMs,
-    });
+    // Fire-and-forget and OFF the timed path: the steps are already captured and
+    // the async append never blocks, so it cannot perturb the latency it records.
+    // Failures (e.g. no volume mounted) are ignored.
+    if (cfg.metricsPath) {
+      fsp.appendFile(cfg.metricsPath, `${JSON.stringify({ ts: new Date().toISOString(), eventId, ok, leafSource, ...steps, latencyMs })}\n`).catch(() => {});
+    }
     // A mismatch is a tamper signal, not a server error -> 200 with ok:false.
     return res.status(200).json({ ok, reason: ok ? undefined : 'root-mismatch', latencyMs, leafSource, steps });
   });

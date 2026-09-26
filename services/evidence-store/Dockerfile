@@ -5,7 +5,6 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY src ./src
-ENV DATA_DIR=/data
 EXPOSE 4006
 # /data is a named volume (evidence-blob-data); ensure the node user can write it.
 RUN mkdir -p /data && chown -R node:node /data

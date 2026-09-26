@@ -131,17 +131,10 @@ async function reconstruct(opts) {
 
 // ---- CLI ----
 
-function parseArgs(argv) {
-  const out = {};
-  for (let i = 0; i < argv.length; i += 2) {
-    if (!argv[i].startsWith('--')) throw new Error(`reconstruct: unexpected argument ${argv[i]}`);
-    out[argv[i].slice(2)] = argv[i + 1];
-  }
-  return out;
-}
-
 async function main() {
-  const a = parseArgs(process.argv.slice(2));
+  const { values: a } = require('node:util').parseArgs({
+    options: Object.fromEntries(['variant', 'trace', 'cases', 'gateway', 'out', 'token'].map((f) => [f, { type: 'string' }])),
+  });
   if (!a.variant || !a.trace) throw new Error('usage: reconstruct.js --variant V --trace <file> [--cases N] [--gateway URL] [--out FILE]');
   const result = await reconstruct(a);
   const json = `${JSON.stringify(result, null, 2)}\n`;
@@ -154,4 +147,4 @@ if (require.main === module) {
   main().catch((err) => { process.stderr.write(`${err.message}\n`); process.exit(1); });
 }
 
-module.exports = { reconstruct, selectCases };
+module.exports = { reconstruct };

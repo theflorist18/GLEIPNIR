@@ -15,9 +15,8 @@
 //
 // The sink defaults to console; tests inject a fake sink to assert output.
 
-function makeSecurityLog({ enabled = true, sink = console } = {}) {
+function makeSecurityLog({ sink = console } = {}) {
   function emit(event, fields) {
-    if (!enabled) return;
     const rec = { ts: new Date().toISOString(), sec: event, ...fields };
     // console.warn -> stderr, keeping security events off the stdout data plane.
     sink.warn(`[security] ${JSON.stringify(rec)}`);
@@ -36,9 +35,9 @@ function makeSecurityLog({ enabled = true, sink = console } = {}) {
         path: req.path,
       }),
     loginFailure: (req, username) =>
-      emit('login_failure', { username: typeof username === 'string' ? username : null, ip: req.ip }),
+      emit('login_failure', { username, ip: req.ip }),
     loginLockout: (req, username) =>
-      emit('login_lockout', { username: typeof username === 'string' ? username : null, ip: req.ip }),
+      emit('login_lockout', { username, ip: req.ip }),
   };
 }
 

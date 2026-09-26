@@ -1,6 +1,5 @@
 # gleipnir.mplstyle — thesis figures for orchestration/report.py
 # Use: plt.style.use("orchestration/gleipnir.mplstyle"), then plot with VARIANT_STYLE (viz/variant_style.py).
-# Font: Figtree (OFL) registered from orchestration/fonts/ via font_manager.fontManager.addfont(); falls back to Segoe UI / DejaVu Sans.
 font.family: sans-serif
 font.sans-serif: Figtree, Segoe UI, DejaVu Sans
 font.size: 9
@@ -29,17 +28,11 @@ ytick.labelsize: 9
 xtick.direction: out
 ytick.direction: out
 lines.linewidth: 1.8
-lines.markersize: 6
 errorbar.capsize: 3
 legend.fontsize: 8
 legend.frameon: False
 legend.handlelength: 3.2
-hatch.linewidth: 0.8
 figure.figsize: 6.4, 4.2
-figure.dpi: 130
-figure.facecolor: FFFFFF
 savefig.dpi: 300
 savefig.facecolor: FFFFFF
 savefig.bbox: tight
-svg.fonttype: none
-pdf.fonttype: 42

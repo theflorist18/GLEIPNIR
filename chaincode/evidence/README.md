@@ -40,7 +40,7 @@ These annotations live as comments on the four ops in `contract.go`; keep them o
   ONLY by `CreateEvidence`/`TransferCustody`/`DisposeEvidence`, which are semantically
   serial per evidence (custody is a chain).
 - **Event** `("evt", [evidenceId, sortKey])`, append-only, where
-  `sortKey = zeroPad19(txTimestampUnixNanos) + "-" + txID[:12]`. Both parts come from the
+  `sortKey = fmt.Sprintf("%019d", txTimestampUnixNanos) + "-" + txID[:12]`. Both parts come from the
   signed proposal (`GetTxTimestamp`/`GetTxID`), so keys are deterministic across endorsers,
   unique per tx, and commit-ordered — **without a shared counter key**.
 - **Anchor root** `("root", [scopeId, batchId])`, `scopeId = meta.caseId || "shared"`.

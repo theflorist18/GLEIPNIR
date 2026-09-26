@@ -8,12 +8,12 @@
 // Legacy `scenario: shared` (the Stage-1 zero-MVCC-conflict gate: every worker
 // hits ONE evidenceId) is kept: it needs no pool and proves the composite
 // (evidenceId, sortKey) design produces zero MVCC_READ_CONFLICT under
-// concurrency. roundArguments: { mode, label, variant?, channels?, caseId?,
-// channel?, pool, payloadBytes?, scenario?, sharedEvidenceId? }.
+// concurrency. roundArguments: { mode, label, variant?, channels?, pool,
+// payloadBytes?, scenario?, sharedEvidenceId? }.
 // Each timed tx is logged via lib/txlog (GLEIPNIR_TXLOG_DIR).
 
 const { WorkloadModuleBase } = require('@hyperledger/caliper-core');
-const { fabricRequest } = require('./lib/payloads');
+const { opRequest } = require('./lib/payloads');
 const { seedPool } = require('./lib/pool');
 const txlog = require('./lib/txlog');
 
@@ -26,11 +26,7 @@ class AccessLogWorkload extends WorkloadModuleBase {
     this.n = 0;
     if (roundArguments.scenario === 'shared') {
       // AccessLog never reads the head, so even a not-yet-created id appends without conflict.
-      this.targets = [{
-        id: roundArguments.sharedEvidenceId || 'ev-shared-gate',
-        caseId: roundArguments.caseId || null,
-        channel: roundArguments.channel || null,
-      }];
+      this.targets = [{ id: roundArguments.sharedEvidenceId || 'ev-shared-gate', caseId: null }];
     } else {
       this.targets = await seedPool(this, roundArguments.pool || 25);
     }
@@ -41,15 +37,10 @@ class AccessLogWorkload extends WorkloadModuleBase {
     this.n += 1;
     const actor = `worker-${this.workerIndex}`;
     const action = `access-${this.n}`;
-    const req = this.mode === 'rest'
-      ? {
-        method: 'POST',
-        path: `/api/v1/evidence/${encodeURIComponent(target.id)}/access`,
-        body: { actor, action, ...(target.caseId ? { caseId: target.caseId } : {}) },
-      }
-      : fabricRequest('AccessLog', [target.id, actor, action], target.channel);
-    const status = await this.sutAdapter.sendRequests(req);
-    txlog.log(this.workerIndex, this.label, 'ACCESS', target.caseId || target.channel, target.id, status);
+    const status = await this.sutAdapter.sendRequests(opRequest(this.mode, {
+      op: 'ACCESS', evidenceId: target.id, actor, detail: { action },
+    }, target.caseId));
+    txlog.log(this.workerIndex, this.label, 'ACCESS', target.caseId, target.id, status);
     return status;
   }
 }

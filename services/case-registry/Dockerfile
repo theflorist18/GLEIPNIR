@@ -15,7 +15,6 @@ RUN apt-get update \
  && apt-get purge -y --auto-remove python3 make g++ \
  && rm -rf /var/lib/apt/lists/*
 COPY src ./src
-ENV DATA_DIR=/data
 EXPOSE 4005
 # /data is a named volume (case-registry-data); ensure the node user can write it.
 RUN mkdir -p /data && chown -R node:node /data

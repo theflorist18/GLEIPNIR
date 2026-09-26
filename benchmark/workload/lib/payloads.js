@@ -70,6 +70,36 @@ function fabricRequest(fn, args, channel) {
   return req;
 }
 
+// The four CoC writes for either path, from an item {op, evidenceId, actor,
+// detail} (a trace item, or one built by a per-operation workload). `caseId` is
+// the fabric channel / the rest body scope; null for standard / anchoring.
+function fabricReq(item, channel) {
+  const id = item.evidenceId;
+  const d = item.detail || {};
+  switch (item.op) {
+    case 'CREATE': return fabricRequest('CreateEvidence', [id, codexJson(id, item.actor, d.payload)], channel);
+    case 'TRANSFER': return fabricRequest('TransferCustody', [id, d.newCustodian, d.reason || ''], channel);
+    case 'ACCESS': return fabricRequest('AccessLog', [id, item.actor, d.action || ''], channel);
+    case 'DISPOSE': return fabricRequest('DisposeEvidence', [id, d.reason || ''], channel);
+    default: throw new Error(`trace: unknown op ${item.op}`);
+  }
+}
+
+function restReq(item, caseId) {
+  const id = encodeURIComponent(item.evidenceId);
+  const d = item.detail || {};
+  const scope = caseId ? { caseId } : {};
+  switch (item.op) {
+    case 'CREATE': return { method: 'POST', path: '/api/v1/evidence', body: createRestBody(item.evidenceId, item.actor, caseId, d.payload) };
+    case 'TRANSFER': return { method: 'POST', path: `/api/v1/evidence/${id}/transfer`, body: { newCustodian: d.newCustodian, reason: d.reason || '', actor: item.actor, ...scope } };
+    case 'ACCESS': return { method: 'POST', path: `/api/v1/evidence/${id}/access`, body: { actor: item.actor, action: d.action || '', ...scope } };
+    case 'DISPOSE': return { method: 'DELETE', path: `/api/v1/evidence/${id}`, body: { reason: d.reason || '', actor: item.actor, ...scope } };
+    default: throw new Error(`trace: unknown op ${item.op}`);
+  }
+}
+
+const opRequest = (mode, item, caseId) => (mode === 'rest' ? restReq : fabricReq)(item, caseId);
+
 // Round-robin case selector for multi-channel Parallel cells (audit F6/F24).
 // With roundArguments.channels = C, successive calls yield case-001..case-00C
 // cyclically (offset by workerIndex so workers do not synchronise on one case),
@@ -90,4 +120,4 @@ function caseSelector(roundArguments, workerIndex) {
   };
 }
 
-module.exports = { evidenceId, filler, integrityProof, codexJson, createRestBody, fabricRequest, caseSelector };
+module.exports = { evidenceId, filler, createRestBody, fabricRequest, opRequest, caseSelector };

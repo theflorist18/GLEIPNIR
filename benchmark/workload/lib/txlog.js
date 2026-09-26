@@ -74,42 +74,32 @@ function write(workerIndex, line) {
   if (!st.timer && !st.inflight) st.timer = setTimeout(() => flush(st), 200).unref();
 }
 
+// One line, in the key order of the header's schema.
+const entry = (round, op, caseId, evidenceId, tCreate, tFinal, ok, err, timed) => ({
+  round,
+  op,
+  caseId: caseId || null,
+  evidenceId: evidenceId || null,
+  tCreate,
+  tFinal,
+  latencyMs: tFinal && tCreate ? tFinal - tCreate : null,
+  ok: Boolean(ok),
+  err: err || null,
+  timed,
+});
+
 // status: the Caliper TxStatus returned by sutAdapter.sendRequests(single request).
 // timed=false for untimed pool seeding (still a ledger write; see the header).
 function log(workerIndex, round, op, caseId, evidenceId, status, timed = true) {
   if (!dir || !status) return;
-  const tCreate = status.GetTimeCreate();
-  const tFinal = status.GetTimeFinal();
-  write(workerIndex, {
-    round,
-    op,
-    caseId: caseId || null,
-    evidenceId: evidenceId || null,
-    tCreate,
-    tFinal,
-    latencyMs: tFinal && tCreate ? tFinal - tCreate : null,
-    ok: status.IsCommitted(),
-    err: errText(status),
-    timed: Boolean(timed),
-  });
+  write(workerIndex, entry(round, op, caseId, evidenceId, status.GetTimeCreate(), status.GetTimeFinal(),
+    status.IsCommitted(), errText(status), Boolean(timed)));
 }
 
 // An untimed ledger write performed OUTSIDE the connector (verify.js seeds over
 // plain fetch, so there is no TxStatus). Same storage accounting, no timings.
 function logUntimed(workerIndex, round, op, caseId, evidenceId, ok, err) {
-  if (!dir) return;
-  write(workerIndex, {
-    round,
-    op,
-    caseId: caseId || null,
-    evidenceId: evidenceId || null,
-    tCreate: null,
-    tFinal: null,
-    latencyMs: null,
-    ok: Boolean(ok),
-    err: err || null,
-    timed: false,
-  });
+  if (dir) write(workerIndex, entry(round, op, caseId, evidenceId, null, null, ok, err, false));
 }
 
-module.exports = { log, logUntimed, enabled: Boolean(dir) };
+module.exports = { log, logUntimed };

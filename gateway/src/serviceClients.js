@@ -1,11 +1,46 @@
 'use strict';
 
-// Thin HTTP clients to the two library services (M13c): case-registry and
-// evidence-store. Injected into createApp like batcherClient so every library
-// route is unit-testable offline with fakes. Both services authenticate the
-// gateway with the shared X-Gleipnir-Internal-Token header — end-user authz
-// decisions stay in the gateway; the internal token only proves "this call
-// came from the gateway".
+// Thin HTTP clients to the gateway's off-chain services: merkle-batcher,
+// receipt-store, and the two library services (M13c) case-registry and
+// evidence-store. Injected into createApp so every route is unit-testable
+// offline with fakes. The library services authenticate the gateway with the
+// shared X-Gleipnir-Internal-Token header — end-user authz decisions stay in
+// the gateway; the internal token only proves "this call came from the gateway".
+
+// Batcher / receipt-store: a non-2xx answer is a 502 to the caller.
+async function okJson(resp, what) {
+  if (resp.ok) return resp.json();
+  const err = new Error(`${what} -> ${resp.status} ${await resp.text().catch(() => '')}`);
+  err.status = 502;
+  throw err;
+}
+
+// merkle-batcher enqueue: the Anchoring / Parallel-Anchored write path
+// (docs/CONTRACTS.md §6, §9).
+function makeBatcherClient(batcherUrl) {
+  return {
+    async enqueue(event) {
+      return okJson(await fetch(`${batcherUrl}/events`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(event),
+      }), 'batcher /events');
+    },
+  };
+}
+
+// receipt-store per-evidence index (M26): the READ path of the batched
+// variants, whose audit events never land on the app channel as records — a
+// trail is reassembled from the receipts (each carries the CoC `event` it
+// witnesses).
+function makeReceiptsClient(receiptStoreUrl) {
+  return {
+    // -> JSON array of receipts in index (enqueue) order; [] when none.
+    async listByEvidence(evidenceId) {
+      return okJson(await fetch(`${receiptStoreUrl}/receipts?evidenceId=${encodeURIComponent(evidenceId)}`), 'receipt-store /receipts?evidenceId');
+    },
+  };
+}
 
 function makeCaseRegistryClient(baseUrl, internalToken) {
   // Generic pass-through: the gateway's proxy routes translate/forward the
@@ -72,4 +107,4 @@ function makeEvidenceStoreClient(baseUrl, internalToken) {
   return { put, fetchBlob, del };
 }
 
-module.exports = { makeCaseRegistryClient, makeEvidenceStoreClient };
+module.exports = { makeBatcherClient, makeReceiptsClient, makeCaseRegistryClient, makeEvidenceStoreClient };

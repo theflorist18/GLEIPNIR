@@ -11,7 +11,7 @@ export function EvidenceCard({ record }: { record: EvidenceRecord | null }) {
         <span className="mono small">{record.id ?? '—'}</span>
         <StatusPill status={record.status} />
       </div>
-      <dl>
+      <dl className="kv">
         <dt>version</dt><dd>{record.version ?? '—'}</dd>
         <dt>custodian</dt><dd>{record.custodian ?? record.identity?.subject ?? '—'}</dd>
         <dt>org</dt><dd>{record.identity?.org ?? '—'}</dd>

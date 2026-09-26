@@ -69,13 +69,14 @@ def main():
     assert rejected(cell_args(exp="e3a", cases=5))
     assert E.cell_levels(cell_args(exp="e3a"), SW, R.VARIANTS) is None
 
-    # An off-grid channel count renders its own network config into the run dir.
+    # Parallel renders its network config into the run dir (nothing committed); the others are fixed files.
     with tempfile.TemporaryDirectory() as d:
         run = {"variant": "parallel", "levels": {"channels": 7}, "dir": d}
         path = E.network_config_path(run)
         assert path == os.path.join(d, "parallel-c7.yaml") and "case-007" in open(path).read()
         run["levels"]["channels"] = B["channels"]
-        assert E.network_config_path(run) == f"networks/parallel-c{B['channels']}.yaml"
+        assert E.network_config_path(run) == os.path.join(d, f"parallel-c{B['channels']}.yaml")
+        assert E.network_config_path({**run, "variant": "standard"}) == "networks/coc-main.yaml"
 
     # Channels == cases in EVERY plan for the parallel variants; 1 for standard/anchoring.
     for exp in ("e0", "ramp", "e1", "e2", "e3a", "e3b", "ops"):

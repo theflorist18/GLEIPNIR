@@ -29,73 +29,11 @@ const sampleReceipt = {
   rootRef: { scopeId: 'shared', batchId: 'shared-b000000', txId: null },
 };
 
-test('put then get returns the exact receipt', async (t) => {
-  const app = createApp({ dataDir: tmpDataDir(), logLevel: 'silent' });
-  const { server, url } = await listen(app);
+async function start(t, dataDir = tmpDataDir()) {
+  const { server, url } = await listen(createApp({ dataDir, logLevel: 'silent' }));
   t.after(() => server.close());
-
-  const put = await fetch(`${url}/receipts/evt-abc`, {
-    method: 'PUT',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(sampleReceipt),
-  });
-  assert.equal(put.status, 200);
-
-  const get = await fetch(`${url}/receipts/evt-abc`);
-  assert.equal(get.status, 200);
-  assert.deepEqual(await get.json(), sampleReceipt);
-});
-
-test('upsert overwrites (re-PUT with txId)', async (t) => {
-  const app = createApp({ dataDir: tmpDataDir(), logLevel: 'silent' });
-  const { server, url } = await listen(app);
-  t.after(() => server.close());
-
-  await fetch(`${url}/receipts/evt-abc`, {
-    method: 'PUT',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(sampleReceipt),
-  });
-  const withTx = { ...sampleReceipt, rootRef: { ...sampleReceipt.rootRef, txId: 'tx-1' } };
-  await fetch(`${url}/receipts/evt-abc`, {
-    method: 'PUT',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(withTx),
-  });
-  const got = await (await fetch(`${url}/receipts/evt-abc`)).json();
-  assert.equal(got.rootRef.txId, 'tx-1');
-});
-
-test('missing receipt returns 404', async (t) => {
-  const app = createApp({ dataDir: tmpDataDir(), logLevel: 'silent' });
-  const { server, url } = await listen(app);
-  t.after(() => server.close());
-
-  const get = await fetch(`${url}/receipts/does-not-exist`);
-  assert.equal(get.status, 404);
-});
-
-test('invalid eventId is rejected 400 (path-traversal guard)', async (t) => {
-  const app = createApp({ dataDir: tmpDataDir(), logLevel: 'silent' });
-  const { server, url } = await listen(app);
-  t.after(() => server.close());
-
-  // '..%2F' decodes to '../' — the charset guard must reject it.
-  const bad = await fetch(`${url}/receipts/..%2Fescape`);
-  assert.equal(bad.status, 400);
-});
-
-test('healthz', async (t) => {
-  const app = createApp({ dataDir: tmpDataDir(), logLevel: 'silent' });
-  const { server, url } = await listen(app);
-  t.after(() => server.close());
-  assert.deepEqual(await (await fetch(`${url}/healthz`)).json(), { ok: true });
-});
-
-// ---- per-evidence index + listing (supervisor brief 2026-09-22 §6) ----
-// The receipt now carries `evidenceId` + `event`; the store indexes eventIds
-// under DATA_DIR/idx/<evidenceId>.txt and lists them back in index order.
-// This is an index and an event copy, nothing more — still un-hardened.
+  return url;
+}
 
 function put(url, id, body) {
   return fetch(`${url}/receipts/${id}`, {
@@ -104,6 +42,51 @@ function put(url, id, body) {
     body: JSON.stringify(body),
   });
 }
+
+test('put then get returns the exact receipt', async (t) => {
+  const url = await start(t);
+
+  assert.equal((await put(url, 'evt-abc', sampleReceipt)).status, 200);
+
+  const get = await fetch(`${url}/receipts/evt-abc`);
+  assert.equal(get.status, 200);
+  assert.deepEqual(await get.json(), sampleReceipt);
+});
+
+test('upsert overwrites (re-PUT with txId)', async (t) => {
+  const url = await start(t);
+
+  await put(url, 'evt-abc', sampleReceipt);
+  const withTx = { ...sampleReceipt, rootRef: { ...sampleReceipt.rootRef, txId: 'tx-1' } };
+  await put(url, 'evt-abc', withTx);
+  const got = await (await fetch(`${url}/receipts/evt-abc`)).json();
+  assert.equal(got.rootRef.txId, 'tx-1');
+});
+
+test('missing receipt returns 404', async (t) => {
+  const url = await start(t);
+
+  const get = await fetch(`${url}/receipts/does-not-exist`);
+  assert.equal(get.status, 404);
+});
+
+test('invalid eventId is rejected 400 (path-traversal guard)', async (t) => {
+  const url = await start(t);
+
+  // '..%2F' decodes to '../' — the charset guard must reject it.
+  const bad = await fetch(`${url}/receipts/..%2Fescape`);
+  assert.equal(bad.status, 400);
+});
+
+test('healthz', async (t) => {
+  const url = await start(t);
+  assert.deepEqual(await (await fetch(`${url}/healthz`)).json(), { ok: true });
+});
+
+// ---- per-evidence index + listing (supervisor brief 2026-09-22 §6) ----
+// The receipt now carries `evidenceId` + `event`; the store indexes eventIds
+// under DATA_DIR/idx/<evidenceId>.txt and lists them back in index order.
+// This is an index and an event copy, nothing more — still un-hardened.
 
 function receiptFor(eventId, evidenceId, seq) {
   return {
@@ -116,9 +99,7 @@ function receiptFor(eventId, evidenceId, seq) {
 
 test('GET /receipts?evidenceId lists receipts in first-PUT order; re-PUT is idempotent', async (t) => {
   const dataDir = tmpDataDir();
-  const app = createApp({ dataDir, logLevel: 'silent' });
-  const { server, url } = await listen(app);
-  t.after(() => server.close());
+  const url = await start(t, dataDir);
 
   assert.equal((await put(url, 'evt-b', receiptFor('evt-b', 'ev-1', 0))).status, 200);
   assert.equal((await put(url, 'evt-a', receiptFor('evt-a', 'ev-1', 1))).status, 200);
@@ -142,9 +123,7 @@ test('GET /receipts?evidenceId lists receipts in first-PUT order; re-PUT is idem
 });
 
 test('GET /receipts?evidenceId -> [] when unknown; 400 when missing/invalid', async (t) => {
-  const app = createApp({ dataDir: tmpDataDir(), logLevel: 'silent' });
-  const { server, url } = await listen(app);
-  t.after(() => server.close());
+  const url = await start(t);
 
   assert.deepEqual(await (await fetch(`${url}/receipts?evidenceId=nobody`)).json(), []);
   assert.equal((await fetch(`${url}/receipts`)).status, 400);
@@ -152,9 +131,7 @@ test('GET /receipts?evidenceId -> [] when unknown; 400 when missing/invalid', as
 });
 
 test('receipt without evidenceId is stored but not indexed; bad evidenceId is 400', async (t) => {
-  const app = createApp({ dataDir: tmpDataDir(), logLevel: 'silent' });
-  const { server, url } = await listen(app);
-  t.after(() => server.close());
+  const url = await start(t);
 
   assert.equal((await put(url, 'evt-abc', sampleReceipt)).status, 200); // legacy shape
   assert.equal((await fetch(`${url}/receipts/evt-abc`)).status, 200);

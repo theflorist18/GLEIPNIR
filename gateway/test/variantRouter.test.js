@@ -184,15 +184,6 @@ test('parallel-anchored reads: caseId validation unchanged (400 before any recei
   assert.equal(f.evaluates.length, 0);
 });
 
-test('batched read without a receipts client is a 503, never a crash', async () => {
-  const f = fakes();
-  delete f.deps.receipts;
-  await assert.rejects(
-    routeRead({ variant: 'anchoring', fn: 'GetAuditTrail', args: ['ev-1'] }, f.deps),
-    (err) => err instanceof RequestError && err.status === 503,
-  );
-});
-
 test('direct variants still evaluate the chaincode and never touch the receipt store', async () => {
   const f = fakes();
   const out = JSON.parse(await routeRead({ variant: 'standard', fn: 'GetAuditTrail', args: ['ev-1'] }, f.deps));

@@ -35,7 +35,7 @@ export function SearchPage() {
 
   const searchCases = () =>
     caseErr.run(async () => {
-      setCases(await client.searchCases(caseQ));
+      setCases(await client.listCases({ q: caseQ }));
     });
 
   return (

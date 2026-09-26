@@ -46,11 +46,7 @@ func (c *EvidenceContract) CreateEvidence(ctx contractapi.TransactionContextInte
 
 	custodian := entry.Identity.Subject
 	head := EvidenceHead{CodexEntry: entry, Custodian: custodian, Status: StatusActive}
-	headBytes, err := json.Marshal(head)
-	if err != nil {
-		return err
-	}
-	if err := stub.PutState(headKey, headBytes); err != nil {
+	if err := putJSON(ctx, headKey, head); err != nil {
 		return err
 	}
 	return c.appendEvent(ctx, evidenceId, OpCreate, custodian, nil)
@@ -63,19 +59,13 @@ func (c *EvidenceContract) CreateEvidence(ctx contractapi.TransactionContextInte
 //
 // ISO/IEC 27037: Preservation.
 func (c *EvidenceContract) TransferCustody(ctx contractapi.TransactionContextInterface, evidenceId, newCustodian, reason string) error {
-	stub := ctx.GetStub()
-
 	head, headKey, err := c.readActiveHead(ctx, evidenceId)
 	if err != nil {
 		return err
 	}
 
 	head.Custodian = newCustodian
-	headBytes, err := json.Marshal(head)
-	if err != nil {
-		return err
-	}
-	if err := stub.PutState(headKey, headBytes); err != nil {
+	if err := putJSON(ctx, headKey, head); err != nil {
 		return err
 	}
 	return c.appendEvent(ctx, evidenceId, OpTransfer, newCustodian, map[string]string{
@@ -105,19 +95,13 @@ func (c *EvidenceContract) AccessLog(ctx contractapi.TransactionContextInterface
 // ISO/IEC 27037: Preservation (disposition) — nothing is deleted; a status
 // transition. The head record and every audit event stay on the ledger.
 func (c *EvidenceContract) DisposeEvidence(ctx contractapi.TransactionContextInterface, evidenceId, reason string) error {
-	stub := ctx.GetStub()
-
 	head, headKey, err := c.readActiveHead(ctx, evidenceId)
 	if err != nil {
 		return err
 	}
 
 	head.Status = StatusDisposed
-	headBytes, err := json.Marshal(head)
-	if err != nil {
-		return err
-	}
-	if err := stub.PutState(headKey, headBytes); err != nil {
+	if err := putJSON(ctx, headKey, head); err != nil {
 		return err
 	}
 	return c.appendEvent(ctx, evidenceId, OpDispose, "", map[string]string{
@@ -168,30 +152,15 @@ func (c *EvidenceContract) CommitAnchorRoot(ctx contractapi.TransactionContextIn
 		Meta:        json.RawMessage(metaJSON),
 		TxTimestamp: tsToRFC3339(ts),
 	}
-	recordBytes, err := json.Marshal(record)
-	if err != nil {
-		return err
-	}
-	return stub.PutState(rootKey, recordBytes)
+	return putJSON(ctx, rootKey, record)
 }
 
 // ---- read operations (evaluate) ----
 
 // ReadEvidence returns the head record JSON for evidenceId.
 func (c *EvidenceContract) ReadEvidence(ctx contractapi.TransactionContextInterface, evidenceId string) (string, error) {
-	stub := ctx.GetStub()
-	headKey, err := stub.CreateCompositeKey(objectTypeHead, []string{evidenceId})
-	if err != nil {
-		return "", err
-	}
-	headBytes, err := stub.GetState(headKey)
-	if err != nil {
-		return "", err
-	}
-	if headBytes == nil {
-		return "", fmt.Errorf("evidence %q not found", evidenceId)
-	}
-	return string(headBytes), nil
+	headBytes, _, err := getRequired(ctx, objectTypeHead, []string{evidenceId}, fmt.Sprintf("evidence %q", evidenceId))
+	return string(headBytes), err
 }
 
 // GetAuditTrail returns the append-only event records for evidenceId as a JSON
@@ -222,38 +191,43 @@ func (c *EvidenceContract) GetAuditTrail(ctx contractapi.TransactionContextInter
 // ReadAnchorRoot returns the anchor-root record JSON for (scopeId, batchId).
 // scopeId is a caseId, or "shared" for the single-channel Anchoring variant.
 func (c *EvidenceContract) ReadAnchorRoot(ctx contractapi.TransactionContextInterface, scopeId, batchId string) (string, error) {
-	stub := ctx.GetStub()
-	rootKey, err := stub.CreateCompositeKey(objectTypeRoot, []string{scopeId, batchId})
-	if err != nil {
-		return "", err
-	}
-	rootBytes, err := stub.GetState(rootKey)
-	if err != nil {
-		return "", err
-	}
-	if rootBytes == nil {
-		return "", fmt.Errorf("anchor root for scope %q batch %q not found", scopeId, batchId)
-	}
-	return string(rootBytes), nil
+	rootBytes, _, err := getRequired(ctx, objectTypeRoot, []string{scopeId, batchId},
+		fmt.Sprintf("anchor root for scope %q batch %q", scopeId, batchId))
+	return string(rootBytes), err
 }
 
 // ---- internal helpers ----
+
+// getRequired reads the state at composite key (objectType, attrs) and returns
+// it with the key; an absent key fails with "<what> not found".
+func getRequired(ctx contractapi.TransactionContextInterface, objectType string, attrs []string, what string) ([]byte, string, error) {
+	key, err := ctx.GetStub().CreateCompositeKey(objectType, attrs)
+	if err != nil {
+		return nil, "", err
+	}
+	b, err := ctx.GetStub().GetState(key)
+	if err == nil && b == nil {
+		err = fmt.Errorf("%s not found", what)
+	}
+	return b, key, err
+}
+
+// putJSON marshals v and writes it at key.
+func putJSON(ctx contractapi.TransactionContextInterface, key string, v any) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	return ctx.GetStub().PutState(key, b)
+}
 
 // readActiveHead loads the head record and requires it to be ACTIVE. Used by
 // the serial mutating ops (TransferCustody, DisposeEvidence). AccessLog does NOT
 // use this — it never reads the head.
 func (c *EvidenceContract) readActiveHead(ctx contractapi.TransactionContextInterface, evidenceId string) (EvidenceHead, string, error) {
-	stub := ctx.GetStub()
-	headKey, err := stub.CreateCompositeKey(objectTypeHead, []string{evidenceId})
+	headBytes, headKey, err := getRequired(ctx, objectTypeHead, []string{evidenceId}, fmt.Sprintf("evidence %q", evidenceId))
 	if err != nil {
 		return EvidenceHead{}, "", err
-	}
-	headBytes, err := stub.GetState(headKey)
-	if err != nil {
-		return EvidenceHead{}, "", err
-	}
-	if headBytes == nil {
-		return EvidenceHead{}, "", fmt.Errorf("evidence %q not found", evidenceId)
 	}
 	var head EvidenceHead
 	if err := json.Unmarshal(headBytes, &head); err != nil {
@@ -288,12 +262,5 @@ func (c *EvidenceContract) appendEvent(ctx contractapi.TransactionContextInterfa
 		TxID:       txID,
 		Timestamp:  tsToRFC3339(ts),
 	}
-	eventBytes, err := json.Marshal(event)
-	if err != nil {
-		return err
-	}
-	return stub.PutState(eventKey, eventBytes)
+	return putJSON(ctx, eventKey, event)
 }
-
-// compile-time assertion that EvidenceContract satisfies the contract API.
-var _ contractapi.ContractInterface = (*EvidenceContract)(nil)

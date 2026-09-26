@@ -74,7 +74,6 @@ async function routeWrite(spec, deps) {
 // and are skipped. withProofs attaches each event's Merkle witness so a
 // reconstruction client can recompute the branch and check the root.
 async function offChainTrail(evidenceId, withProofs, deps) {
-  if (!deps.receipts) throw new RequestError(503, 'receipt store client not configured');
   const receipts = await deps.receipts.listByEvidence(evidenceId);
   return receipts.filter((r) => r && r.event).map((r) => (withProofs
     ? { ...r.event, proof: { leafHash: r.leafHash, siblingPath: r.siblingPath, batchId: r.batchId, leafIndex: r.leafIndex, rootRef: r.rootRef } }
@@ -113,4 +112,4 @@ async function routeRead(spec, deps) {
   return JSON.stringify(foldHead(evidenceId, events));
 }
 
-module.exports = { CASE_RE, RequestError, isBatched, isParallel, channelFor, routeWrite, routeRead, foldHead };
+module.exports = { RequestError, channelFor, routeWrite, routeRead, foldHead };

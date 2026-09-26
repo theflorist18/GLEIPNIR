@@ -83,7 +83,7 @@ test('anchoring boundary: N events -> receipts stored, one root submitted, recei
 
   const app = createApp({
     variant: 'anchoring',
-    batchN: 3,
+    batchSize: 3,
     batchEpoch: 'e0',
     receiptStoreUrl: rstore.url,
     gatewayUrl: gw.url,
@@ -155,33 +155,6 @@ test('anchoring boundary: N events -> receipts stored, one root submitted, recei
   assert.ok(b.delayMs.min >= 0 && b.delayMs.min <= b.delayMs.mean && b.delayMs.mean <= b.delayMs.max);
 });
 
-test('BATCH_SIZE takes precedence over BATCH_N/BATCH_K', async (t) => {
-  const rootCalls = [];
-  const rstore = await receiptStoreStub(new Map());
-  const gw = await startServer(async (req, res) => {
-    rootCalls.push(await readBody(req));
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ txId: 'tx-1' }));
-  });
-  const app = createApp({
-    variant: 'anchoring',
-    batchSize: 2,
-    batchN: 100, // must be ignored
-    receiptStoreUrl: rstore.url,
-    gatewayUrl: gw.url,
-    logLevel: 'silent',
-  });
-  const batcher = await listen(app);
-  t.after(() => { batcher.server.close(); rstore.server.close(); gw.server.close(); });
-
-  await postEvent(batcher.url, makeEvent(0));
-  await postEvent(batcher.url, makeEvent(1));
-  await app.locals.settle();
-  assert.equal(rootCalls.length, 1);
-  assert.equal(rootCalls[0].meta.leafCount, 2);
-  assert.equal((await (await fetch(`${batcher.url}/status`)).json()).batchSize, 2);
-});
-
 test('flush timer closes a partial batch (forced:true); /flush also forces', async (t) => {
   const rootCalls = [];
   const rstore = await receiptStoreStub(new Map());
@@ -238,7 +211,7 @@ test('flush timer closes a partial batch (forced:true); /flush also forces', asy
 test('duplicate eventId in the open batch is rejected with 409', async (t) => {
   const app = createApp({
     variant: 'anchoring',
-    batchN: 100,
+    batchSize: 100,
     receiptStoreUrl: 'http://127.0.0.1:1', // unused (no boundary reached)
     gatewayUrl: 'http://127.0.0.1:1',
     logLevel: 'silent',
@@ -263,7 +236,7 @@ test('root submit failure keeps receipts and marks the batch degraded', async (t
 
   const app = createApp({
     variant: 'anchoring',
-    batchN: 2,
+    batchSize: 2,
     receiptStoreUrl: rstore.url,
     gatewayUrl: gw.url,
     logLevel: 'silent',
@@ -302,7 +275,7 @@ test('parallel-anchored routes per-case queues to the anchor-client', async (t) 
 
   const app = createApp({
     variant: 'parallel-anchored',
-    batchK: 2,
+    batchSize: 2,
     batchEpoch: 'e0',
     receiptStoreUrl: rstore.url,
     anchorClientUrl: anchor.url,

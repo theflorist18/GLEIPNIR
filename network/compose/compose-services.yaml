@@ -3,11 +3,8 @@
 # (4006) run for every variant. The batcher (4001), receipt-store (4002) and
 # verification (4004) run under the `anchoring` and `parallel-anchored`
 # profiles; anchor-client (4003) only under `parallel-anchored`.
-# Crypto is mounted read-only from ../organizations.
-
-networks:
-  gleipnir-net:
-    name: gleipnir-net
+# Crypto is mounted read-only from ../organizations. gleipnir-net is declared in
+# compose-net.yaml (the three files are always merged).
 
 volumes:
   receipt-data:

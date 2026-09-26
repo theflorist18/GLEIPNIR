@@ -2,11 +2,12 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { useErr } from '../../hooks/useErr';
-import type { CaseDetail, CaseRole, CaseStatus, CaseSummary } from '../../types';
+import type { CaseDetail, CaseStatus, CaseSummary } from '../../types';
 import { StatusPill } from '../../components/ui/Chips';
 
-// Case administration (M14, admin-only route): create cases, manage the
-// participant roster, categorize/uncategorize evidence, change status.
+// Case administration (M14, admin-only route): the all-cases list, status
+// change, categorize/uncategorize evidence. Admins create cases from
+// MyCasesPage and manage rosters in CaseDetailPage's Team section.
 export function CasesAdminPage() {
   const { client } = useAuth();
   const listErr = useErr();
@@ -14,11 +15,6 @@ export function CasesAdminPage() {
   const [cases, setCases] = useState<CaseSummary[]>([]);
   const [detail, setDetail] = useState<CaseDetail | null>(null);
 
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-
-  const [pUser, setPUser] = useState('');
-  const [pRole, setPRole] = useState<CaseRole>('viewer');
   const [evidenceId, setEvidenceId] = useState('');
 
   const refresh = useCallback(
@@ -33,35 +29,12 @@ export function CasesAdminPage() {
 
   const reopen = async () => { if (detail) await open(detail.id); };
 
-  const create = () =>
-    listErr.run(async () => {
-      const c = await client.createCase({ name, description: description || undefined });
-      setName(''); setDescription('');
-      await refresh();
-      await open(c.id);
-    });
-
   const setStatus = (status: CaseStatus) =>
     detailErr.run(async () => {
       if (!detail) return;
       await client.updateCase(detail.id, { status });
       await reopen();
       await refresh();
-    });
-
-  const addParticipant = () =>
-    detailErr.run(async () => {
-      if (!detail) return;
-      await client.addParticipant(detail.id, pUser, pRole);
-      setPUser('');
-      await reopen();
-    });
-
-  const removeParticipant = (userId: string) =>
-    detailErr.run(async () => {
-      if (!detail) return;
-      await client.removeParticipant(detail.id, userId);
-      await reopen();
     });
 
   const assign = () =>
@@ -82,13 +55,6 @@ export function CasesAdminPage() {
   return (
     <div className="demo">
       <section className="col">
-        <div className="card form">
-          <h3>Create case</h3>
-          <label>name<input value={name} onChange={(e) => setName(e.target.value)} /></label>
-          <label>description<input value={description} onChange={(e) => setDescription(e.target.value)} /></label>
-          <button disabled={!name} onClick={create}>Create</button>
-          {listErr.msg && <div className="err">{listErr.msg}</div>}
-        </div>
         <div className="card">
           <h3>All cases ({cases.length})</h3>
           <table className="runs">
@@ -102,11 +68,12 @@ export function CasesAdminPage() {
               ))}
             </tbody>
           </table>
+          {listErr.msg && <div className="err">{listErr.msg}</div>}
         </div>
       </section>
       <section className="col wide">
         {!detail ? (
-          <div className="card muted">Select a case to manage its roster and evidence.</div>
+          <div className="card muted">Select a case to manage its status and evidence.</div>
         ) : (
           <>
             <div className="card">
@@ -122,29 +89,6 @@ export function CasesAdminPage() {
                 <Link to={`/cases/${encodeURIComponent(detail.id)}`}>investigator view →</Link>
               </div>
               {detailErr.msg && <div className="err">{detailErr.msg}</div>}
-            </div>
-
-            <div className="card form">
-              <h3>Participants ({detail.participants.length})</h3>
-              <ul className="plain-list">
-                {detail.participants.map((p) => (
-                  <li key={p.userId}>
-                    <span>{p.userId} · {p.roleInCase}</span>
-                    <button className="small" onClick={() => removeParticipant(p.userId)}>Remove</button>
-                  </li>
-                ))}
-              </ul>
-              <div className="filter-row">
-                <label>username<input value={pUser} onChange={(e) => setPUser(e.target.value)} /></label>
-                <label>role
-                  <select value={pRole} onChange={(e) => setPRole(e.target.value as CaseRole)}>
-                    <option value="viewer">viewer</option>
-                    <option value="contributor">contributor</option>
-                    <option value="lead">case lead</option>
-                  </select>
-                </label>
-                <button disabled={!pUser} onClick={addParticipant}>Grant</button>
-              </div>
             </div>
 
             <div className="card form">

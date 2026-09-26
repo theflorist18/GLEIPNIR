@@ -28,13 +28,12 @@ Q1). Node 18 or 20 (0.6.0 support window).
 | `workload/trace.js` | mixed-workload round: replays one slice of the pre-generated trace (E1/E2/E3) |
 | `workload/{createEvidence,transferCustody,accessLog,disposeEvidence}.js` | per-operation WRITE rounds (ops breakdown) |
 | `workload/read.js`, `workload/verify.js` | READ rounds (ReadEvidence / GetAuditTrail; VerifyEvent for anchored variants) |
-| `workload/lib/payloads.js` | shared builders: Codex-Entry head, REST bodies, fabric request, `case-NNN` selector, payload filler |
+| `workload/lib/payloads.js` | shared builders: Codex-Entry head, REST bodies, fabric request, `opRequest` (the four writes on either path), `case-NNN` selector, payload filler |
 | `workload/lib/pool.js` | untimed pool seeding + the batcher flush shared by the pool workloads |
 | `workload/lib/txlog.js` | per-transaction JSONL capture (`GLEIPNIR_TXLOG_DIR`) |
 | `connectors/rest/` | custom `ConnectorBase` connector driving the gateway REST path |
 | `audit/reconstruct.js`, `audit/merkle.js` | audit-reconstruction harness — `npm run audit`; merkle.js is a pinned byte-identical copy of the services' file |
-| `networks/coc-main.yaml`, `parallel-c{C}.yaml`, `rest-gateway.yaml` | Caliper network configs (parallel-c* rendered by `rounds.py --static`) |
-| `benchmarks/smoke-<variant>.yaml` | committed smoke configs (rendered by `rounds.py --static`); steady rounds are rendered per run into `results/…/rounds/<label>/bench.yaml` |
+| `networks/coc-main.yaml`, `rest-gateway.yaml` | Caliper network configs. Nothing generated is committed: Parallel's `parallel-c{C}.yaml` is rendered (`rounds.py`) into the run dir, and every round — smoke included — into `results/…/rounds/<label>/bench.yaml` |
 | `test/` | `npm test` — trace determinism, merkle identity, reconstruct against a fake gateway |
 | `traces/` | generated trace files `<hash>.json` (gitignored) |
 | `results/` | run outputs (gitignored, never edited by hand) |
@@ -44,11 +43,13 @@ Q1). Node 18 or 20 (0.6.0 support window).
 `trace/generate.js` is a pure function of `(seed, cases, channels, evidencePerCase,
 eventsPerCasePerRound, rounds, workers, mix, payloadBytes)`: same params → byte-identical file;
 different seed → different file. All four variants replay the **same** trace; only the write
-path differs (`mode`). Defaults come from `sweeps.yaml`; every flag overrides.
+path differs (`mode`). Every param flag is required (`--cases` defaults to `--channels`) and a
+missing one throws; `experiment.py` passes them all from `sweeps.yaml`.
 
 ```bash
 node trace/generate.js --cases 20 --channels 20 --evidence-per-case 20 \
-  --events-per-case-per-round 200 --rounds 5 --workers 4 --seed 20260922 --payload-bytes 256
+  --events-per-case-per-round 200 --rounds 5 --workers 4 --seed 20260922 --payload-bytes 256 \
+  --transfer-weight 0.15 --access-weight 0.85 --dispose-fraction 0.5
 # -> writes traces/<hash>.json, prints the hash (recorded in run.json). --dry prints opCounts only.
 ```
 
@@ -73,7 +74,6 @@ the ledger, only its hash (CLAUDE.md: binaries are always off-chain).
 | `label` | all | round label written into every tx-log line (defaults to `round-<index>`) |
 | `variant` | all | `standard` / `anchoring` / `parallel` / `parallel-anchored`; decides whether a `caseId`/`channel` is attached (never for standard/anchoring — for anchoring a caseId would change the batch scope from `shared`) |
 | `channels` | pool workloads, verify | `C` → targets spread round-robin across `case-001..case-00C` (Parallel variants only; omit for Standard/Anchoring) |
-| `caseId`, `channel` | pool workloads | single-target overrides (legacy) |
 | `trace`, `slice`, `sliceSize` | `trace.js` | absolute trace path, slice index `k`, per-worker slice size `S` (checked against the file) |
 | `pool` | transfer, access, dispose, read | evidence items seeded per worker (untimed) before the timed phase; dispose needs `txNumber ≤ pool × workers`. The per-operation rounds size it `ceil(P / workers)` where `P = evidence_per_case × cases`, so the round's target set is `P` in total and each seeded item is exercised about once — passing `P` per worker would seed `P × workers` items to perform `P` operations |
 | `payloadBytes` | create + pool workloads, verify | filler size hashed into `storage.integrity_proof` |
@@ -81,9 +81,8 @@ the ledger, only its hash (CLAUDE.md: binaries are always off-chain).
 | `seedCount` | `verify.js` | events seeded + flushed per worker before timing `/verify` (anchored variants only) |
 
 `mode`, `label`, `channels` and `variant` are **common** arguments: `rounds.py render_bench`
-injects all four into every round's `workload.arguments`, whatever the module (the committed
-`benchmarks/smoke-*.yaml` show them on each round). `variant` is not a trace-only argument —
-the `case-NNN` spread is suppressed **by variant name**, so a round rendered without it falls
+injects all four into every round's `workload.arguments`, whatever the module. `variant` is not a
+trace-only argument — the `case-NNN` spread is suppressed **by variant name**, so a round rendered without it falls
 back to `channels: 1` → `case-001`, which points Standard's fabric requests at a channel absent
 from `networks/coc-main.yaml` and stamps Anchoring's events with a caseId instead of the
 `shared` batch scope.
@@ -182,8 +181,9 @@ distinctly from fabric-connector numbers.
 ## Verify (no live SUT)
 
 ```bash
-npm install                 # resolves @hyperledger/caliper-cli@0.6.0 + js-yaml
+npm install                 # resolves @hyperledger/caliper-cli@0.6.0
 npm test                    # node --test test/*.test.js
 node --check workload/*.js workload/lib/*.js connectors/rest/index.js trace/generate.js audit/*.js
-node trace/generate.js --cases 4 --channels 2 --evidence-per-case 2 --events-per-case-per-round 8 --rounds 2 --workers 4 --seed 1 --dry
+node trace/generate.js --cases 4 --channels 2 --evidence-per-case 2 --events-per-case-per-round 8 --rounds 2 --workers 4 --seed 1 \
+  --payload-bytes 256 --transfer-weight 0.15 --access-weight 0.85 --dispose-fraction 0.5 --dry
 ```

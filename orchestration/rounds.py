@@ -1,35 +1,22 @@
-#!/usr/bin/env python3
 """GLEIPNIR round renderer — the ONLY source of Caliper benchconfigs and network
 configs, rendered from benchmark/sweeps.yaml (docs/CONTRACTS.md §10, §11;
-supervisor brief 2026-09-22 §9).
-
-  python rounds.py --static      # write the committed static files (see below)
+supervisor brief 2026-09-22 §9). A library, no CLI: experiment.py renders every
+config per run into the run dir (nothing generated is committed).
 
 Library use (experiment.py): `render_round(...)` returns one benchconfig dict
 (one round + the docker resource monitor block); `network_config(variant, C)`
-picks the network config; `smoke_rounds` / `ops_rounds` / `trace_round` build
-round specs. Round-argument NAMES are binding (brief §4): the workloads read
+picks the network config and `render_parallel_network(C)` renders the parallel
+one; `smoke_rounds` / `ops_rounds` / `trace_round` build round specs.
+Round-argument NAMES are binding (brief §4): the workloads read
 `mode`, `label`, `channels`, `trace`, `slice`, `sliceSize`, `variant`, `pool`,
 `payloadBytes`, `fn`, `seedCount`.
-
-`--static` writes (both with a GENERATED header):
-  benchmark/benchmarks/smoke-<variant>.yaml   regimes.smoke shape, labels smoke-*
-                                              (create + logs + shared-access gate
-                                              for standard, + verify for anchored)
-  benchmark/networks/parallel-c{C}.yaml       for every C in channel_counts U
-                                              case_counts U {1, baseline.channels}
 
 Container names in the monitor block MUST keep the leading slash: Caliper 0.6.0
 matches `Names[0]` of `docker.listContainers()` verbatim (monitor-docker.js).
 """
-import argparse
 import os
-import sys
 
 import yaml
-
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(errors="replace")
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BENCH_DIR = os.path.join(REPO_ROOT, "benchmark")
@@ -91,7 +78,8 @@ def monitor_containers(variant):
 
 
 def network_config(variant, channels=1):
-    """Relative to the Caliper workspace (benchmark/)."""
+    """Relative to the Caliper workspace (benchmark/); parallel-c{C}.yaml is not committed —
+    experiment.py writes render_parallel_network(C) under that name into the run dir."""
     if variant == "standard":
         return "networks/coc-main.yaml"
     if variant == "parallel":
@@ -233,53 +221,3 @@ def render_parallel_network(channels):
         "",
         _ORG1_IDENTITY_BLOCK,
     ])
-
-
-def static_channel_counts(sweeps):
-    return sorted({1, sweeps["baseline"]["channels"], *sweeps["channel_counts"], *sweeps["case_counts"]})
-
-
-def write_static(sweeps):
-    s = sweeps["regimes"]["smoke"]
-    header = (
-        "# SMOKE test — functional correctness only (regimes.smoke: "
-        f"{s['cases']} cases x {s['logs_per_case_min']}-{s['logs_per_case_max']} logs at {s['send_rate_tps']} tx/s).",
-        "# Its results MUST NOT be cited for any scalability/throughput claim (CLAUDE.md, ARCHITECTURE §8).",
-        "# experiment.py --exp e0 renders the same rounds one launch at a time; this file is for manual launches.",
-    )
-    for v in VARIANTS:
-        # One channel per case on the parallel variants (channels_for gives 1 to the others).
-        doc = render_bench(sweeps, v, f"gleipnir-smoke-{v}",
-                           f"Smoke functional check of the {v} variant (labels smoke-*; regime smoke).",
-                           smoke_rounds(sweeps, v), channels=s["cases"])
-        rel = f"benchmarks/smoke-{v}.yaml"
-        lines = list(header) + [f"# network config: {network_config(v, s['cases'])}"
-                                + (f" (needs {channels_for(v, s['cases'])} case channels: up.sh --channels "
-                                   f"{s['cases']})" if v in MULTI_CHANNEL_VARIANTS else "")]
-        _write(rel, dump_yaml(doc, lines))
-    for c in static_channel_counts(sweeps):
-        _write(f"networks/parallel-c{c}.yaml", render_parallel_network(c))
-
-
-def _write(rel, content):
-    path = os.path.join(BENCH_DIR, rel)
-    with open(path, "w", encoding="utf-8", newline="\n") as fh:
-        fh.write(content)
-    print(f"generated benchmark/{rel}")
-
-
-def main(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--static", action="store_true", help="write the committed smoke-*.yaml + parallel-c*.yaml files")
-    ap.add_argument("--sweeps", default=SWEEPS_PATH)
-    args = ap.parse_args(argv)
-    sweeps = load_sweeps(args.sweeps)
-    if args.static:
-        write_static(sweeps)
-        return 0
-    ap.print_help()
-    return 1
-
-
-if __name__ == "__main__":
-    sys.exit(main())

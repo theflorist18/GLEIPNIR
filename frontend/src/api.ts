@@ -18,9 +18,7 @@ import type {
   CaseSummary,
   CoCEvent,
   CocReport,
-  CreateEvidenceRequest,
   EvidenceCategory,
-  EvidenceDetailsPatch,
   EvidenceFlag,
   EvidenceIndexRow,
   EvidenceNote,
@@ -34,12 +32,8 @@ import type {
   VerifyResult,
 } from './types';
 
-const DEFAULT_BASE = '/api/v1';
-
 export interface GatewayClientOptions {
   getToken: () => string;
-  baseUrl?: string;
-  fetchImpl?: typeof fetch;
   onUnauthorized?: () => void;
 }
 
@@ -54,72 +48,34 @@ export class GatewayError extends Error {
   }
 }
 
-function parseMaybe(raw: unknown): unknown {
-  // Chaincode reads return JSON strings; the gateway may forward them as-is.
-  if (typeof raw === 'string') {
-    try {
-      return JSON.parse(raw);
-    } catch {
-      return raw;
-    }
-  }
-  return raw;
-}
-
-function normalizeRecord(raw: unknown): EvidenceRecord {
-  const v = parseMaybe(raw) as Record<string, unknown> | null;
-  if (v && typeof v === 'object' && 'record' in v && v.record) {
-    return parseMaybe(v.record) as EvidenceRecord;
-  }
-  return (v ?? {}) as EvidenceRecord;
-}
-
-function normalizeEvents(raw: unknown): CoCEvent[] {
-  const v = parseMaybe(raw) as unknown;
-  if (Array.isArray(v)) return v as CoCEvent[];
-  if (v && typeof v === 'object') {
-    const obj = v as Record<string, unknown>;
-    if (Array.isArray(obj.events)) return obj.events as CoCEvent[];
-    if (Array.isArray(obj.audit)) return obj.audit as CoCEvent[];
-  }
-  return [];
-}
-
 export class GatewayClient {
-  private getToken: () => string;
-  private baseUrl: string;
-  private fetchImpl: typeof fetch;
-  private onUnauthorized?: () => void;
-
-  constructor(opts: GatewayClientOptions) {
-    this.getToken = opts.getToken;
-    this.baseUrl = opts.baseUrl ?? DEFAULT_BASE;
-    this.fetchImpl = opts.fetchImpl ?? fetch.bind(globalThis);
-    this.onUnauthorized = opts.onUnauthorized;
-  }
+  constructor(private opts: GatewayClientOptions) {}
 
   url(path: string): string {
-    return this.baseUrl + path;
+    return '/api/v1' + path;
   }
 
   private authHeaders(): Record<string, string> {
-    const token = this.getToken();
+    const token = this.opts.getToken();
     return token ? { Authorization: `Bearer ${token}` } : {};
   }
 
   private failed(res: Response, text: string): GatewayError {
-    if (res.status === 401 && this.onUnauthorized) this.onUnauthorized();
+    if (res.status === 401) this.opts.onUnauthorized?.();
     return new GatewayError(res.status, text);
   }
 
+  // A FormData body (multipart upload) goes as-is: Content-Type is left to the
+  // browser so it can set the multipart boundary.
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const headers: Record<string, string> = this.authHeaders();
-    if (body !== undefined) headers['Content-Type'] = 'application/json';
+    const form = body instanceof FormData;
+    if (body !== undefined && !form) headers['Content-Type'] = 'application/json';
 
-    const res = await this.fetchImpl(this.url(path), {
+    const res = await fetch(this.url(path), {
       method,
       headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: form ? body : body === undefined ? undefined : JSON.stringify(body),
     });
 
     const text = await res.text();
@@ -132,15 +88,15 @@ export class GatewayClient {
     }
   }
 
-  // ---- Scope B: chain of custody ----
-
-  createEvidence(req: CreateEvidenceRequest) {
-    return this.request<{ evidenceId?: string; txId?: string } & Record<string, unknown>>(
-      'POST',
-      '/evidence',
-      req,
-    );
+  // GET a file route as a blob + its content-disposition filename.
+  private async blob(path: string, fallbackName: string): Promise<{ blob: Blob; filename: string }> {
+    const res = await fetch(this.url(path), { headers: this.authHeaders() });
+    if (!res.ok) throw this.failed(res, await res.text());
+    const match = /filename="([^"]*)"/.exec(res.headers.get('content-disposition') ?? '');
+    return { blob: await res.blob(), filename: match?.[1] || fallbackName };
   }
+
+  // ---- Scope B: chain of custody ----
 
   transferCustody(id: string, req: TransferCustodyRequest) {
     return this.request<Record<string, unknown>>(
@@ -158,25 +114,12 @@ export class GatewayClient {
     );
   }
 
-  // DisposeEvidence: terminal status transition (DISPOSED), never a deletion.
-  disposeEvidence(id: string, reason: string) {
-    return this.request<Record<string, unknown>>('DELETE', `/evidence/${encodeURIComponent(id)}`, {
-      reason,
-    });
+  getEvidence(id: string): Promise<EvidenceRecord> {
+    return this.request<EvidenceRecord>('GET', `/evidence/${encodeURIComponent(id)}`);
   }
 
-  // caseId routes reads to the right case channel in parallel variants (F68);
-  // the gateway 400s parallel reads without it.
-  async getEvidence(id: string, caseId?: string): Promise<EvidenceRecord> {
-    const q = caseId ? `?caseId=${encodeURIComponent(caseId)}` : '';
-    const raw = await this.request<unknown>('GET', `/evidence/${encodeURIComponent(id)}${q}`);
-    return normalizeRecord(raw);
-  }
-
-  async getAudit(id: string, caseId?: string): Promise<CoCEvent[]> {
-    const q = caseId ? `?caseId=${encodeURIComponent(caseId)}` : '';
-    const raw = await this.request<unknown>('GET', `/evidence/${encodeURIComponent(id)}/audit${q}`);
-    return normalizeEvents(raw);
+  getAudit(id: string): Promise<CoCEvent[]> {
+    return this.request<CoCEvent[]>('GET', `/evidence/${encodeURIComponent(id)}/audit`);
   }
 
   // The verify chain is keyed by EVENT id, not evidence id (F33/F49): the
@@ -234,12 +177,6 @@ export class GatewayClient {
     return this.request<CaseSummary[]>('GET', `/cases${suffix}`);
   }
 
-  searchCases(q: string, status?: CaseStatus): Promise<CaseSummary[]> {
-    const qs = new URLSearchParams({ q });
-    if (status) qs.set('status', status);
-    return this.request<CaseSummary[]>('GET', `/cases/search?${qs}`);
-  }
-
   getCase(id: string): Promise<CaseDetail> {
     return this.request<CaseDetail>('GET', `/cases/${encodeURIComponent(id)}`);
   }
@@ -274,16 +211,8 @@ export class GatewayClient {
     return this.request<EvidenceCategory>('POST', `/cases/${encodeURIComponent(caseId)}/categories`, { name });
   }
 
-  renameCategory(caseId: string, categoryId: string, name: string): Promise<EvidenceCategory> {
-    return this.request<EvidenceCategory>('PATCH', `/cases/${encodeURIComponent(caseId)}/categories/${encodeURIComponent(categoryId)}`, { name });
-  }
-
   deleteCategory(caseId: string, categoryId: string): Promise<void> {
     return this.request<void>('DELETE', `/cases/${encodeURIComponent(caseId)}/categories/${encodeURIComponent(categoryId)}`);
-  }
-
-  updateEvidenceDetails(evidenceId: string, patch: EvidenceDetailsPatch): Promise<EvidenceIndexRow> {
-    return this.request<EvidenceIndexRow>('PATCH', `/evidence/${encodeURIComponent(evidenceId)}/details`, patch);
   }
 
   assignEvidence(caseId: string, evidenceId: string): Promise<EvidenceIndexRow> {
@@ -297,17 +226,9 @@ export class GatewayClient {
   // ---- Evidence library (M14) ----
 
   // Real file ingest: multipart POST — bytes go to the evidence-store; only
-  // the ni-URI proof reaches the chain. Content-Type is left to the browser
-  // (multipart boundary).
-  async uploadEvidence(form: FormData): Promise<UploadResult> {
-    const res = await this.fetchImpl(this.url('/evidence'), {
-      method: 'POST',
-      headers: this.authHeaders(),
-      body: form,
-    });
-    const text = await res.text();
-    if (!res.ok) throw this.failed(res, text);
-    return JSON.parse(text) as UploadResult;
+  // the ni-URI proof reaches the chain.
+  uploadEvidence(form: FormData): Promise<UploadResult> {
+    return this.request<UploadResult>('POST', '/evidence', form);
   }
 
   searchEvidence(params: EvidenceSearchParams): Promise<EvidenceIndexRow[]> {
@@ -344,26 +265,14 @@ export class GatewayClient {
     return this.request<CocReport>('GET', `/cases/${encodeURIComponent(caseId)}/coc-report`);
   }
 
-  async downloadCocReportCsv(caseId: string): Promise<{ blob: Blob; filename: string }> {
-    const res = await this.fetchImpl(this.url(`/cases/${encodeURIComponent(caseId)}/coc-report?format=csv`), {
-      headers: this.authHeaders(),
-    });
-    if (!res.ok) throw this.failed(res, await res.text());
-    const disposition = res.headers.get('content-disposition') ?? '';
-    const match = /filename="([^"]*)"/.exec(disposition);
-    return { blob: await res.blob(), filename: match?.[1] || `coc-${caseId}.csv` };
+  downloadCocReportCsv(caseId: string) {
+    return this.blob(`/cases/${encodeURIComponent(caseId)}/coc-report?format=csv`, `coc-${caseId}.csv`);
   }
 
   // Streams the blob back; the caller turns it into a browser download.
   // Server-side this appends a synchronous AccessLog(download) event.
-  async downloadEvidence(id: string): Promise<{ blob: Blob; filename: string }> {
-    const res = await this.fetchImpl(this.url(`/evidence/${encodeURIComponent(id)}/download`), {
-      headers: this.authHeaders(),
-    });
-    if (!res.ok) throw this.failed(res, await res.text());
-    const disposition = res.headers.get('content-disposition') ?? '';
-    const match = /filename="([^"]*)"/.exec(disposition);
-    return { blob: await res.blob(), filename: match?.[1] || `${id}.bin` };
+  downloadEvidence(id: string) {
+    return this.blob(`/evidence/${encodeURIComponent(id)}/download`, `${id}.bin`);
   }
 
   exportEvidence(id: string): Promise<ExportBundle> {
