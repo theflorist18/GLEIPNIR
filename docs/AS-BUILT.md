@@ -24,7 +24,14 @@ trail off-chain; the benchmark became a seeded trace-replay harness with
 per-transaction capture; `sweep.py`/`generate-rounds.js` were replaced by
 `rounds.py` + `experiment.py` (E0/ramp/E1/E2/E3a/E3b/ops) with a ledger-only
 reset per run; and audit reconstruction time, anchoring delay, CPU/memory,
-failure classes and p95 joined the metrics. This document is descriptive, not
+failure classes and p95 joined the metrics. **Updated 2026-09-26 for the ponytail
+refactor** (CONTRACTS §12-20):
+- generated Caliper configs are no longer committed, and `rounds.py --static`, `teardown-channel.sh` and
+  `case-template.yaml` are gone;
+- `BATCH_N`/`BATCH_K`, `--fresh-network` and `SESSION_IDLE_TTL_SECONDS` are removed;
+- the evidence-store `/meta` and `/verify` routes and the case-registry single-row reads are removed.
+
+This document is descriptive, not
 normative; the paper-facing procedure lives in `docs/methodology/experiments.md`.
 
 | Document | Role |
@@ -377,7 +384,7 @@ TTL or a 30 min sliding idle timeout (N3, §9).
 
 - **Dependencies:** `@grpc/grpc-js ^1.14.0`, `@hyperledger/fabric-gateway
   1.11.0`, `express ^4.21.2`, `multer ^2` (M13c). M26 adds two injected
-  deps: `receipts` (`src/receiptsClient.js`, `listByEvidence` against
+  deps: `receipts` (`makeReceiptsClient` in `src/serviceClients.js`, `listByEvidence` against
   `RECEIPT_STORE_URL`) and `anchorClientUrl` (`ANCHOR_CLIENT_URL`).
 - **Actor attribution (M12):** under a user session the audit actor is always
   the authenticated username; the service-token path keeps client-supplied
@@ -397,8 +404,7 @@ TTL or a 30 min sliding idle timeout (N3, §9).
   boundary build a SHA-256 Merkle tree, persist one receipt per leaf, submit
   the single root for commit — and (M26) record the timestamps that define
   the **anchoring delay**. Batch size from env `BATCH_SIZE` (one grid for
-  both anchored variants; `BATCH_N`/`BATCH_K` are read only as a legacy
-  fallback when it is unset); boundary = size, or `BATCH_FLUSH_MS` timer
+  both anchored variants; default 100); boundary = size, or `BATCH_FLUSH_MS` timer
   (0 = off, the experiment constant), or `POST /flush`. Batch ids are
   namespaced by `BATCH_EPOCH` (experiment.py sets `<runId>-<unix>` per run)
   so re-runs against a persistent ledger never reuse a committed
@@ -492,7 +498,8 @@ TTL or a 30 min sliding idle timeout (N3, §9).
   Case ids `CASE-<uuid>` are structurally disjoint from the Parallel channel
   key `case-NNN`; the library caseId never reaches the chain.
 - **Routes:** cases CRUD + participants + categorize/uncategorize;
-  evidence-index register/read/sync/search (`visibleToUserId` scoping =
+  evidence-index register/sync/search, with no single-row GET: rows and categories are read through search and
+  `GET /cases/:caseId` (`visibleToUserId` scoping =
   participant cases + own uncategorized uploads); all behind
   `X-Gleipnir-Internal-Token` (internal-only, via gateway).
 - **Datastore:** `better-sqlite3 ^12.4.1` at `DATA_DIR/case-registry.db`
@@ -508,10 +515,10 @@ TTL or a 30 min sliding idle timeout (N3, §9).
 - **Responsibility:** persist evidence BINARIES off-chain (the all-variant
   invariant) and compute the RFC 6920 ni-URI proof the ledger records;
   `niUri()` copied byte-identically from `gateway/src/ni.js`.
-- **Routes:** `PUT/GET/DELETE /blobs/:evidenceId`, `GET …/meta`,
-  `GET …/verify?expected=`; blobs are **immutable** (exclusive-create; second
-  PUT → 409); `DELETE` exists solely for the gateway's ingest-failure
-  rollback. Internal-only via `X-Gleipnir-Internal-Token`.
+- **Routes:** `PUT/GET/DELETE /blobs/:evidenceId`; blobs are **immutable**
+  (exclusive-create; second PUT → 409); `DELETE` exists solely for the
+  gateway's ingest-failure rollback and requires the `x-gleipnir-rollback-token`
+  header that the PUT returned. Internal-only via `X-Gleipnir-Internal-Token`.
 - **Datastore:** filesystem — `DATA_DIR/<id>` blob + `<id>.meta.json` sidecar
   (volume `evidence-blob-data`). Dependencies: `express ^4.21.2` only.
 - **Does not:** index or search (case-registry's job), mutate stored bytes,
@@ -622,12 +629,11 @@ admin operations run inside the `gleipnir-cli` fabric-tools container.
 | `reset-network.sh --variant V --channels C` | M26 **ledger-only reset** between runs: refuses without `GLEIPNIR_ALLOW_LEDGER_WIPE=1`; prints and removes only `gleipnir_{orderer0,orderer1,orderer2,peer0org1,peer0org2,peer0anchor}-ledger`, `gleipnir_receipt-data`, `gleipnir_verify-metrics`; deletes `network/channel-artifacts`, unsets the ccaas ids, re-runs `up.sh --skip-crypto`; never touches `gateway-auth-data`, `case-registry-data`, `evidence-blob-data`, CA state or `network/organizations` |
 | `backup-volumes.sh <dir> [--restore]` | tar every `gleipnir_*` named volume via `alpine` (one file each); `--restore` REPLACES each volume's contents and refuses while a container uses it — the desktop app runs it before every ledger reset |
 | `benchapp.pyw` + `benchcore.py` | the desktop benchmark app (M27, CONTRACTS §12-19): input boxes bound to `sweeps.yaml`, Preview/Run/Resume/Cancel per experiment through WSL, live per-round results, history, CSV export, suggested baselines, automatic backup/restore; `test_benchapp.py` |
-| `lib.sh` | shared helpers: `compose`/`cli`/`peer_env`, `create_channel`, `join_peer`, `package_ccaas`, `set_env_var`, `wait_raft_leader`, `wait_healthz` (accepts peers' permanent-503 docker check, audit F74) |
-| `provision-channel.sh case-NNN` | idempotent per-case channel provisioning (parallel variants); emits the Caliper network config from `case-template.yaml`; experiment.py calls it for channels the running stack lacks |
-| `teardown-channel.sh case-NNN` | `osnadmin channel remove` from all orderers |
+| `lib.sh` | shared helpers: `compose`/`cli`/`peer_env`, `create_channel`, `join_peer`, `app_channel` / `deploy_app_chaincode` (genesis → join → Raft wait → approve + commit, used by `up.sh` and `provision-channel.sh`), `package_ccaas`, `set_env_var`, `wait_raft_leader`, `wait_healthz` (accepts peers' permanent-503 docker check, audit F74) |
+| `provision-channel.sh case-NNN` | idempotent per-case channel provisioning (parallel variants) via `lib.sh` `app_channel`, reusing the package id up.sh installed (`CCAAS_ID_APP`); experiment.py calls it for channels the running stack lacks. It writes no Caliper config |
 | `smoke-standard.sh` | functional gate: create → transfer → access ×2 → audit==4 → dispose → head status `DISPOSED` → transfer-after-dispose must fail |
-| `rounds.py --static` | the ONLY renderer of Caliper benchconfigs and network configs from `sweeps.yaml`: writes `benchmark/benchmarks/smoke-<variant>.yaml` + `benchmark/networks/parallel-c{C}.yaml` (GENERATED headers); library `render_round()` / `network_config()` / `smoke_rounds()` / `ops_rounds()` / `trace_round()` for experiment.py |
-| `experiment.py --exp e0\|ramp\|e1\|e2\|e3a\|e3b\|ops\|cell [--variant V]* [--reps N] [--resume] [--dry-run] [--reuse-network] [--no-monitor] [--no-audit] [--verbose] [--send-rate R…] [--batch-size B] [--cases N] [--seed …] [--rounds …] [--events-per-case …] (+ the other control flags)` | the campaign driver (factor + control flags `--exp cell` only, CONTRACTS §12-18; `[run i/n]` progress + ETA, one result line per round, `results/<exp>/<exp>-results.csv` rewritten after every run): plans cells × repetitions, runs the lifecycle below per run (one network lifetime each, **fresh ledger by default**; `--reuse-network` opts out for one warned ad-hoc run, `--fresh-network` still parses as a no-op), loud failures, `runlog.jsonl` |
+| `rounds.py` (library, no CLI) | the ONLY renderer of Caliper benchconfigs and network configs from `sweeps.yaml`; nothing it renders is committed. `render_parallel_network()` writes `parallel-c{C}.yaml` into each parallel run's folder; library `render_round()` / `network_config()` / `smoke_rounds()` / `ops_rounds()` / `trace_round()` for experiment.py |
+| `experiment.py --exp e0\|ramp\|e1\|e2\|e3a\|e3b\|ops\|cell [--variant V]* [--reps N] [--resume] [--dry-run] [--reuse-network] [--no-monitor] [--no-audit] [--verbose] [--send-rate R…] [--batch-size B] [--cases N] [--seed …] [--rounds …] [--events-per-case …] (+ the other control flags)` | the campaign driver (factor + control flags `--exp cell` only, CONTRACTS §12-18; `[run i/n]` progress + ETA, one result line per round, `results/<exp>/<exp>-results.csv` rewritten after every run): plans cells × repetitions, runs the lifecycle below per run (one network lifetime each, **fresh ledger by default**; `--reuse-network` opts out for one warned ad-hoc run), loud failures, `runlog.jsonl` |
 | `checkpoint.py <runPath> --label tK` | storage checkpoint via `docker exec du -sb` against the **named volumes**: per-channel block store, per-peer GoLevelDB state dir, receipt store `/data` → `checkpoints.jsonl` (`t0` before the first round, `t<k+1>` after every round) |
 | `collect.py <run-dir> [--baseline R]` / `--selftest` | run dir → `manifest.json`: round table + docker resource stats from `caliper.log`, per-tx percentiles/failure classes from `tx-w*.jsonl`, OLS storage regression, anchoring + audit summaries |
 | `report.py --exp E [--out docs/results/E] [--no-charts] [--decimal-comma]` | ALWAYS the per-round Excel CSV `benchmark/results/E/E-results.csv` (any E incl. e0/ramp/cell; supervisor column order; UTF-8 BOM); for e1–ops also per-experiment CSV + Markdown tables (units in headers, mean ± SD over reps; Markdown = one table per variant, ONE latency column `avg (min–max), p95` of means) + PNG charts (one per metric, one line per variant; E1 with Standard/Parallel reference lines, its batch-size-free reference rows printed as `ref` rather than the literal `None`; E3a with the saturation rule flagged → `e3a-saturation.json`; ops → `ops-writes.*` / `ops-reads.*`). The per-round tables (e3a, ops) open with a note that on-chain/off-chain bytes per event, audit time and anchoring delay are measured once per RUN, so the same value repeats on every row |
@@ -748,11 +754,10 @@ regimes:
 ramp: { events_per_case_per_round: 40 }
 ```
 
-`benchmark/` has **no generator of its own** any more: `orchestration/rounds.py
---static` renders the committed `benchmarks/smoke-<variant>.yaml` (4 files) and
-`networks/parallel-c{1,5,10,20,30,40,50}.yaml` from it (GENERATED headers,
-drift-checked), and `experiment.py` renders every steady round into
-`results/…/rounds/<label>/bench.yaml` at run time. Each benchconfig is one
+`benchmark/` has **no generator of its own**, and **no generated config is committed**:
+- `experiment.py` renders every round, smoke included, into `results/…/rounds/<label>/bench.yaml` at run time,
+  through `orchestration/rounds.py`.
+- For the parallel variant it also renders `parallel-c{C}.yaml` into the run folder. Each benchconfig is one
 round + a `monitors.resource` docker block (container names with the leading
 slash Caliper matches verbatim).
 
@@ -769,8 +774,8 @@ routing key. All four variants replay the same file; only `mode` differs.
 
 **Two Caliper connectors, by design:**
 
-- **fabric** (peer-gateway binding, `mode: fabric`) — `networks/coc-main.yaml`,
-  `parallel-c{C}.yaml`, `case-template.yaml`: Caliper submits directly to
+- **fabric** (peer-gateway binding, `mode: fabric`) — `networks/coc-main.yaml`
+  and the per-run `parallel-c{C}.yaml`: Caliper submits directly to
   the peer over grpcs as `User1@org1`; measures raw Fabric
   submit-to-commit. Used by standard and parallel.
 - **REST (custom, `mode: rest`)** — `benchmark/connectors/rest/index.js`
@@ -860,7 +865,7 @@ contracts, or the service-token/benchmark write path:
 |---|---|---|---|
 | **N1** | A02 Cryptographic Failures | Service/internal bearer-token comparisons (`===`/`!==`) were the only non-constant-time secret comparisons in the codebase. Replaced with a length-guarded `safeEqual()` (fixed-digest hash → `crypto.timingSafeEqual`) in gateway, case-registry, evidence-store. | `gateway/src/auth.js`, `services/case-registry/src/index.js`, `services/evidence-store/src/index.js` |
 | **N2** | A05 Security Misconfiguration | The gateway's own origin (`:3000`) shipped bare responses — no security headers — if reached directly, bypassing the nginx edge. Added `nosniff` / `X-Frame-Options: DENY` / `Referrer-Policy: no-referrer` / strict `default-src 'none'` CSP middleware. | `gateway/src/app.js` |
-| **N3** | A07 Auth Failures | Sessions were absolute-TTL-only (8 h) — a token on an unattended terminal stayed valid the full window. Added a sliding idle timeout (default 30 min, `SESSION_IDLE_TTL_SECONDS`), refreshed per authenticated request, dying at the earlier of the two clocks. | `gateway/src/sessions.js` |
+| **N3** | A07 Auth Failures | Sessions were absolute-TTL-only (8 h) — a token on an unattended terminal stayed valid the full window. Added a sliding idle timeout (30 min), refreshed per authenticated request, dying at the earlier of the two clocks. (Its `SESSION_IDLE_TTL_SECONDS` override was never set anywhere and was removed 2026-09-26, CONTRACTS §12-20.) | `gateway/src/sessions.js` |
 | **N4** | A09 Logging & Monitoring | No security-relevant *failure* was logged anywhere (failed logins, lockouts, authz denials, `/internal/anchor-root` probing) — only successful on-chain writes are visible in the audit trail. Added a structured JSON stderr sink; logs only failures, never secrets (unit-verified no-secret guarantee). | `gateway/src/securityLog.js` |
 | **N5** | A06 Vulnerable Components | First `npm audit` pass on the repo; patched non-pinned runtime advisories (`body-parser`, `protobufjs`) via lockfile-only `npm audit fix` across gateway/anchor-client/merkle-batcher/receipt-store/verification → 0 vulns. Pinned versions (`fabric-gateway 1.11.0`, `caliper-cli 0.6.0`) untouched. | lockfiles only |
 | **N6** | A05 / A09 | A malformed JSON request body returned Express's default HTML error page with a full stack trace and container filesystem paths — S15's per-route sanitizer never saw it because `express.json()` throws before routing. Added a terminal error-handling middleware: generic JSON body to the client, detail logged server-side. | `gateway/src/app.js` |
@@ -905,8 +910,7 @@ Gleipnir/
 │   └── orderer.yaml          # orderer sampleconfig (BootstrapMethod: none)
 ├── orchestration/            # up/down/reset-network/backup-volumes/provision, rounds.py/experiment.py/checkpoint/collect/report, benchapp.pyw (desktop app)
 ├── benchmark/                # Caliper 0.6.0 workspace (sweeps.yaml = truth)
-│   ├── benchmarks/           # committed smoke-<variant>.yaml (rendered by rounds.py --static)
-│   ├── networks/             # connector configs (fabric + custom REST; parallel-c{C} rendered)
+│   ├── networks/             # connector configs (coc-main, rest-gateway, connection profile; parallel-c{C} rendered per run)
 │   ├── connectors/rest/      # custom Caliper REST connector
 │   ├── trace/                # seeded transaction-trace generator
 │   ├── audit/                # audit-reconstruction harness (+ pinned merkle.js copy)
