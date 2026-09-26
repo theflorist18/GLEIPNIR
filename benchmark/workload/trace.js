@@ -17,40 +17,8 @@
 
 const fs = require('node:fs');
 const { WorkloadModuleBase } = require('@hyperledger/caliper-core');
-const { codexJson, createRestBody, fabricRequest } = require('./lib/payloads');
+const { opRequest } = require('./lib/payloads');
 const txlog = require('./lib/txlog');
-
-const traces = new Map(); // path -> parsed trace (one read per worker process)
-
-function loadTrace(file) {
-  if (!traces.has(file)) traces.set(file, JSON.parse(fs.readFileSync(file, 'utf8')));
-  return traces.get(file);
-}
-
-function fabricReq(item, channel) {
-  const id = item.evidenceId;
-  const d = item.detail || {};
-  switch (item.op) {
-    case 'CREATE': return fabricRequest('CreateEvidence', [id, codexJson(id, item.actor, d.payload)], channel);
-    case 'TRANSFER': return fabricRequest('TransferCustody', [id, d.newCustodian, d.reason || ''], channel);
-    case 'ACCESS': return fabricRequest('AccessLog', [id, item.actor, d.action || ''], channel);
-    case 'DISPOSE': return fabricRequest('DisposeEvidence', [id, d.reason || ''], channel);
-    default: throw new Error(`trace: unknown op ${item.op}`);
-  }
-}
-
-function restReq(item, caseId) {
-  const id = encodeURIComponent(item.evidenceId);
-  const d = item.detail || {};
-  const scope = caseId ? { caseId } : {};
-  switch (item.op) {
-    case 'CREATE': return { method: 'POST', path: '/api/v1/evidence', body: createRestBody(item.evidenceId, item.actor, caseId, d.payload) };
-    case 'TRANSFER': return { method: 'POST', path: `/api/v1/evidence/${id}/transfer`, body: { newCustodian: d.newCustodian, reason: d.reason || '', actor: item.actor, ...scope } };
-    case 'ACCESS': return { method: 'POST', path: `/api/v1/evidence/${id}/access`, body: { actor: item.actor, action: d.action || '', ...scope } };
-    case 'DISPOSE': return { method: 'DELETE', path: `/api/v1/evidence/${id}`, body: { reason: d.reason || '', actor: item.actor, ...scope } };
-    default: throw new Error(`trace: unknown op ${item.op}`);
-  }
-}
 
 class TraceWorkload extends WorkloadModuleBase {
   async initializeWorkloadModule(workerIndex, totalWorkers, roundIndex, roundArguments, sutAdapter, sutContext) {
@@ -60,7 +28,7 @@ class TraceWorkload extends WorkloadModuleBase {
     this.variant = roundArguments.variant || (this.mode === 'rest' ? 'anchoring' : 'standard');
     this.parallel = this.variant === 'parallel' || this.variant === 'parallel-anchored';
     if (!roundArguments.trace) throw new Error('trace: round argument `trace` (path) is required');
-    const t = loadTrace(roundArguments.trace);
+    const t = JSON.parse(fs.readFileSync(roundArguments.trace, 'utf8'));
     if (t.params.workers !== totalWorkers) {
       throw new Error(`trace: generated for ${t.params.workers} workers but the round has ${totalWorkers}`);
     }
@@ -80,8 +48,7 @@ class TraceWorkload extends WorkloadModuleBase {
     const item = this.items[this.i];
     this.i += 1;
     const scope = this.parallel ? item.caseId : null;
-    const req = this.mode === 'rest' ? restReq(item, scope) : fabricReq(item, scope);
-    const status = await this.sutAdapter.sendRequests(req);
+    const status = await this.sutAdapter.sendRequests(opRequest(this.mode, item, scope));
     txlog.log(this.workerIndex, this.label, item.op, scope, item.evidenceId, status);
     return status;
   }

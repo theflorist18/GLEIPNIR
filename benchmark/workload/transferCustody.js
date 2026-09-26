@@ -4,11 +4,11 @@
 // Each worker seeds a pool of `pool` evidence items in initializeWorkloadModule
 // (NOT timed, via lib/pool), then transfers custody of the pooled items
 // round-robin — each transfer targets the SAME case its evidence lives on.
-// roundArguments: { mode, label, variant?, channels?, caseId?, channel?, pool, payloadBytes? }.
+// roundArguments: { mode, label, variant?, channels?, pool, payloadBytes? }.
 // Each timed tx is logged via lib/txlog (GLEIPNIR_TXLOG_DIR).
 
 const { WorkloadModuleBase } = require('@hyperledger/caliper-core');
-const { fabricRequest } = require('./lib/payloads');
+const { opRequest } = require('./lib/payloads');
 const { seedPool } = require('./lib/pool');
 const txlog = require('./lib/txlog');
 
@@ -26,15 +26,10 @@ class TransferCustodyWorkload extends WorkloadModuleBase {
     const target = this.pool[this.n % this.pool.length];
     this.n += 1;
     const newCustodian = `custodian-${this.workerIndex}-${this.n}`;
-    const req = this.mode === 'rest'
-      ? {
-        method: 'POST',
-        path: `/api/v1/evidence/${encodeURIComponent(target.id)}/transfer`,
-        body: { newCustodian, reason: 'benchmark-transfer', ...(target.caseId ? { caseId: target.caseId } : {}) },
-      }
-      : fabricRequest('TransferCustody', [target.id, newCustodian, 'benchmark-transfer'], target.channel);
-    const status = await this.sutAdapter.sendRequests(req);
-    txlog.log(this.workerIndex, this.label, 'TRANSFER', target.caseId || target.channel, target.id, status);
+    const status = await this.sutAdapter.sendRequests(opRequest(this.mode, {
+      op: 'TRANSFER', evidenceId: target.id, detail: { newCustodian, reason: 'benchmark-transfer' },
+    }, target.caseId));
+    txlog.log(this.workerIndex, this.label, 'TRANSFER', target.caseId, target.id, status);
     return status;
   }
 }

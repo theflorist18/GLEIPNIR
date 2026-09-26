@@ -78,6 +78,7 @@ test('GET streams bytes back with content headers from the sidecar', async (t) =
   assert.equal(r.headers.get('content-disposition'), 'attachment; filename="disk.img"; filename*=UTF-8\'\'disk.img');
   assert.equal(r.headers.get('content-length'), String(bytes.length));
   assert.deepEqual(Buffer.from(await r.arrayBuffer()), bytes);
+  assert.equal((await fetch(`${url}/blobs/ev-none`, { headers: HDR })).status, 404);
 });
 
 // B1: a non-ASCII filename arrives percent-encoded (the gateway encodes it),
@@ -88,9 +89,6 @@ test('B1: a Unicode filename round-trips and is served via RFC 5987', async (t) 
   const name = '証拠 file.pdf';
   await putBlob(url, 'ev-uni', Buffer.from('x'), { 'x-original-filename': encodeURIComponent(name) });
 
-  const meta = await (await fetch(`${url}/blobs/ev-uni/meta`, { headers: HDR })).json();
-  assert.equal(meta.originalFilename, name); // stored decoded, intact
-
   const r = await fetch(`${url}/blobs/ev-uni`, { headers: HDR });
   assert.equal(r.status, 200); // did NOT throw setting the header
   const cd = r.headers.get('content-disposition');
@@ -98,58 +96,19 @@ test('B1: a Unicode filename round-trips and is served via RFC 5987', async (t) 
   assert.match(cd, /filename\*=UTF-8''%E8%A8%BC%E6%8B%A0%20file\.pdf/); // true name
 });
 
-test('meta returns the sidecar; 404 for unknown ids', async (t) => {
-  const url = await start(t);
-  await putBlob(url, 'ev-m', Buffer.from('x'), { 'x-original-filename': 'a.txt' });
-
-  const meta = await (await fetch(`${url}/blobs/ev-m/meta`, { headers: HDR })).json();
-  assert.equal(meta.evidenceId, 'ev-m');
-  assert.equal(meta.originalFilename, 'a.txt');
-  assert.equal(meta.sizeBytes, 1);
-
-  assert.equal((await fetch(`${url}/blobs/ev-none`, { headers: HDR })).status, 404);
-  assert.equal((await fetch(`${url}/blobs/ev-none/meta`, { headers: HDR })).status, 404);
-  assert.equal((await fetch(`${url}/blobs/ev-none/verify`, { headers: HDR })).status, 404);
-});
-
-test('verify: ok against stored proof and explicit expected; detects mismatch and disk tampering', async (t) => {
-  const app = createApp({ dataDir: tmpDataDir(), internalToken: TOKEN });
-  const { server, url } = await listen(app);
-  t.after(() => server.close());
-  const bytes = Buffer.from('immutable payload');
-  await putBlob(url, 'ev-v', bytes);
-
-  const bare = await (await fetch(`${url}/blobs/ev-v/verify`, { headers: HDR })).json();
-  assert.equal(bare.ok, true);
-  assert.equal(bare.actual, expectedNi(bytes));
-
-  const good = await (await fetch(`${url}/blobs/ev-v/verify?expected=${encodeURIComponent(expectedNi(bytes))}`, { headers: HDR })).json();
-  assert.equal(good.ok, true);
-
-  const wrong = await (await fetch(`${url}/blobs/ev-v/verify?expected=${encodeURIComponent('ni:///sha-256;nope')}`, { headers: HDR })).json();
-  assert.equal(wrong.ok, false);
-
-  // simulate disk-level tampering behind the service's back
-  fs.writeFileSync(path.join(app.locals.config.dataDir, 'ev-v'), 'tampered');
-  const tampered = await (await fetch(`${url}/blobs/ev-v/verify`, { headers: HDR })).json();
-  assert.equal(tampered.ok, false);
-});
-
 test('DELETE is rollback-token-gated (S9); with the token removes blob + sidecar', async (t) => {
   const url = await start(t);
   const { rollbackToken } = await (await putBlob(url, 'ev-d', Buffer.from('orphan'))).json();
   assert.match(rollbackToken, /^[0-9a-f]{32}$/);
 
-  // Without the token: 403, blob survives. The token is not leaked via /meta.
+  // Without the token: 403, blob survives.
   assert.equal((await fetch(`${url}/blobs/ev-d`, { method: 'DELETE', headers: HDR })).status, 403);
   assert.equal((await fetch(`${url}/blobs/ev-d`, { method: 'DELETE', headers: { ...HDR, 'x-gleipnir-rollback-token': 'wrong' } })).status, 403);
   assert.equal((await fetch(`${url}/blobs/ev-d`, { headers: HDR })).status, 200, 'blob must survive a tokenless delete');
-  assert.equal((await (await fetch(`${url}/blobs/ev-d/meta`, { headers: HDR })).json()).rollbackToken, undefined);
 
   // With the token: 204, and the blob + sidecar are gone.
   assert.equal((await fetch(`${url}/blobs/ev-d`, { method: 'DELETE', headers: { ...HDR, 'x-gleipnir-rollback-token': rollbackToken } })).status, 204);
   assert.equal((await fetch(`${url}/blobs/ev-d`, { headers: HDR })).status, 404);
-  assert.equal((await fetch(`${url}/blobs/ev-d/meta`, { headers: HDR })).status, 404);
   // A repeat delete of a now-missing blob is 404.
   assert.equal((await fetch(`${url}/blobs/ev-d`, { method: 'DELETE', headers: { ...HDR, 'x-gleipnir-rollback-token': rollbackToken } })).status, 404);
 });

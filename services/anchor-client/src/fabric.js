@@ -61,13 +61,11 @@ export function wrapContract(gwContract) {
       const submitted = await gwContract.submitAsync(fn, { arguments: args });
       const status = await submitted.getStatus();
       if (!status.successful) {
-        const err = new Error(
+        throw new Error(
           `transaction ${status.transactionId} failed to commit (status code ${status.code})`,
         );
-        err.code = 'COMMIT_FAILED';
-        throw err;
       }
-      return { txId: submitted.getTransactionId(), result: submitted.getResult() };
+      return { txId: submitted.getTransactionId() };
     },
     async evaluate(fn, args) {
       return gwContract.evaluateTransaction(fn, ...args);

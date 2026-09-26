@@ -52,6 +52,15 @@ function receiptStore(receipts) {
   });
 }
 
+// gateway stub serving the V2 anchored root for any path.
+const rootServer = () => startServer((_req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ merkleRoot: V2.ROOT })); });
+
+async function boot(t, cfg, ...stubs) {
+  const v = await listen(createApp({ variant: 'anchoring', logLevel: 'silent', ...cfg }));
+  t.after(() => [v, ...stubs].forEach((s) => s.server.close()));
+  return v.url;
+}
+
 test('anchoring happy path: recomputed root == anchored root -> ok:true with timed steps', async (t) => {
   const rstore = await receiptStore(new Map([['evt-1', goodReceipt('shared')]]));
   let gatewayHits = 0;
@@ -62,11 +71,9 @@ test('anchoring happy path: recomputed root == anchored root -> ok:true with tim
     res.end(JSON.stringify({ merkleRoot: V2.ROOT }));
   });
 
-  const app = createApp({ variant: 'anchoring', receiptStoreUrl: rstore.url, gatewayUrl: gw.url, logLevel: 'silent' });
-  const v = await listen(app);
-  t.after(() => { v.server.close(); rstore.server.close(); gw.server.close(); });
+  const url = await boot(t, { receiptStoreUrl: rstore.url, gatewayUrl: gw.url }, rstore, gw);
 
-  const resp = await fetch(`${v.url}/verify/evt-1`);
+  const resp = await fetch(`${url}/verify/evt-1`);
   assert.equal(resp.status, 200);
   const body = await resp.json();
   assert.equal(body.ok, true);
@@ -82,15 +89,10 @@ test('tampered receipt: recomputed root != anchored root -> 200 ok:false root-mi
   const tampered = goodReceipt('shared');
   tampered.leafHash = '00'.repeat(32); // wrong leaf
   const rstore = await receiptStore(new Map([['evt-1', tampered]]));
-  const gw = await startServer((_req, res) => {
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ merkleRoot: V2.ROOT }));
-  });
-  const app = createApp({ variant: 'anchoring', receiptStoreUrl: rstore.url, gatewayUrl: gw.url, logLevel: 'silent' });
-  const v = await listen(app);
-  t.after(() => { v.server.close(); rstore.server.close(); gw.server.close(); });
+  const gw = await rootServer();
+  const url = await boot(t, { receiptStoreUrl: rstore.url, gatewayUrl: gw.url }, rstore, gw);
 
-  const resp = await fetch(`${v.url}/verify/evt-1`);
+  const resp = await fetch(`${url}/verify/evt-1`);
   assert.equal(resp.status, 200);
   const body = await resp.json();
   assert.equal(body.ok, false);
@@ -99,11 +101,9 @@ test('tampered receipt: recomputed root != anchored root -> 200 ok:false root-mi
 
 test('missing receipt -> 404 missing-receipt', async (t) => {
   const rstore = await receiptStore(new Map());
-  const app = createApp({ variant: 'anchoring', receiptStoreUrl: rstore.url, gatewayUrl: 'http://127.0.0.1:1', logLevel: 'silent' });
-  const v = await listen(app);
-  t.after(() => { v.server.close(); rstore.server.close(); });
+  const url = await boot(t, { receiptStoreUrl: rstore.url, gatewayUrl: 'http://127.0.0.1:1' }, rstore);
 
-  const resp = await fetch(`${v.url}/verify/evt-missing`);
+  const resp = await fetch(`${url}/verify/evt-missing`);
   assert.equal(resp.status, 404);
   assert.equal((await resp.json()).reason, 'missing-receipt');
 });
@@ -111,11 +111,9 @@ test('missing receipt -> 404 missing-receipt', async (t) => {
 test('anchor read error -> 502 anchor-read-error', async (t) => {
   const rstore = await receiptStore(new Map([['evt-1', goodReceipt('shared')]]));
   const gw = await startServer((_req, res) => { res.writeHead(500); res.end('boom'); });
-  const app = createApp({ variant: 'anchoring', receiptStoreUrl: rstore.url, gatewayUrl: gw.url, logLevel: 'silent' });
-  const v = await listen(app);
-  t.after(() => { v.server.close(); rstore.server.close(); gw.server.close(); });
+  const url = await boot(t, { receiptStoreUrl: rstore.url, gatewayUrl: gw.url }, rstore, gw);
 
-  const resp = await fetch(`${v.url}/verify/evt-1`);
+  const resp = await fetch(`${url}/verify/evt-1`);
   assert.equal(resp.status, 502);
   assert.equal((await resp.json()).reason, 'anchor-read-error');
 });
@@ -130,17 +128,15 @@ test('malformed receipt -> 422 malformed-receipt, service stays up', async (t) =
     ['evt-empty', {}],
     ['evt-badpath', badPath],
   ]));
-  const app = createApp({ variant: 'anchoring', receiptStoreUrl: rstore.url, gatewayUrl: 'http://127.0.0.1:1', logLevel: 'silent' });
-  const v = await listen(app);
-  t.after(() => { v.server.close(); rstore.server.close(); });
+  const url = await boot(t, { receiptStoreUrl: rstore.url, gatewayUrl: 'http://127.0.0.1:1' }, rstore);
 
   for (const id of ['evt-empty', 'evt-badpath']) {
-    const resp = await fetch(`${v.url}/verify/${id}`);
+    const resp = await fetch(`${url}/verify/${id}`);
     assert.equal(resp.status, 422, `${id} must be rejected as malformed`);
     assert.equal((await resp.json()).reason, 'malformed-receipt');
   }
   // Process survived both: the handler is still serving.
-  const health = await fetch(`${v.url}/healthz`);
+  const health = await fetch(`${url}/healthz`);
   assert.equal((await health.json()).ok, true);
 });
 
@@ -150,16 +146,11 @@ test('malformed receipt -> 422 malformed-receipt, service stays up', async (t) =
 test('RQ2: a completed verify appends a step-breakdown metric line; errors do not', async (t) => {
   const metricsPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'verify-metrics-')), 'verify.jsonl');
   const rstore = await receiptStore(new Map([['evt-1', goodReceipt('shared')]])); // evt-missing absent
-  const gw = await startServer((_req, res) => {
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ merkleRoot: V2.ROOT }));
-  });
-  const app = createApp({ variant: 'anchoring', receiptStoreUrl: rstore.url, gatewayUrl: gw.url, logLevel: 'silent', metricsPath });
-  const v = await listen(app);
-  t.after(() => { v.server.close(); rstore.server.close(); gw.server.close(); });
+  const gw = await rootServer();
+  const url = await boot(t, { receiptStoreUrl: rstore.url, gatewayUrl: gw.url, metricsPath }, rstore, gw);
 
-  assert.equal((await fetch(`${v.url}/verify/evt-1`)).status, 200);       // records
-  assert.equal((await fetch(`${v.url}/verify/evt-missing`)).status, 404); // must NOT record
+  assert.equal((await fetch(`${url}/verify/evt-1`)).status, 200);       // records
+  assert.equal((await fetch(`${url}/verify/evt-missing`)).status, 404); // must NOT record
 
   // The append is fire-and-forget; give the event loop a couple of ticks.
   await new Promise((r) => setTimeout(r, 50));
@@ -177,15 +168,10 @@ test('RQ2: a completed verify appends a step-breakdown metric line; errors do no
 
 test('RQ2: with no metricsPath (default) nothing is written and verify still works', async (t) => {
   const rstore = await receiptStore(new Map([['evt-1', goodReceipt('shared')]]));
-  const gw = await startServer((_req, res) => {
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ merkleRoot: V2.ROOT }));
-  });
-  const app = createApp({ variant: 'anchoring', receiptStoreUrl: rstore.url, gatewayUrl: gw.url, logLevel: 'silent' });
-  const v = await listen(app);
-  t.after(() => { v.server.close(); rstore.server.close(); gw.server.close(); });
+  const gw = await rootServer();
+  const url = await boot(t, { receiptStoreUrl: rstore.url, gatewayUrl: gw.url }, rstore, gw);
 
-  assert.equal((await fetch(`${v.url}/verify/evt-1`)).status, 200); // no throw despite no metrics sink
+  assert.equal((await fetch(`${url}/verify/evt-1`)).status, 200); // no throw despite no metrics sink
 });
 
 test('parallel-anchored path reads the anchor-client, not the gateway', async (t) => {
@@ -197,11 +183,9 @@ test('parallel-anchored path reads the anchor-client, not the gateway', async (t
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ merkleRoot: V2.ROOT }));
   });
-  const app = createApp({ variant: 'parallel-anchored', receiptStoreUrl: rstore.url, anchorClientUrl: anchor.url, logLevel: 'silent' });
-  const v = await listen(app);
-  t.after(() => { v.server.close(); rstore.server.close(); anchor.server.close(); });
+  const url = await boot(t, { variant: 'parallel-anchored', receiptStoreUrl: rstore.url, anchorClientUrl: anchor.url }, rstore, anchor);
 
-  const resp = await fetch(`${v.url}/verify/evt-1`);
+  const resp = await fetch(`${url}/verify/evt-1`);
   assert.equal(resp.status, 200);
   assert.equal((await resp.json()).ok, true);
   assert.equal(anchorHits, 1);
@@ -215,15 +199,10 @@ test('parallel-anchored path reads the anchor-client, not the gateway', async (t
 test('receipt with event copy: leaf recomputed from the event -> ok:true, leafSource:"event"', async (t) => {
   const r = { ...goodReceipt('shared'), evidenceId: 'ev-1', event: { i: 1 } }; // leafHash({i:1}) == V2.L1
   const rstore = await receiptStore(new Map([['evt-1', r]]));
-  const gw = await startServer((_req, res) => {
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ merkleRoot: V2.ROOT }));
-  });
-  const app = createApp({ variant: 'anchoring', receiptStoreUrl: rstore.url, gatewayUrl: gw.url, logLevel: 'silent' });
-  const v = await listen(app);
-  t.after(() => { v.server.close(); rstore.server.close(); gw.server.close(); });
+  const gw = await rootServer();
+  const url = await boot(t, { receiptStoreUrl: rstore.url, gatewayUrl: gw.url }, rstore, gw);
 
-  const resp = await fetch(`${v.url}/verify/evt-1`);
+  const resp = await fetch(`${url}/verify/evt-1`);
   assert.equal(resp.status, 200);
   const body = await resp.json();
   assert.equal(body.ok, true);
@@ -233,15 +212,10 @@ test('receipt with event copy: leaf recomputed from the event -> ok:true, leafSo
 test('tampered event copy with an untouched stored leafHash -> root-mismatch (leaf comes from the event, not the receipt)', async (t) => {
   const r = { ...goodReceipt('shared'), evidenceId: 'ev-1', event: { i: 1, tampered: true } };
   const rstore = await receiptStore(new Map([['evt-1', r]]));
-  const gw = await startServer((_req, res) => {
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ merkleRoot: V2.ROOT }));
-  });
-  const app = createApp({ variant: 'anchoring', receiptStoreUrl: rstore.url, gatewayUrl: gw.url, logLevel: 'silent' });
-  const v = await listen(app);
-  t.after(() => { v.server.close(); rstore.server.close(); gw.server.close(); });
+  const gw = await rootServer();
+  const url = await boot(t, { receiptStoreUrl: rstore.url, gatewayUrl: gw.url }, rstore, gw);
 
-  const resp = await fetch(`${v.url}/verify/evt-1`);
+  const resp = await fetch(`${url}/verify/evt-1`);
   assert.equal(resp.status, 200);
   const body = await resp.json();
   assert.equal(body.ok, false);
@@ -253,15 +227,10 @@ test('metrics line records leafSource:"event" for an event-copy receipt', async 
   const metricsPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'verify-metrics-')), 'verify.jsonl');
   const r = { ...goodReceipt('shared'), evidenceId: 'ev-1', event: { i: 1 } };
   const rstore = await receiptStore(new Map([['evt-1', r]]));
-  const gw = await startServer((_req, res) => {
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ merkleRoot: V2.ROOT }));
-  });
-  const app = createApp({ variant: 'anchoring', receiptStoreUrl: rstore.url, gatewayUrl: gw.url, logLevel: 'silent', metricsPath });
-  const v = await listen(app);
-  t.after(() => { v.server.close(); rstore.server.close(); gw.server.close(); });
+  const gw = await rootServer();
+  const url = await boot(t, { receiptStoreUrl: rstore.url, gatewayUrl: gw.url, metricsPath }, rstore, gw);
 
-  assert.equal((await fetch(`${v.url}/verify/evt-1`)).status, 200);
+  assert.equal((await fetch(`${url}/verify/evt-1`)).status, 200);
   await new Promise((res) => setTimeout(res, 50));
   const rec = JSON.parse(fs.readFileSync(metricsPath, 'utf8').trim());
   assert.equal(rec.leafSource, 'event');

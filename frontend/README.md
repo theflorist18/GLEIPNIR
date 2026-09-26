@@ -18,14 +18,16 @@ only).
 - `src/components/` — `EvidenceCard`, `MerkleBadge`, `SessionTrail`
   (promoted from the old `demo.tsx`), `AuditTrailTimeline` (M21/M23: the CoC
   trail as a vertical timeline — replaced the flat `AuditTrail` list),
-  `Layout/TopBar` + `Layout/Sidebar` (role-aware nav).
+  `TeamRoster` (M25 roster list + add-member modal, shared by `CaseDetailPage`
+  and `LeadDashboardPage`), `Layout/TopBar` + `Layout/Sidebar` (role-aware nav).
 - `src/components/ui/` — the M21 in-repo primitive kit: `Tabs`, `Stepper`,
   `Modal`, `Timeline`, `Badge`, plus `Icon` (+ the PLACEHOLDER `BrandMark`)
   and `Chips` (`StatusPill`, `Avatar`, `CopyButton`). Deliberately NO
   component library — covered by vitest + Testing Library (`npm test`, jsdom).
 - **Visual system (Claude Design handoff, 2026-09-25):** `src/tokens.css`
-  (verbatim drop-in, imported first by `styles.css`; legacy `--bg/--panel/…`
-  aliases kept) · `public/icons/sprite.svg` (currentColor symbols, same-origin
+  (the handoff drop-in trimmed to the tokens the SPA uses — the dashboard's
+  variant/regime/run/viz palettes, unused scales and legacy aliases are gone;
+  imported first by `styles.css`) · `public/icons/sprite.svg` (currentColor symbols, same-origin
   for the CSP) · `public/fonts/` (self-hosted OFL woff2, latin subset:
   Figtree, Caprasimo, JetBrains Mono — licences alongside). Light by default,
   dark follows `prefers-color-scheme` unless the user menu's Theme picker sets
@@ -65,14 +67,14 @@ only).
   member picked from the user directory (`GET /users/directory`; the
   case-lead role offers only global leads; server enforces the last-lead
   409).
-- `src/pages/admin/` — `UsersPage`, `CasesAdminPage` (roster + categorize).
+- `src/pages/admin/` — `UsersPage`, `CasesAdminPage` (all-cases list, status,
+  categorize; admins create cases from `MyCasesPage` and manage rosters in
+  `CaseDetailPage`'s Team section).
   The old operator dashboard page (and the gateway runs API behind it) was
   removed on 2026-09-24: the benchmark is driven by the desktop app
   `orchestration/benchapp.pyw`. `Op` is `CREATE | TRANSFER | ACCESS |
   DISPOSE` and the status pill shows `DISPOSED` (legacy `REMOVED` rows
   tolerated).
-- `src/settings.tsx` — trimmed to the display `variant` only; the token input
-  is gone (login replaced it).
 
 Routes: `/login` public; `/ingest`, `/cases[/:caseId]`,
 `/evidence/:evidenceId`, `/search` require a session; `/admin/users`,
@@ -81,7 +83,8 @@ Routes: `/login` public; `/ingest`, `/cases[/:caseId]`,
 
 **Verification is per event** (receipts are keyed by eventId), so Verify
 targets on the evidence page come from write responses captured this session
-(`SessionTrail`). **Demo tip:** with the compose default `BATCH_SIZE` a demo
+(`SessionTrail`); Verify and the Merkle badge switch on once a write comes back
+`batched: true` (Anchoring / Parallel-Anchored). **Demo tip:** with the compose default `BATCH_SIZE` a demo
 batch may never close, so Verify legitimately reports *not yet anchored* —
 bring the network up with a small batch (e.g. `BATCH_SIZE=5` in
 `network/compose/.env`) to see green badges. On the anchored variants the
@@ -110,7 +113,8 @@ trail on the evidence page grows as you use it; that is the feature.
 - Gateway unreachable / non-2xx → inline error (`GatewayError` status + body).
 - 401 anywhere → session dropped, redirected to `/login`.
 - 403/404 on case/evidence pages → "no access" state (server-side scoping).
-- Verify on a non-anchoring variant → badge shows N/A.
+- Verify on a non-anchoring variant (no `batched` write this session) → badge
+  shows N/A.
 
 ## Build / dev
 

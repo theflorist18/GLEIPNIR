@@ -4,15 +4,13 @@
         st = VARIANT_STYLE[v]
         ax.errorbar(x, mean[v], yerr=sd[v], label=st["label"], color=st["color"], mfc=st["mfc"],
                     mec=st["mec"], marker=st["marker"], ms=st["ms"], mew=1.5, ls=st["ls"], elinewidth=1)
-    ax.bar(..., color=st["tint"], edgecolor=st["color"], hatch=st["hatch"])   # bars
 """
-VARIANT_ORDER = ["standard", "anchoring", "parallel", "parallel-anchored"]  # legend + table order
 
 VARIANT_STYLE = {
-    "standard":          dict(label="Standard",          color="#0072B2", mfc="#0072B2", mec="#0072B2", marker="o", ms=6.0, ls="-",                 hatch="",   tint="#E5F1F8"),
-    "anchoring":         dict(label="Anchoring",         color="#B07A00", mfc="white",   mec="#B07A00", marker="s", ms=6.0, ls=(0, (6, 3)),         hatch="//", tint="#FDF3E0"),
-    "parallel":          dict(label="Parallel",          color="#009E73", mfc="#009E73", mec="#009E73", marker="^", ms=6.0, ls=(0, (1.5, 1.5)),     hatch="..", tint="#E0F4EE"),
-    "parallel-anchored": dict(label="Parallel-Anchored", color="#B35C8E", mfc="white",   mec="#B35C8E", marker="D", ms=5.5, ls=(0, (6, 2, 1.5, 2)), hatch="xx", tint="#F7EAF1"),
+    "standard":          dict(label="Standard",          color="#0072B2", mfc="#0072B2", mec="#0072B2", marker="o", ms=6.0, ls="-"),
+    "anchoring":         dict(label="Anchoring",         color="#B07A00", mfc="white",   mec="#B07A00", marker="s", ms=6.0, ls=(0, (6, 3))),
+    "parallel":          dict(label="Parallel",          color="#009E73", mfc="#009E73", mec="#009E73", marker="^", ms=6.0, ls=(0, (1.5, 1.5))),
+    "parallel-anchored": dict(label="Parallel-Anchored", color="#B35C8E", mfc="white",   mec="#B35C8E", marker="D", ms=5.5, ls=(0, (6, 2, 1.5, 2))),
 }
 
 REFERENCE_LINE = dict(color="#82796A", ls=(0, (1, 2)), lw=1.0, label="y = x (send rate)")   # E3a diagonal

@@ -30,49 +30,23 @@ function sendError(res, status, code, message) {
   sendJson(res, status, { error: code, message });
 }
 
-function readJsonBody(req, limitBytes = 1_000_000) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    let size = 0;
-    req.on('data', (chunk) => {
-      size += chunk.length;
-      if (size > limitBytes) {
-        reject(new Error('request body too large'));
-        req.destroy();
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on('end', () => {
-      const text = Buffer.concat(chunks).toString('utf8');
-      if (!text) {
-        resolve({});
-        return;
-      }
-      try {
-        resolve(JSON.parse(text));
-      } catch (err) {
-        reject(new Error(`invalid JSON body: ${err.message}`));
-      }
-    });
-    req.on('error', reject);
-  });
+// req.destroy() tears down the socket; a bare throw would only detach it
+// (Node nulls req.socket for server requests), leaving a half-read keep-alive socket.
+async function readJsonBody(req, limitBytes = 1_000_000) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > limitBytes) { req.destroy(); throw new Error('request body too large'); }
+    chunks.push(chunk);
+  }
+  const text = Buffer.concat(chunks).toString('utf8');
+  if (!text) return {};
+  try { return JSON.parse(text); } catch (err) { throw new Error(`invalid JSON body: ${err.message}`); }
 }
 
-function toText(value) {
-  if (value == null) return '';
-  if (typeof value === 'string') return value;
-  return Buffer.from(value).toString('utf8');
-}
-
-// Chaincode ReadAnchorRoot returns an error when the (scopeId,batchId) key is
-// absent. The exact string is not pinned in CONTRACTS, so we detect the common
-// forms; a fake/adapter may also set err.code='NOT_FOUND' or err.notFound=true.
-function isNotFound(err) {
-  if (!err) return false;
-  if (err.code === 'NOT_FOUND' || err.notFound === true) return true;
-  return /not[\s-]?found|does not exist|no such key/i.test(String(err.message || ''));
-}
+// chaincode/evidence/contract.go ReadAnchorRoot errors "anchor root ... not found" on an absent key.
+const isNotFound = (err) => /not[\s-]?found|does not exist|no such key/i.test(String(err?.message || ''));
 
 async function postRoot(req, res, contract, logger) {
   let body;
@@ -108,11 +82,7 @@ async function postRoot(req, res, contract, logger) {
 
 async function getRoot(res, contract, caseId, batchId, logger) {
   try {
-    const bytes = await contract.evaluate('ReadAnchorRoot', [caseId, batchId]);
-    const text = toText(bytes);
-    if (!text || text === 'null') {
-      return sendError(res, 404, 'root-not-found', `no anchor root for ${caseId}/${batchId}`);
-    }
+    const text = Buffer.from(await contract.evaluate('ReadAnchorRoot', [caseId, batchId])).toString('utf8');
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     return res.end(text);
   } catch (err) {
@@ -143,9 +113,6 @@ async function route(req, res, { contract, logger }) {
 // createApp({ contract, logger }) — contract is the { submit, evaluate } adapter.
 // Injected directly in tests; built by connectAnchorFabric() in start().
 export function createApp({ contract, logger = console }) {
-  if (!contract) {
-    throw new Error('createApp requires a contract adapter');
-  }
   return http.createServer((req, res) => {
     route(req, res, { contract, logger }).catch((err) => {
       logger.error?.(`unhandled error: ${err.stack || err.message}`);

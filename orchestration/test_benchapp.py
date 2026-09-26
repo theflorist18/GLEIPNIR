@@ -6,22 +6,9 @@
 import glob
 import os
 import re
-import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import benchcore as B  # noqa: E402
-import yaml  # noqa: E402
-
-EDITABLE = [
-    "seed", "workers", "repetitions", "batch_sizes", "channel_counts", "send_rates_tps", "case_counts",
-    "baseline.send_rate_tps", "baseline.batch_size", "baseline.channels", "baseline.channels_max",
-    "workload.evidence_per_case", "workload.events_per_case_per_round", "workload.rounds",
-    "workload.mix.transfer_weight", "workload.mix.access_weight", "workload.mix.dispose_fraction",
-    "workload.payload_bytes", "workload.audit_cases", "anchoring.flush_timeout_ms", "monitor.interval_s",
-    "regimes.smoke.cases", "regimes.smoke.evidence_per_case", "regimes.smoke.logs_per_case_min",
-    "regimes.smoke.logs_per_case_max", "regimes.smoke.send_rate_tps", "regimes.steady.min_events_per_channel",
-    "ramp.events_per_case_per_round",
-]
+import benchcore as B
+import yaml
 
 
 def comments(text):
@@ -41,7 +28,7 @@ def sweeps_setter():
     with open(B.SWEEPS, encoding="utf-8", newline="") as fh:
         text = fh.read()
     base = yaml.safe_load(text)
-    for path in EDITABLE:
+    for path in B.FIELDS:
         old = B.get_path(base, path)
         new = other(old)
         edited = B.set_sweeps_value(text, path, new)
@@ -71,9 +58,6 @@ def sweeps_setter():
 
 LINES = {
     "plan e1: 36 run(s), 36 to execute": {"kind": "plan", "exp": "e1", "runs": 36, "todo": 36},
-    "  e1/anchoring/batch10-ch1-cases20/r0             regime=steady    rounds=5  rates=[50, 50, 50, 50, 50] "
-    "trace=200evx5": {"kind": "planrow", "runId": "e1/anchoring/batch10-ch1-cases20/r0", "regime": "steady"},
-    "ETA: 3.4 h": {"kind": "eta", "eta": "3.4 h"},
     "##### [run 3/12 | 16 % done | elapsed 0:41:10 | ETA 1 day, 3:12:00] #####":
         {"kind": "run", "i": 3, "n": 12, "pct": 16, "elapsed": "0:41:10", "eta": "1 day, 3:12:00"},
     "===== [run 3/12] e1/anchoring/batch25-ch1-cases20/r0 (regime sub-floor) =====":
@@ -117,9 +101,9 @@ def parser():
 def scripts():
     assert B.wsl_path("C:\\theflorist18\\Gleipnir") == "/mnt/c/theflorist18/Gleipnir"
     a = B.experiment_args("cell", variants=["standard", "parallel"], reps=1, send_rates=[25, 50], cases=10,
-                          controls={"--seed": 7}, dry_run=True)
+                          controls={"--seed": 7})
     assert a == ["--exp", "cell", "--variant", "standard", "--variant", "parallel", "--reps", "1",
-                 "--send-rate", "25", "50", "--cases", "10", "--seed", "7", "--dry-run"], a
+                 "--send-rate", "25", "50", "--cases", "10", "--seed", "7"], a
     run, preview = B.experiment_script(a, wipe=True), B.experiment_script(a, wipe=False)
     assert "GLEIPNIR_ALLOW_LEDGER_WIPE=1" in run and "setsid" in run and B.APP_MARK in run
     assert "GLEIPNIR_ALLOW_LEDGER_WIPE" not in preview
@@ -163,7 +147,7 @@ def help_coverage():
     spec = importlib.util.spec_from_file_location("benchapp", os.path.join(os.path.dirname(B.__file__), "benchapp.pyw"))
     app = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(app)
-    assert set(app.FIELDS) <= set(H.FIELD_HELP), set(app.FIELDS) - set(H.FIELD_HELP)
+    assert set(B.FIELDS) <= set(H.FIELD_HELP), set(B.FIELDS) - set(H.FIELD_HELP)
     assert {path for _f, path, *_ in __import__("experiment").CONTROL_FLAGS} <= set(H.FIELD_HELP)
     assert {c for c, _ in app.LIVE_COLS} <= set(H.COLUMN_HELP), {c for c, _ in app.LIVE_COLS} - set(H.COLUMN_HELP)
     assert set(H.MODE_HELP) == {"e0", "ramp", "e3a", "e3b", "ops"}

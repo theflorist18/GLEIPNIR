@@ -26,14 +26,8 @@ login() { # $1 username, $2 password -> token on stdout (empty on failure)
 }
 
 code_of() { # HTTP status only: code_of <token> <method> <url> [json-body]
-  local token="$1" method="$2" url="$3" body="${4:-}"
-  if [ -n "${body}" ]; then
-    curl -sS -o /dev/null -w '%{http_code}' -X "${method}" "${url}" \
-      -H "authorization: Bearer ${token}" -H 'content-type: application/json' -d "${body}"
-  else
-    curl -sS -o /dev/null -w '%{http_code}' -X "${method}" "${url}" \
-      -H "authorization: Bearer ${token}"
-  fi
+  local extra=(); [ -z "${4:-}" ] || extra=(-H 'content-type: application/json' -d "$4")
+  curl -sS -o /dev/null -w '%{http_code}' -X "$2" "$3" -H "authorization: Bearer $1" "${extra[@]}"
 }
 
 audit_len() { # $1 token, $2 evidenceId

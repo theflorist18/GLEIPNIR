@@ -1,4 +1,4 @@
-import { Navigate, Outlet, Route, Routes } from 'react-router-dom';
+import { Link, Navigate, Outlet, Route, Routes } from 'react-router-dom';
 import { RequireAuth } from './auth/RequireAuth';
 import { RequireRole } from './auth/RequireRole';
 import { LoginPage } from './auth/LoginPage';
@@ -13,8 +13,6 @@ import { SearchPage } from './pages/investigator/SearchPage';
 import { LeadDashboardPage } from './pages/lead/LeadDashboardPage';
 import { UsersPage } from './pages/admin/UsersPage';
 import { CasesAdminPage } from './pages/admin/CasesAdminPage';
-import { UnauthorizedPage } from './pages/shared/UnauthorizedPage';
-import { NotFoundPage } from './pages/shared/NotFoundPage';
 
 // Multi-page evidence library (M14). The old single-page demo scope toggle
 // became real routes: the library pages for any signed-in role, the
@@ -36,6 +34,15 @@ function Shell() {
   );
 }
 
+// Not-found / not-authorized card (RequireRole redirects to /unauthorized).
+const Notice = ({ title, text }: { title: string; text?: string }) => (
+  <div className="card page-narrow">
+    <h3>{title}</h3>
+    {text && <p className="muted">{text}</p>}
+    <Link to="/cases">Back to my cases</Link>
+  </div>
+);
+
 export function App() {
   return (
     <Routes>
@@ -53,8 +60,8 @@ export function App() {
         <Route path="/lead/dashboard" element={<RequireRole roles={['lead', 'admin']}><LeadDashboardPage /></RequireRole>} />
         <Route path="/admin/users" element={<RequireRole roles={['admin']}><UsersPage /></RequireRole>} />
         <Route path="/admin/cases" element={<RequireRole roles={['admin']}><CasesAdminPage /></RequireRole>} />
-        <Route path="/unauthorized" element={<UnauthorizedPage />} />
-        <Route path="*" element={<NotFoundPage />} />
+        <Route path="/unauthorized" element={<Notice title="Not authorized" text="This page requires the admin role." />} />
+        <Route path="*" element={<Notice title="Page not found" />} />
       </Route>
     </Routes>
   );

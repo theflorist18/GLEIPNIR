@@ -32,11 +32,8 @@ function loadConfig() {
     port: int(process.env.PORT, 4001),
     variant: process.env.VARIANT || 'anchoring',
     // BATCH_SIZE is the one batch-size knob (E1 sweeps ONE grid for both
-    // anchored variants). 0 = unset -> fall back to the legacy per-variant
-    // BATCH_N (anchoring) / BATCH_K (parallel-anchored).
-    batchSize: int(process.env.BATCH_SIZE, 0),
-    batchN: int(process.env.BATCH_N, 100),
-    batchK: int(process.env.BATCH_K, 25),
+    // anchored variants); default = the compose default.
+    batchSize: int(process.env.BATCH_SIZE, 100),
     // 0 = size-only batching (partial batch flushed at run end by /flush).
     flushMs: int(process.env.BATCH_FLUSH_MS, 0),
     receiptStoreUrl: process.env.RECEIPT_STORE_URL || 'http://receipt-store:4002',
@@ -68,11 +65,6 @@ function createApp(overrides) {
   const batches = new Map();
   // In-flight boundary promises (so /flush can await them deterministically).
   const inflight = new Set();
-
-  const batchSize = () => {
-    if (cfg.batchSize > 0) return cfg.batchSize;
-    return cfg.variant === 'parallel-anchored' ? cfg.batchK : cfg.batchN;
-  };
 
   // batchId = scope + epoch + sequence. Opaque at every consumer (receipt
   // rootRef, chaincode composite key, verification query); the epoch component
@@ -108,42 +100,15 @@ function createApp(overrides) {
     return false;
   }
 
-  // Submit the Merkle root for on-chain commit. Throws on failure so the caller
-  // can keep the receipts and surface the batch as degraded.
+  // Submit the root: anchor-client for parallel-anchored, else the gateway's bearer-authed
+  // /internal/anchor-root (F23). Throws so the caller keeps receipts and marks the batch degraded.
   async function submitRoot(scopeId, batchId, merkleRoot, leafCount) {
-    if (cfg.variant === 'parallel-anchored') {
-      const resp = await fetch(`${cfg.anchorClientUrl}/roots`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          caseId: scopeId,
-          batchId,
-          merkleRoot,
-          meta: { leafCount },
-        }),
-      });
-      if (!resp.ok) throw new Error(`anchor-client /roots -> ${resp.status}`);
-      const body = await resp.json().catch(() => ({}));
-      return body.txId || null;
-    }
-    // anchoring (and any default): submit via the gateway internal endpoint.
-    // The gateway bearer-auths everything after /healthz, internal routes
-    // included (F23) — same token the verification service uses to read roots.
-    const resp = await fetch(`${cfg.gatewayUrl}/internal/anchor-root`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${cfg.token}`,
-      },
-      body: JSON.stringify({
-        batchId,
-        merkleRoot,
-        meta: { scopeId, leafCount },
-      }),
-    });
-    if (!resp.ok) throw new Error(`gateway /internal/anchor-root -> ${resp.status}`);
-    const body = await resp.json().catch(() => ({}));
-    return body.txId || null;
+    const [url, auth, body] = cfg.variant === 'parallel-anchored'
+      ? [`${cfg.anchorClientUrl}/roots`, {}, { caseId: scopeId, batchId, merkleRoot, meta: { leafCount } }]
+      : [`${cfg.gatewayUrl}/internal/anchor-root`, { authorization: `Bearer ${cfg.token}` }, { batchId, merkleRoot, meta: { scopeId, leafCount } }];
+    const resp = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', ...auth }, body: JSON.stringify(body) });
+    if (!resp.ok) throw new Error(`${url} -> ${resp.status}`);
+    return (await resp.json().catch(() => ({}))).txId || null;
   }
 
   async function processBatch(batch) {
@@ -277,7 +242,7 @@ function createApp(overrides) {
     };
     return {
       variant: cfg.variant,
-      batchSize: batchSize(),
+      batchSize: cfg.batchSize,
       flushTimeoutMs: cfg.flushMs,
       queues: queueDepths,
       counters,
@@ -321,7 +286,7 @@ function createApp(overrides) {
     q.events.push({ eventId, event, leafHash: leafHash(event), leafIndex, enqueuedAt: now });
     q.ids.add(eventId);
     res.status(202).json({ batchId, leafIndex });
-    if (q.events.length >= batchSize()) trigger(scopeId, false);
+    if (q.events.length >= cfg.batchSize) trigger(scopeId, false);
     return undefined;
   });
 
@@ -344,12 +309,9 @@ if (require.main === module) {
   const app = createApp();
   const cfg = app.locals.config;
   app.listen(cfg.port, () => {
-    const size = cfg.batchSize > 0
-      ? cfg.batchSize
-      : (cfg.variant === 'parallel-anchored' ? cfg.batchK : cfg.batchN);
     console.log(
       `[merkle-batcher] listening on :${cfg.port} variant=${cfg.variant} ` +
-      `batchSize=${size} flushTimeoutMs=${cfg.flushMs}`
+      `batchSize=${cfg.batchSize} flushTimeoutMs=${cfg.flushMs}`
     );
   });
 }

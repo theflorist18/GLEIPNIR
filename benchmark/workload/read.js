@@ -9,7 +9,7 @@
 //   rest   -> GET /api/v1/evidence/:id | /api/v1/evidence/:id/audit
 //             (+ ?caseId=case-NNN for parallel-anchored). The service token
 //             never auto-logs, so reads do not mutate the ledger.
-// roundArguments: { mode, label, fn, variant?, channels?, caseId?, channel?, pool, payloadBytes? }.
+// roundArguments: { mode, label, fn, variant?, channels?, pool, payloadBytes? }.
 // Each timed read is logged via lib/txlog as READ_EVIDENCE | READ_TRAIL.
 
 const { WorkloadModuleBase } = require('@hyperledger/caliper-core');
@@ -47,9 +47,9 @@ class ReadWorkload extends WorkloadModuleBase {
         method: 'GET',
         path: `/api/v1/evidence/${encodeURIComponent(target.id)}${spec.path}${target.caseId ? `?caseId=${encodeURIComponent(target.caseId)}` : ''}`,
       }
-      : { ...fabricRequest(this.fn, [target.id], target.channel), readOnly: true };
+      : { ...fabricRequest(this.fn, [target.id], target.caseId), readOnly: true };
     const status = await this.sutAdapter.sendRequests(req);
-    txlog.log(this.workerIndex, this.label, spec.op, target.caseId || target.channel, target.id, status);
+    txlog.log(this.workerIndex, this.label, spec.op, target.caseId, target.id, status);
     return status;
   }
 }

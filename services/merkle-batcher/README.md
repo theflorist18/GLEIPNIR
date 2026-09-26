@@ -55,9 +55,8 @@ committedAt=… delayMs=min/mean/max`), so the anchoring delay can also be read 
 - **Out:** receipts PUT to `RECEIPT_STORE_URL`; one root POSTed per batch to the gateway or
   anchor-client; one log line per committed batch.
 
-Env: `PORT=4001`, `VARIANT`, **`BATCH_SIZE`** (preferred; one grid for both anchored
-variants), `BATCH_N=100` / `BATCH_K=25` (legacy per-variant fallback used only when
-`BATCH_SIZE` is unset), **`BATCH_FLUSH_MS=0`**, `BATCH_EPOCH` (batchId namespace per run),
+Env: `PORT=4001`, `VARIANT`, **`BATCH_SIZE=100`** (one grid for both anchored
+variants), **`BATCH_FLUSH_MS=0`**, `BATCH_EPOCH` (batchId namespace per run),
 `RECEIPT_STORE_URL`, `GATEWAY_URL`, `ANCHOR_CLIENT_URL`, `GLEIPNIR_TOKEN`, `LOG_LEVEL`.
 
 ## Does NOT
@@ -86,5 +85,5 @@ variants), `BATCH_N=100` / `BATCH_K=25` (legacy per-variant fallback used only w
 ## Test
 
 ```bash
-npm install && npm test    # node:test — Merkle vectors + boundary/size-precedence/timer/degraded/routing flows
+npm install && npm test    # node:test — Merkle vectors + boundary/timer/degraded/routing flows
 ```

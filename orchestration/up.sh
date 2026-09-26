@@ -76,7 +76,7 @@ wait_healthz 9447 peer0-org2
 APP_PKGID=""
 install_app_chaincode() {
   local pkg_host="ccaas-evidence"
-  APP_PKGID="$(package_ccaas "${pkg_host}" "" | tail -1 | tr -d '\r')"
+  APP_PKGID="$(package_ccaas "${pkg_host}" | tail -1 | tr -d '\r')"
   echo "    app package id = ${APP_PKGID}"
   set_env_var CCAAS_ID_APP "${APP_PKGID}"
 
@@ -89,30 +89,11 @@ peer lifecycle chaincode install ${CTN_ARTIFACTS}/${CC_NAME}-${pkg_host}.tar.gz"
   compose "${PROFILE_ARGS[@]}" up -d ccaas-evidence
 }
 
-deploy_app_chaincode() {  # <channel> — approve + commit only (install hoisted)
-  local channel="$1"
-  local pkgid="${APP_PKGID}"
-
-  local policy="OR('Org1MSP.peer','Org2MSP.peer')"
-  for org in org1 org2; do
-    cli "$(peer_env ${org})
-peer lifecycle chaincode approveformyorg -o ${ORDERER0} --ordererTLSHostnameOverride orderer0.example.com \
-  --channelID ${channel} --name ${CC_NAME} --version ${CC_VERSION} --package-id ${pkgid} --sequence 1 \
-  --signature-policy \"${policy}\" --tls --cafile ${ORDERER0_CA}"
-  done
-  cli "$(peer_env org1)
-peer lifecycle chaincode commit -o ${ORDERER0} --ordererTLSHostnameOverride orderer0.example.com \
-  --channelID ${channel} --name ${CC_NAME} --version ${CC_VERSION} --sequence 1 --signature-policy \"${policy}\" \
-  --tls --cafile ${ORDERER0_CA} \
-  --peerAddresses peer0.org1.example.com:7051 --tlsRootCertFiles ${CTN_ORG}/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt \
-  --peerAddresses peer0.org2.example.com:9051 --tlsRootCertFiles ${CTN_ORG}/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt"
-}
-
 deploy_anchor_chaincode() {  # anchor-main
   local channel="anchor-main"
   local pkg_host="ccaas-evidence-anchor"
   local pkgid
-  pkgid="$(package_ccaas "${pkg_host}" "" | tail -1 | tr -d '\r')"
+  pkgid="$(package_ccaas "${pkg_host}" | tail -1 | tr -d '\r')"
   echo "    anchor package id = ${pkgid}"
   set_env_var CCAAS_ID_ANCHOR "${pkgid}"
   cli "$(peer_env anchor)
@@ -132,21 +113,12 @@ peer lifecycle chaincode commit -o ${ORDERER0} --ordererTLSHostnameOverride orde
 case "${VARIANT}" in
   standard|anchoring)
     install_app_chaincode
-    create_channel coc-main AppChannel
-    join_peer org1 coc-main
-    join_peer org2 coc-main
-    wait_raft_leader org1 coc-main
-    deploy_app_chaincode coc-main
+    app_channel coc-main "${APP_PKGID}"
     ;;
   parallel|parallel-anchored)
     install_app_chaincode
     for i in $(seq 1 "${CHANNELS}"); do
-      ch="$(printf 'case-%03d' "${i}")"
-      create_channel "${ch}" AppChannel
-      join_peer org1 "${ch}"
-      join_peer org2 "${ch}"
-      wait_raft_leader org1 "${ch}"
-      deploy_app_chaincode "${ch}"
+      app_channel "$(printf 'case-%03d' "${i}")" "${APP_PKGID}"
     done
     if [ "${VARIANT}" = "parallel-anchored" ]; then
       create_channel anchor-main AnchorChannel

@@ -103,7 +103,7 @@ test('participants: grant, duplicate 409, revoke, 404s', async (t) => {
   assert.equal((await call(url, 'DELETE', `/cases/${c.id}/participants/ivy`)).status, 404);
 });
 
-test('evidence-index: register once (409 on dup), read, status sync', async (t) => {
+test('evidence-index: register once (409 on dup), status sync', async (t) => {
   const url = await start(t);
   const created = await indexEvidence(url, 'ev-1');
   assert.equal(created.status, 201);
@@ -118,8 +118,6 @@ test('evidence-index: register once (409 on dup), read, status sync', async (t) 
   const patched = await json(await call(url, 'PATCH', '/evidence-index/ev-1', { status: 'DISPOSED' }));
   assert.equal(patched.status, 'DISPOSED');
   assert.ok(patched.lastSyncedAt);
-
-  assert.equal((await call(url, 'GET', '/evidence-index/ev-none')).status, 404);
 });
 
 test('categorize/uncategorize: idempotent same-case, 409 cross-case, roster reflects it', async (t) => {
@@ -142,7 +140,7 @@ test('categorize/uncategorize: idempotent same-case, 409 cross-case, roster refl
 
   assert.equal((await call(url, 'DELETE', `/cases/${c2.id}/evidence/ev-1`)).status, 404);
   assert.equal((await call(url, 'DELETE', `/cases/${c1.id}/evidence/ev-1`)).status, 204);
-  assert.equal((await json(await call(url, 'GET', '/evidence-index/ev-1'))).caseId, null);
+  assert.equal((await json(await call(url, 'GET', '/evidence-index?q=ev-1')))[0].caseId, null);
 });
 
 test('case list/search: participant scoping, status filter, q with LIKE-escaping', async (t) => {
@@ -221,53 +219,7 @@ test('data persists across reopen from the same dataDir', async (t) => {
   }
   const url = await start(t, dir);
   assert.equal((await json(await call(url, 'GET', '/cases'))).length, 1);
-  assert.equal((await json(await call(url, 'GET', '/evidence-index/ev-durable'))).evidenceId, 'ev-durable');
-});
-
-test('M18: pre-M18 case_participants table (two-role CHECK) is rebuilt in place, keeping rows', async (t) => {
-  const Database = require('better-sqlite3');
-  const dir = tmpDataDir();
-
-  // Hand-create a database with the M13-era DDL (no 'lead' in the CHECK).
-  {
-    const db = new Database(path.join(dir, 'case-registry.db'));
-    db.exec(`
-      CREATE TABLE cases (
-        id          TEXT PRIMARY KEY,
-        name        TEXT NOT NULL,
-        description TEXT NOT NULL DEFAULT '',
-        status      TEXT NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN','CLOSED','ARCHIVED')),
-        created_by  TEXT NOT NULL,
-        created_at  TEXT NOT NULL,
-        updated_at  TEXT NOT NULL
-      );
-      CREATE TABLE case_participants (
-        case_id      TEXT NOT NULL REFERENCES cases(id),
-        user_id      TEXT NOT NULL,
-        role_in_case TEXT NOT NULL DEFAULT 'viewer' CHECK (role_in_case IN ('viewer','contributor')),
-        added_by     TEXT NOT NULL,
-        added_at     TEXT NOT NULL,
-        PRIMARY KEY (case_id, user_id)
-      );
-      CREATE INDEX idx_participants_user ON case_participants(user_id);
-      INSERT INTO cases VALUES ('CASE-legacy', 'old case', '', 'OPEN', 'root', '2026-07-01T00:00:00Z', '2026-07-01T00:00:00Z');
-      INSERT INTO case_participants VALUES ('CASE-legacy', 'ivy', 'viewer', 'root', '2026-07-01T00:00:00Z');
-    `);
-    db.close();
-  }
-
-  const url = await start(t, dir);
-  // Legacy row survived the rebuild...
-  const detail = await json(await call(url, 'GET', '/cases/CASE-legacy'));
-  assert.deepEqual(detail.participants.map((p) => [p.userId, p.roleInCase]), [['ivy', 'viewer']]);
-  // ...and the rebuilt CHECK admits 'lead'.
-  const granted = await call(url, 'POST', '/cases/CASE-legacy/participants', { userId: 'lena', roleInCase: 'lead', addedBy: 'root' });
-  assert.equal(granted.status, 201);
-
-  // Idempotence: a second boot from the same dir must not touch the table.
-  const url2 = await start(t, dir);
-  const again = await json(await call(url2, 'GET', '/cases/CASE-legacy'));
-  assert.equal(again.participants.length, 2);
+  assert.equal((await json(await call(url, 'GET', '/evidence-index?q=ev-durable')))[0].evidenceId, 'ev-durable');
 });
 
 test('M18: participant-scoped case listings carry myRoleInCase; unscoped listings do not', async (t) => {
@@ -298,10 +250,10 @@ test('M19: category CRUD — dup 409, cross-case 400, in-use delete 409', async 
   assert.equal((await call(url, 'POST', `/cases/${c1.id}/categories`, { name: 'Mobile Devices', createdBy: 'lena' })).status, 409);
   assert.equal((await call(url, 'POST', '/cases/CASE-ghost/categories', { name: 'x', createdBy: 'lena' })).status, 404);
 
-  const listed = await json(await call(url, 'GET', `/cases/${c1.id}/categories`));
+  const listed = (await json(await call(url, 'GET', `/cases/${c1.id}`))).categories;
   assert.ok(listed.some((x) => x.name === 'Mobile Devices'));
-  // ...and the case detail carries them too (9 seeded presets + the custom one).
-  assert.equal((await json(await call(url, 'GET', `/cases/${c1.id}`))).categories.length, 10);
+  // 9 seeded presets + the custom one.
+  assert.equal(listed.length, 10);
 
   const renamed = await json(await call(url, 'PATCH', `/cases/${c1.id}/categories/${cat.id}`, { name: 'Network PCAP' }));
   assert.equal(renamed.name, 'Network PCAP');
@@ -324,7 +276,7 @@ const PRESETS = ['Archive', 'Audio', 'Document', 'Image', 'Other', 'PDF', 'Sprea
 test('M25: new cases are seeded with the preset file-type categories', async (t) => {
   const url = await start(t);
   const c = await makeCase(url, 'preset case');
-  const cats = await json(await call(url, 'GET', `/cases/${c.id}/categories`));
+  const cats = (await json(await call(url, 'GET', `/cases/${c.id}`))).categories;
   assert.deepEqual(cats.map((x) => x.name).sort(), PRESETS);
   assert.ok(cats.every((x) => x.createdBy === 'root'));
   // Seeded rows are ordinary categories: unused ones delete cleanly.
@@ -336,11 +288,9 @@ test("M25: category listings sort alphabetically with 'Other' pinned last", asyn
   const url = await start(t);
   const c = await makeCase(url, 'order case');
   await call(url, 'POST', `/cases/${c.id}/categories`, { name: 'Zip Bombs', createdBy: 'root' });
-  const names = (await json(await call(url, 'GET', `/cases/${c.id}/categories`))).map((x) => x.name);
+  const names = (await json(await call(url, 'GET', `/cases/${c.id}`))).categories.map((x) => x.name);
   assert.equal(names[names.length - 1], 'Other');
   assert.ok(names.indexOf('Zip Bombs') < names.length - 1);
-  const detail = await json(await call(url, 'GET', `/cases/${c.id}`));
-  assert.equal(detail.categories[detail.categories.length - 1].name, 'Other');
 });
 
 test('M25: participant role PATCH — in place, enum-validated, 404 unknown', async (t) => {
@@ -355,29 +305,6 @@ test('M25: participant role PATCH — in place, enum-validated, 404 unknown', as
 
   assert.equal((await call(url, 'PATCH', `/cases/${c.id}/participants/ivy`, { roleInCase: 'boss' })).status, 400);
   assert.equal((await call(url, 'PATCH', `/cases/${c.id}/participants/ghost`, { roleInCase: 'viewer' })).status, 404);
-});
-
-test('M25: boot backfills presets into zero-category cases only', async (t) => {
-  const dataDir = tmpDataDir();
-  const url = await start(t, dataDir);
-  const c = await makeCase(url, 'pre-M25 case');
-  // Strip the case back to zero categories (simulates a pre-seeding case),
-  // and set up a second case with a deliberate one-category taxonomy.
-  for (const cat of await json(await call(url, 'GET', `/cases/${c.id}/categories`))) {
-    assert.equal((await call(url, 'DELETE', `/cases/${c.id}/categories/${cat.id}`)).status, 204);
-  }
-  const curated = await makeCase(url, 'curated case');
-  for (const cat of await json(await call(url, 'GET', `/cases/${curated.id}/categories`))) {
-    if (cat.name !== 'Image') await call(url, 'DELETE', `/cases/${curated.id}/categories/${cat.id}`);
-  }
-
-  // A second boot on the same volume re-seeds the empty case, not the curated one.
-  const url2 = await start(t, dataDir);
-  const reseeded = await json(await call(url2, 'GET', `/cases/${c.id}/categories`));
-  assert.deepEqual(reseeded.map((x) => x.name).sort(), PRESETS);
-  assert.equal(reseeded[0].createdBy, 'root');
-  const kept = await json(await call(url2, 'GET', `/cases/${curated.id}/categories`));
-  assert.deepEqual(kept.map((x) => x.name), ['Image']);
 });
 
 test('M19: metadata fields set at registration and via PATCH; uncategorize clears the category', async (t) => {
@@ -403,47 +330,10 @@ test('M19: metadata fields set at registration and via PATCH; uncategorize clear
 
   // Uncategorizing the evidence clears its case-scoped category.
   await call(url, 'DELETE', `/cases/${c.id}/evidence/ev-meta`);
-  const after = await json(await call(url, 'GET', '/evidence-index/ev-meta'));
+  const [after] = await json(await call(url, 'GET', '/evidence-index?q=ev-meta'));
   assert.equal(after.caseId, null);
   assert.equal(after.categoryId, null);
   assert.equal(after.label, 'ITEM-002'); // non-case metadata survives
-});
-
-test('M19: pre-M19 evidence_index (no metadata columns) gains them on boot, idempotently', async (t) => {
-  const Database = require('better-sqlite3');
-  const dir = tmpDataDir();
-  {
-    const db = new Database(path.join(dir, 'case-registry.db'));
-    db.exec(`
-      CREATE TABLE cases (
-        id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
-        status TEXT NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN','CLOSED','ARCHIVED')),
-        created_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
-      );
-      CREATE TABLE case_participants (
-        case_id TEXT NOT NULL REFERENCES cases(id), user_id TEXT NOT NULL,
-        role_in_case TEXT NOT NULL DEFAULT 'viewer' CHECK (role_in_case IN ('viewer','contributor','lead')),
-        added_by TEXT NOT NULL, added_at TEXT NOT NULL, PRIMARY KEY (case_id, user_id)
-      );
-      CREATE TABLE evidence_index (
-        evidence_id TEXT PRIMARY KEY, case_id TEXT NULL REFERENCES cases(id),
-        original_filename TEXT, mime_type TEXT, size_bytes INTEGER, integrity_proof TEXT,
-        uploaded_by TEXT, uploaded_at TEXT, status TEXT NOT NULL DEFAULT 'ACTIVE', last_synced_at TEXT
-      );
-      INSERT INTO evidence_index (evidence_id, status) VALUES ('ev-old', 'ACTIVE');
-    `);
-    db.close();
-  }
-
-  const url = await start(t, dir);
-  const row = await json(await call(url, 'GET', '/evidence-index/ev-old'));
-  assert.equal(row.evidenceId, 'ev-old');
-  assert.equal(row.label, null);
-  // The new columns are writable on the migrated table...
-  assert.equal((await call(url, 'PATCH', '/evidence-index/ev-old', { label: 'ITEM-OLD' })).status, 200);
-  // ...and a second boot from the same dir is a no-op.
-  const url2 = await start(t, dir);
-  assert.equal((await json(await call(url2, 'GET', '/evidence-index/ev-old'))).label, 'ITEM-OLD');
 });
 
 test('M20: notes are append-only — create/list work, no mutation routes exist', async (t) => {
@@ -525,49 +415,4 @@ test('M25b: the activity feed is the persistent audit log — ts-DESC, actor-att
   // limit applies; unknown case 404s.
   assert.equal((await json(await call(url, 'GET', `/cases/${c.id}/activity?limit=2`))).length, 2);
   assert.equal((await call(url, 'GET', '/cases/CASE-ghost/activity')).status, 404);
-});
-
-test('M25b: audit history backfill materializes derivable events once, idempotently', async (t) => {
-  const dataDir = tmpDataDir();
-  // Boot 1: create history the old-fashioned way (rows only), then wipe the
-  // audit table to simulate a pre-M25b volume.
-  const app1 = createApp({ dataDir, internalToken: TOKEN, logLevel: 'silent' });
-  const { server: s1, url: u1 } = await listen(app1);
-  const c = await makeCase(u1, 'historic case');
-  await call(u1, 'POST', `/cases/${c.id}/participants`, { userId: 'ivy', roleInCase: 'contributor', addedBy: 'root' });
-  await indexEvidence(u1, 'ev-hist', { caseId: c.id });
-  app1.locals.db.prepare('DELETE FROM case_audit_log').run();
-  s1.close();
-  app1.locals.db.close();
-
-  // Boot 2: backfill materializes CASE_CREATED + PARTICIPANT_ADDED + EVIDENCE_ADDED.
-  const app2 = createApp({ dataDir, internalToken: TOKEN, logLevel: 'silent' });
-  const { server: s2, url: u2 } = await listen(app2);
-  const feed = await json(await call(u2, 'GET', `/cases/${c.id}/activity`));
-  assert.deepEqual(feed.map((e) => e.type).sort(), ['CASE_CREATED', 'EVIDENCE_ADDED', 'PARTICIPANT_ADDED']);
-  assert.equal(feed.find((e) => e.type === 'PARTICIPANT_ADDED').target, 'ivy');
-  s2.close();
-  app2.locals.db.close();
-
-  // Boot 3: the case now has audit rows — no duplication.
-  const app3 = createApp({ dataDir, internalToken: TOKEN, logLevel: 'silent' });
-  const { server: s3, url: u3 } = await listen(app3);
-  assert.equal((await json(await call(u3, 'GET', `/cases/${c.id}/activity`))).length, 3);
-  s3.close();
-  app3.locals.db.close();
-});
-
-// S19: list/search results are bounded. Default cap plus an optional ?limit
-// override (itself capped) so a query can never return an unbounded set.
-test('S19: /cases and /evidence-index bound their result sets via ?limit', async (t) => {
-  const url = await start(t);
-  for (let i = 0; i < 5; i += 1) await makeCase(url, `Case ${i}`);
-  const one = await json(await call(url, 'GET', '/cases?limit=1'));
-  assert.equal(one.length, 1, '?limit=1 must return at most one case');
-  const all = await json(await call(url, 'GET', '/cases'));
-  assert.equal(all.length, 5, 'default cap (500) does not clip a small store');
-
-  for (let i = 0; i < 4; i += 1) await indexEvidence(url, `ev-${i}`);
-  const ev1 = await json(await call(url, 'GET', '/evidence-index?q=ev-&limit=2'));
-  assert.equal(ev1.length, 2, '?limit=2 must cap evidence search');
 });

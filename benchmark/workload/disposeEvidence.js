@@ -5,12 +5,12 @@
 // is deleted. Each worker seeds a pool of `pool` evidence items (NOT timed, via
 // lib/pool) and disposes each exactly once — a second dispose would be a
 // chaincode error, not a measurement — so txNumber must be <= pool × workers.
-// roundArguments: { mode, label, variant?, channels?, caseId?, channel?, pool, payloadBytes? }.
+// roundArguments: { mode, label, variant?, channels?, pool, payloadBytes? }.
 //   fabric -> DisposeEvidence(evidenceId, reason); rest -> DELETE /api/v1/evidence/:id {reason, caseId?}.
 // Each timed tx is logged via lib/txlog (GLEIPNIR_TXLOG_DIR).
 
 const { WorkloadModuleBase } = require('@hyperledger/caliper-core');
-const { fabricRequest } = require('./lib/payloads');
+const { opRequest } = require('./lib/payloads');
 const { seedPool } = require('./lib/pool');
 const txlog = require('./lib/txlog');
 
@@ -31,15 +31,10 @@ class DisposeEvidenceWorkload extends WorkloadModuleBase {
     const target = this.pool[this.n];
     this.n += 1;
     const reason = 'benchmark-disposition';
-    const req = this.mode === 'rest'
-      ? {
-        method: 'DELETE',
-        path: `/api/v1/evidence/${encodeURIComponent(target.id)}`,
-        body: { reason, ...(target.caseId ? { caseId: target.caseId } : {}) },
-      }
-      : fabricRequest('DisposeEvidence', [target.id, reason], target.channel);
-    const status = await this.sutAdapter.sendRequests(req);
-    txlog.log(this.workerIndex, this.label, 'DISPOSE', target.caseId || target.channel, target.id, status);
+    const status = await this.sutAdapter.sendRequests(opRequest(this.mode, {
+      op: 'DISPOSE', evidenceId: target.id, detail: { reason },
+    }, target.caseId));
+    txlog.log(this.workerIndex, this.label, 'DISPOSE', target.caseId, target.id, status);
     return status;
   }
 }

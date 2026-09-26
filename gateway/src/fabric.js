@@ -1,8 +1,8 @@
 'use strict';
 
 // The ONLY @hyperledger/fabric-gateway sessions to the APPLICATION channels
-// (coc-main, case-*). One shared grpc client; a Network/Contract is created and
-// cached per channel on first use. Returns a {submit, evaluate} adapter that the
+// (coc-main, case-*). One shared grpc client; a Network/Contract is created per
+// call (plain object construction, no RPC). Returns a {submit, evaluate} adapter that the
 // routes/variantRouter consume. The anchor channel is owned by the anchor-client
 // service, not here (docs/CONTRACTS.md §6).
 //
@@ -15,32 +15,12 @@ const crypto = require('node:crypto');
 const grpc = require('@grpc/grpc-js');
 const { connect, hash, signers } = require('@hyperledger/fabric-gateway');
 
-async function firstFile(dir) {
-  const entries = (await fs.readdir(dir)).filter((n) => !n.startsWith('.')).sort();
-  if (entries.length === 0) throw new Error(`no files found in ${dir}`);
-  return path.join(dir, entries[0]);
-}
-
-// Signing-key selection (audit F47/F56): re-enrollment over a live crypto tree
-// ADDS a hash-named key beside the old one, and hex names sort before priv_sk —
-// so "alphabetically first" can pair a stale key with the fresh cert. Prefer
-// the normalized priv_sk copy (registerEnroll.sh refreshes it to the newest
-// key on every enrollment); otherwise fall back to the newest key by mtime.
-async function keyFile(dir) {
-  const entries = (await fs.readdir(dir)).filter((n) => !n.startsWith('.'));
-  if (entries.length === 0) throw new Error(`no files found in ${dir}`);
-  if (entries.includes('priv_sk')) return path.join(dir, 'priv_sk');
-  const stats = await Promise.all(entries.map(async (n) => ({
-    name: n,
-    mtimeMs: (await fs.stat(path.join(dir, n))).mtimeMs,
-  })));
-  stats.sort((a, b) => b.mtimeMs - a.mtimeMs);
-  return path.join(dir, stats[0].name);
-}
-
+// Same fixed paths the Caliper network configs pin. Re-enrollment ADDS a
+// hash-named key beside the old one, so never pick a keystore file by name
+// order; registerEnroll.sh refreshes priv_sk to the newest key (audit F47/F56).
 async function readIdentity(cryptoPath) {
-  const credentials = await fs.readFile(await firstFile(path.join(cryptoPath, 'signcerts')));
-  const privateKeyPem = await fs.readFile(await keyFile(path.join(cryptoPath, 'keystore')));
+  const credentials = await fs.readFile(path.join(cryptoPath, 'signcerts', 'cert.pem'));
+  const privateKeyPem = await fs.readFile(path.join(cryptoPath, 'keystore', 'priv_sk'));
   return { credentials, privateKeyPem };
 }
 
@@ -77,15 +57,7 @@ async function connectFabric(env) {
     commitStatusOptions: () => ({ deadline: Date.now() + 60000 }),
   });
 
-  const contracts = new Map();
-  const contractFor = (channel) => {
-    let c = contracts.get(channel);
-    if (!c) {
-      c = gateway.getNetwork(channel).getContract(CC_NAME);
-      contracts.set(channel, c);
-    }
-    return c;
-  };
+  const contractFor = (channel) => gateway.getNetwork(channel).getContract(CC_NAME);
 
   const fabric = {
     async submit(channel, fn, args) {

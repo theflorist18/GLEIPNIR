@@ -5,21 +5,15 @@
 import type { CaseActivityEvent } from '../types';
 import type { TimelineItem } from '../components/ui/Timeline';
 
+// Every type not listed here is 'accent'.
 const TONES: Record<string, TimelineItem['tone']> = {
   CASE_CREATED: 'ok',
-  CASE_UPDATED: 'accent',
-  PARTICIPANT_ADDED: 'accent',
   PARTICIPANT_REMOVED: 'muted',
-  PARTICIPANT_ROLE_CHANGED: 'accent',
-  CATEGORY_CREATED: 'accent',
-  CATEGORY_RENAMED: 'accent',
   CATEGORY_DELETED: 'muted',
   EVIDENCE_ADDED: 'ok',
   EVIDENCE_ASSIGNED: 'ok',
   EVIDENCE_UNASSIGNED: 'muted',
   EVIDENCE_REMOVED: 'muted',
-  EVIDENCE_DETAILS_UPDATED: 'accent',
-  FLAG_CHANGED: 'accent',
   NOTE_ADDED: 'muted',
 };
 

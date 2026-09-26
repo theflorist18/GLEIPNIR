@@ -9,7 +9,7 @@ relative to benchmark/results/). It reads what experiment.py left there —
 run.json (seeded identity + provenance), rounds/<label>/{caliper.log,round.json,
 tx-w*.jsonl}, checkpoints.jsonl, anchoring.json, audit.json — and writes
 manifest.json (`status: complete`), merging INTO the seeded run.json fields
-(setdefault: identity and provenance are never overwritten here).
+(identity and provenance come only from run.json — experiment.py is their one writer).
 
 Round table (audit F48): Caliper prints every round twice — per round and in
 the final `### All test results ###` table. Only rows AFTER the LAST marker
@@ -37,7 +37,7 @@ import json
 import math
 import os
 import re
-import subprocess
+import statistics
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -47,16 +47,7 @@ if hasattr(sys.stdout, "reconfigure"):
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RESULTS_DIR = os.path.join(REPO_ROOT, "benchmark", "results")
-CONFIG_FILES = [
-    "network/configtx/configtx.yaml",
-    "network/core.yaml",
-    "network/orderer.yaml",
-    "network/compose/compose-net.yaml",
-    "network/compose/compose-ca.yaml",
-    "network/compose/compose-services.yaml",
-]
 RESULTS_MARKER = "### All test results ###"
-DOCKER_MARKER = "### docker resource stats ###"
 WRITE_OPS = ("CREATE", "TRANSFER", "ACCESS", "DISPOSE")
 ANCHOR_CHANNEL = "anchor-main"
 CHANNEL_HOST = {ANCHOR_CHANNEL: "peer0.anchor.example.com"}
@@ -69,17 +60,9 @@ THROUGHPUT_POLICY = "successful-only = reported x Succ/(Succ+Fail); Caliper repo
 
 # ------------------------------------------------------------------ helpers
 
-def git(*args):
-    try:
-        return subprocess.run(["git", *args], cwd=REPO_ROOT, capture_output=True, text=True).stdout.strip()
-    except Exception:  # noqa: BLE001
-        return ""
-
-
-def config_shas():
-    return {rel: sha for rel in CONFIG_FILES if (sha := git("hash-object", rel))}
-
-
+# Not statistics.quantiles(method="inclusive"): same interpolation, but a different
+# float evaluation order (last-ULP differences, int -> float) would change the
+# manifests of runs already collected.
 def _percentile(sorted_vals, p):
     if not sorted_vals:
         return None
@@ -153,15 +136,7 @@ def parse_caliper_log(path):
             if marker_at is None or start > marker_at:
                 results.extend(rows)
         elif any(k.startswith("Memory(max)") for k in rows[0]):
-            docker.append(rows)  # printed after the DOCKER_MARKER line, once per round
-    if marker_at is None:  # aborted run: whole log scanned -> collapse duplicate per-round rows
-        seen, uniq = set(), []
-        for r in results:
-            key = tuple(r.items())
-            if key not in seen:
-                seen.add(key)
-                uniq.append(r)
-        results = uniq
+            docker.append(rows)  # printed after the `### docker resource stats ###` line, once per round
     return {"results": results, "docker": docker}
 
 
@@ -429,37 +404,30 @@ def ols(points):
     """points = [(x, y)] -> {slope, intercept, r2, points} or None (< 3 points / degenerate x)."""
     if len(points) < 3:
         return None
-    n = len(points)
-    mx = sum(p[0] for p in points) / n
-    my = sum(p[1] for p in points) / n
-    sxx = sum((p[0] - mx) ** 2 for p in points)
-    if sxx == 0:
+    xs, ys = zip(*points)
+    try:
+        slope, intercept = statistics.linear_regression(xs, ys)
+    except statistics.StatisticsError:   # constant x
         return None
-    sxy = sum((p[0] - mx) * (p[1] - my) for p in points)
-    slope = sxy / sxx
-    intercept = my - slope * mx
-    ss_tot = sum((p[1] - my) ** 2 for p in points)
-    ss_res = sum((p[1] - (intercept + slope * p[0])) ** 2 for p in points)
     # A flat y series has no variance to explain: r2 is undefined, not 1.0
     # (reporting 1.0 would dress a dead storage probe as a perfect fit).
-    r2 = None if ss_tot == 0 else round(1 - ss_res / ss_tot, 5)
-    return {"slope": round(slope, 4), "intercept": round(intercept, 1), "r2": r2, "points": n}
+    try:
+        r2 = round(statistics.correlation(xs, ys) ** 2, 5)
+    except statistics.StatisticsError:
+        r2 = None
+    return {"slope": round(slope, 4), "intercept": round(intercept, 1), "r2": r2, "points": len(points)}
 
 
 def storage_metrics(run_dir, rounds):
     rows = load_checkpoints(run_dir)
     if not rows:
         return None, None
-    labels = []
-    for r in rows:
-        if r["label"] not in labels:
-            labels.append(r["label"])
-    checkpoints, cum = [], 0
+    labels = list(dict.fromkeys(r["label"] for r in rows))   # t0..tN, first-seen order
+    checkpoints = []
     for k, lb in enumerate(labels):
         cp = reduce_checkpoint(rows, lb)
         # t_k follows round k-1: cumulative successful write events of rounds[:k]
-        cum = sum(write_events(r) for r in rounds[:k])
-        cp["events"] = cum
+        cp["events"] = sum(write_events(r) for r in rounds[:k])
         checkpoints.append(cp)
     if len(checkpoints) < 2:
         return checkpoints, None
@@ -571,15 +539,7 @@ def collect(run_dir, baseline=None):
     seeded = _load_json(os.path.join(run_dir, "run.json")) or {}
     for k, v in seeded.items():           # identity + provenance from experiment.py win
         manifest[k] = v
-    manifest.setdefault("runId", os.path.relpath(run_dir, RESULTS_DIR).replace(os.sep, "/"))
-    levels = manifest.setdefault("levels", {})
-    for k in ("batchSize", "channels", "cases", "sendRateTps", "reference"):
-        levels.setdefault(k, None)
-    for k in ("experiment", "variant", "repetition", "regime", "trace", "startedAt", "finishedAt", "wallSeconds"):
-        manifest.setdefault(k, None)
-    prov = manifest.setdefault("provenance", {})
-    prov.setdefault("gitCommit", git("rev-parse", "HEAD"))
-    prov.setdefault("configShas", config_shas())
+    levels = manifest.get("levels") or {}
 
     rounds = collect_rounds(run_dir)
     annotate_channels(rounds, levels.get("channels"))

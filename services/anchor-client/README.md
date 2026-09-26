@@ -46,7 +46,7 @@ into `createApp({contract})`, so routing/marshaling is tested without grpc/fabri
 - anchor channel unavailable / endorsement failure → `502`.
 - identity/MSP misconfiguration (missing env or crypto files) → startup error.
 - unknown `(caseId,batchId)` on GET → `404`.
-- commit not successful → `502` (`COMMIT_FAILED`).
+- commit not successful → `502`.
 
 ## Test
 

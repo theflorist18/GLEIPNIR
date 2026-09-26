@@ -27,10 +27,9 @@ import threading
 
 import yaml
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SWEEPS = os.path.join(REPO, "benchmark", "sweeps.yaml")
-ENV_FILE = os.path.join(REPO, "network", "compose", ".env")
-RESULTS = os.path.join(REPO, "benchmark", "results")
+import experiment as E
+
+REPO, SWEEPS, RESULTS = E.REPO_ROOT, E.R.SWEEPS_PATH, E.RESULTS_DIR
 BACKUPS = os.path.join(REPO, "backups")
 DISTRO = "Ubuntu-22.04"
 
@@ -53,9 +52,8 @@ def wsl_argv(script):
             f"cd {shlex.quote(wsl_path(REPO))} && {script}"]
 
 
-def experiment_args(exp, variants=(), reps=None, resume=False, dry_run=False, verbose=False, send_rates=(),
-                    batch_size=None, cases=None, controls=None, reuse_network=False, no_monitor=False,
-                    no_audit=False):
+def experiment_args(exp, variants=(), reps=None, send_rates=(), batch_size=None, cases=None, controls=None,
+                    reuse_network=False, no_monitor=False, no_audit=False):
     """experiment.py argv (after the script name). `controls` = {"--seed": 7, ...} (cell only)."""
     a = ["--exp", exp]
     for v in variants:
@@ -70,8 +68,7 @@ def experiment_args(exp, variants=(), reps=None, resume=False, dry_run=False, ve
         a += ["--cases", str(cases)]
     for flag, val in (controls or {}).items():
         a += [flag, str(val)]
-    a += [f for f, on in (("--resume", resume), ("--dry-run", dry_run), ("--verbose", verbose),
-                          ("--reuse-network", reuse_network), ("--no-monitor", no_monitor),
+    a += [f for f, on in (("--reuse-network", reuse_network), ("--no-monitor", no_monitor),
                           ("--no-audit", no_audit)) if on]
     return a
 
@@ -167,26 +164,30 @@ def run_quick(script, timeout=120):
 # ------------------------------------------------------------------ progress parsing
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
-_NUM = r"(-?[\d.]+|None)"
+_NUM = r"(?P<{}>-?[\d.]+|None)"
 _PATTERNS = [
-    ("plan", re.compile(r"^plan (\w+): (\d+) run\(s\), (\d+) to execute")),
-    ("planrow", re.compile(r"^\s+(\S+/r\d+)\s+regime=(\S+)\s+rounds=(\d+)\s+rates=(\[[^\]]*\])")),
-    ("eta", re.compile(r"^ETA: (.+)$")),
-    ("run", re.compile(r"^##### \[run (\d+)/(\d+) \| (\d+) % done \| elapsed (.+?) \| ETA (.+?)\] #####")),
-    ("runstart", re.compile(r"^===== \[run (\d+)/(\d+)\] (\S+) \(regime ([\w-]+)\) =====")),
-    ("round", re.compile(r"^--- \[run \d+/\d+\] round (\d+)/(\d+): (\S+) \| send rate (\S+) tx/s \| (\d+) tx")),
-    ("done", re.compile(r"^\s+done (\S+): success (\d+) \| failure (\d+) \(([\d.]+) %\) \| throughput " + _NUM +
-                        r" TPS at send rate " + _NUM + r" tx/s \| latency avg " + _NUM + r" s \(min " + _NUM +
-                        r" - max " + _NUM + r"\)(?:, p95 " + _NUM + r" s)?")),
-    ("donetext", re.compile(r"^\s+done (\S+): (.*)$")),
-    ("caliper", re.compile(r"\[(\S+) Round \d+ Transaction Info\] - Submitted: (\d+) Succ: (\d+) Fail:\s*(\d+) "
-                           r"Unfinished:\s*(\d+)")),
-    ("csv", re.compile(r"results CSV updated \((\d+)/(\d+) runs\): (.+)$")),
-    ("complete", re.compile(r"^(\w+) complete: (\d+) run\(s\) executed in (.+)\.$")),
-    ("marker", re.compile(r"^@@(\S+)\s*(.*)$")),
-    ("warn", re.compile(r"^\s*! (.+)$")),
+    ("plan", re.compile(r"^plan (?P<exp>\w+): (?P<runs>\d+) run\(s\), (?P<todo>\d+) to execute")),
+    ("run", re.compile(r"^##### \[run (?P<i>\d+)/(?P<n>\d+) \| (?P<pct>\d+) % done \| elapsed (?P<elapsed>.+?) \| "
+                       r"ETA (?P<eta>.+?)\] #####")),
+    ("runstart", re.compile(r"^===== \[run (?P<i>\d+)/(?P<n>\d+)\] (?P<runId>\S+) \(regime (?P<regime>[\w-]+)\) =====")),
+    ("round", re.compile(r"^--- \[run \d+/\d+\] round (?P<j>\d+)/(?P<m>\d+): (?P<label>\S+) \| send rate "
+                         r"(?P<sendRate>\S+) tx/s \| (?P<tx>\d+) tx")),
+    ("done", re.compile(r"^\s+done (?P<label>\S+): success (?P<succ>\d+) \| failure (?P<fail>\d+) "
+                        r"\((?P<failPct>[\d.]+) %\) \| throughput " + _NUM.format("throughput") +
+                        r" TPS at send rate " + _NUM.format("sendRate") + r" tx/s \| latency avg " +
+                        _NUM.format("latAvg") + r" s \(min " + _NUM.format("latMin") + r" - max " +
+                        _NUM.format("latMax") + r"\)(?:, p95 " + _NUM.format("p95") + r" s)?")),
+    ("donetext", re.compile(r"^\s+done (?P<label>\S+): (?P<text>.*)$")),
+    ("caliper", re.compile(r"\[(?P<label>\S+) Round \d+ Transaction Info\] - Submitted: (?P<submitted>\d+) "
+                           r"Succ: (?P<succ>\d+) Fail:\s*(?P<fail>\d+) Unfinished:\s*(?P<unfinished>\d+)")),
+    ("csv", re.compile(r"results CSV updated \((?P<i>\d+)/(?P<n>\d+) runs\): (?P<path>.+)$")),
+    ("complete", re.compile(r"^(?P<exp>\w+) complete: (?P<runs>\d+) run\(s\) executed in (?P<wall>.+)\.$")),
+    ("marker", re.compile(r"^@@(?P<name>\S+)\s*(?P<arg>.*)$")),
+    ("warn", re.compile(r"^\s*! (?P<text>.+)$")),
     ("error", re.compile(r"Traceback \(most recent|FATAL:|refusing to|\berror:|Error: ")),
 ]
+_INT = {"runs", "todo", "i", "n", "pct", "j", "m", "tx", "succ", "fail", "submitted", "unfinished"}
+_FLOAT = {"sendRate", "failPct", "throughput", "latAvg", "latMin", "latMax", "p95"}
 
 
 def _f(s):
@@ -203,41 +204,46 @@ def parse_line(line):
         m = rx.search(line) if kind in ("caliper", "csv", "error") else rx.match(line)
         if not m:
             continue
-        g = m.groups()
-        if kind == "plan":
-            return {"kind": kind, "exp": g[0], "runs": int(g[1]), "todo": int(g[2])}
-        if kind == "planrow":
-            return {"kind": kind, "runId": g[0], "regime": g[1], "rounds": int(g[2]), "rates": g[3]}
-        if kind == "eta":
-            return {"kind": kind, "eta": g[0]}
-        if kind == "run":
-            return {"kind": kind, "i": int(g[0]), "n": int(g[1]), "pct": int(g[2]), "elapsed": g[3], "eta": g[4]}
-        if kind == "runstart":
-            return {"kind": kind, "i": int(g[0]), "n": int(g[1]), "runId": g[2], "regime": g[3]}
-        if kind == "round":
-            return {"kind": kind, "j": int(g[0]), "m": int(g[1]), "label": g[2], "sendRate": _f(g[3]), "tx": int(g[4])}
-        if kind == "done":
-            return {"kind": kind, "label": g[0], "succ": int(g[1]), "fail": int(g[2]), "failPct": _f(g[3]),
-                    "throughput": _f(g[4]), "sendRate": _f(g[5]), "latAvg": _f(g[6]), "latMin": _f(g[7]),
-                    "latMax": _f(g[8]), "p95": _f(g[9])}
-        if kind == "donetext":
-            return {"kind": "done", "label": g[0], "text": g[1]}
-        if kind == "caliper":
-            return {"kind": kind, "label": g[0], "submitted": int(g[1]), "succ": int(g[2]), "fail": int(g[3]),
-                    "unfinished": int(g[4])}
-        if kind == "csv":
-            return {"kind": kind, "i": int(g[0]), "n": int(g[1]), "path": g[2]}
-        if kind == "complete":
-            return {"kind": kind, "exp": g[0], "runs": int(g[1]), "wall": g[2]}
-        if kind == "marker":
-            return {"kind": kind, "name": g[0], "arg": g[1]}
-        if kind == "warn":
-            return {"kind": kind, "text": g[0]}
-        return {"kind": "error", "text": line.strip()}
+        if kind == "error":
+            return {"kind": kind, "text": line.strip()}
+        f = {k: int(v) if k in _INT else _f(v) if k in _FLOAT else v for k, v in m.groupdict().items()}
+        return {"kind": "done" if kind == "donetext" else kind, **f}
     return None
 
 
 # ------------------------------------------------------------------ sweeps.yaml, comment-preserving
+
+# path -> (label with unit, kind). Each value is editable in exactly ONE tab of the app.
+FIELDS = {
+    "seed": ("seed (trace PRNG — same sequence for all variants)", "int"),
+    "workers": ("Caliper workers", "int"),
+    "repetitions": ("repetitions r (results = mean ± SD)", "int"),
+    "workload.evidence_per_case": ("evidence items per case (n)", "int"),
+    "workload.events_per_case_per_round": ("write events per case per round (n)", "int"),
+    "workload.rounds": ("trace rounds per run at one send rate (n)", "int"),
+    "workload.mix.transfer_weight": ("TransferCustody weight (relative)", "float"),
+    "workload.mix.access_weight": ("AccessLog weight (relative)", "float"),
+    "workload.mix.dispose_fraction": ("fraction of evidence disposed (0–1)", "float"),
+    "workload.payload_bytes": ("evidence file size (B) — off-chain; only its hash goes on-chain", "int"),
+    "workload.audit_cases": ("cases reconstructed for audit time (n)", "int"),
+    "anchoring.flush_timeout_ms": ("batcher flush timeout (ms, 0 = size-only)", "int"),
+    "monitor.interval_s": ("CPU/memory monitor interval (s)", "int"),
+    "regimes.steady.min_events_per_channel": ("steady floor (write events per channel) — methodology rule", "int"),
+    "baseline.send_rate_tps": ("send rate (tx/s) — from E0", "int"),
+    "baseline.batch_size": ("batch size (events) — from E1", "int"),
+    "baseline.channels": ("cases (= channels on Parallel variants) — E2 median", "int"),
+    "baseline.channels_max": ("max cases / channels — E2 top of healthy range", "int"),
+    "regimes.smoke.cases": ("smoke cases (n) — Parallel runs one channel per case", "int"),
+    "regimes.smoke.evidence_per_case": ("smoke evidence per case (n)", "int"),
+    "regimes.smoke.logs_per_case_min": ("smoke logs per case, min (n)", "int"),
+    "regimes.smoke.logs_per_case_max": ("smoke logs per case, max (n)", "int"),
+    "regimes.smoke.send_rate_tps": ("smoke send rate (tx/s)", "int"),
+    "ramp.events_per_case_per_round": ("ramp events per case per send rate (n)", "int"),
+    "send_rates_tps": ("send-rate grid (tx/s) — ramp + E3a", "list"),
+    "batch_sizes": ("batch-size grid (events per batch)", "list"),
+    "channel_counts": ("channel = case grid (n)", "list"),
+    "case_counts": ("case grid (n, trimmed to ≤ max cases)", "list"),
+}
 
 _KEY = re.compile(r"^(\s*)([A-Za-z_][\w-]*):(.*)$")
 _VAL = re.compile(r"^(\s*)(\{[^}]*\}|\[[^\]]*\]|[^#]*?)(\s*)(#.*)?$")
@@ -344,29 +350,9 @@ def git_dirty(rel="benchmark/sweeps.yaml"):
         return False
 
 
-def read_env():
-    env = {}
-    try:
-        for ln in open(ENV_FILE, encoding="utf-8"):
-            if "=" in ln and not ln.lstrip().startswith("#"):
-                k, v = ln.split("=", 1)
-                env[k.strip()] = v.strip()
-    except OSError:
-        pass
-    return env
-
-
 # ------------------------------------------------------------------ backup bookkeeping
 # backups/<ts>/backup.json marks a COMPLETE backup (written only after "@@backup-ok");
 # backups/state.json says what the live ledger holds now ("test data" unless a benchmark ran).
-
-def _load(path, default):
-    try:
-        with open(path, encoding="utf-8") as fh:
-            return json.load(fh)
-    except (OSError, json.JSONDecodeError):
-        return default
-
 
 def _dump(path, obj):
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -375,7 +361,7 @@ def _dump(path, obj):
 
 
 def ledger_origin():
-    return _load(os.path.join(BACKUPS, "state.json"), {}).get("origin", "test data")
+    return (E.load_json(os.path.join(BACKUPS, "state.json")) or {}).get("origin", "test data")
 
 
 def set_ledger_origin(origin):
@@ -384,7 +370,7 @@ def set_ledger_origin(origin):
 
 def mark_backup(dst, reason, created):
     _dump(os.path.join(dst, "backup.json"), {"createdAt": created, "reason": reason,
-                                             "variant": read_env().get("VARIANT"), "origin": ledger_origin()})
+                                             "variant": E.read_env().get("VARIANT"), "origin": ledger_origin()})
 
 
 def list_backups():
@@ -393,7 +379,7 @@ def list_backups():
     if os.path.isdir(BACKUPS):
         for name in sorted(os.listdir(BACKUPS), reverse=True):
             d = os.path.join(BACKUPS, name)
-            meta = _load(os.path.join(d, "backup.json"), None)
+            meta = E.load_json(os.path.join(d, "backup.json"))
             if meta:
                 size = sum(os.path.getsize(os.path.join(d, f)) for f in os.listdir(d))
                 out.append({"dir": d, **meta, "sizeMb": round(size / 1e6, 1)})

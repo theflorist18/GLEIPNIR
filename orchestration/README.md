@@ -18,17 +18,17 @@ fabric-tools container. Python 3.10+ with `pyyaml` (`pip install -r requirements
 | `down.sh [--wipe]` | stop all profiles; `--wipe` removes ALL named volumes incl. the library — never run it without the authors' go-ahead |
 | `reset-network.sh --variant V --channels C` | **ledger-only reset**: needs `GLEIPNIR_ALLOW_LEDGER_WIPE=1`; prints and removes only the ledger/witness volumes, then `up.sh --skip-crypto` |
 | `backup-volumes.sh <dir> [--restore]` | tar every `gleipnir_*` volume (one file each) via `alpine`; `--restore` untars them back |
-| `provision-channel.sh case-NNN` | per-case channel + chaincode approve/commit (idempotent-safe); emits `benchmark/networks/<caseId>.yaml` |
-| `teardown-channel.sh case-NNN` | `osnadmin channel remove` from orderers (peers can't un-join online — documented limit) |
+| `provision-channel.sh case-NNN` | per-case channel + chaincode approve/commit (idempotent-safe) |
 | `smoke-standard.sh` | end-to-end via the gateway (create → transfer → access×2 → audit==4 → dispose → status DISPOSED → transfer fails) |
-| `rounds.py --static` | the ONLY renderer of Caliper configs from `sweeps.yaml`: writes `benchmark/benchmarks/smoke-<variant>.yaml` and `benchmark/networks/parallel-c{C}.yaml`; library API `render_round(...)` for experiment.py |
+| `rounds.py` (library) | the ONLY renderer of Caliper configs from `sweeps.yaml`: `render_round(...)` and `render_parallel_network(C)`, which experiment.py writes per run into the run dir (no generated config is committed) |
 | `benchapp.pyw` | the desktop app (M27): input boxes for every `sweeps.yaml` value, Preview/Run/Resume/Cancel of each experiment through WSL, live results, history, CSV export, suggested baselines, automatic backup/restore — see below |
 | `experiment.py --exp e0\|ramp\|e1\|e2\|e3a\|e3b\|ops\|cell` | the campaign driver — plans cells × reps, runs the lifecycle below per run, loud failures; `cell` runs ONE cell at the factor levels you pass |
 | `checkpoint.py <run> --label tK` | `du -sb` block store per channel + GoLevelDB state per peer + receipt store → `checkpoints.jsonl` (labels `t0..tN`) |
 | `collect.py <run-dir>` | run dir → `manifest.json` (rounds, per-tx percentiles, failure classes, resources, storage regression, anchoring, audit); `--selftest` |
 | `report.py --exp E [--out docs/results/E] [--no-charts] [--decimal-comma]` | ALWAYS the per-round Excel CSV `benchmark/results/E/E-results.csv` (any E incl. e0/ramp/cell); for e1–ops also CSV + Markdown tables (units in headers, mean ± SD over reps; Markdown one table per variant, one latency column) + optional PNG charts; E1's batch-size-free reference rows print `ref`, and the per-round tables (e3a, ops) carry a header note that the run-level metrics repeat per row |
 
-`lib.sh` holds the shared helpers (compose wrapper, `peer_env`, `create_channel`, ccaas
+`lib.sh` holds the shared helpers (compose wrapper, `peer_env`, `create_channel`,
+`app_channel` / `deploy_app_chaincode` (shared by up.sh and provision-channel.sh), ccaas
 packaging, `set_env_var`, `wait_raft_leader`, `wait_healthz`).
 
 ## experiment.py — plans and the run lifecycle
@@ -50,9 +50,8 @@ Flags: `--variant V` (repeatable) · `--reps N` · `--resume` (skip runs whose m
 `status: complete`) · `--dry-run` (plan + ETA from `runlog.jsonl` medians, no docker) ·
 `--reuse-network` (opt **out** of the per-run ledger reset; warned, valid for a single
 ad-hoc run) · `--no-monitor` · `--no-audit` · `--verbose` (echo Caliper's full output) ·
-`--sweeps FILE` (its blob SHA is what `run.json` records). `--fresh-network` still parses but
-is a no-op kept so old command lines keep working — a fresh ledger is the default. A repeated
-`--variant` is de-duplicated.
+`--sweeps FILE` (its blob SHA is what `run.json` records). A fresh ledger is the default. A
+repeated `--variant` is de-duplicated.
 
 **Progress.** Every run prints `##### [run i/n | x % done | elapsed | ETA] #####` (ETA = median
 wall time of this session's runs, else of `runlog.jsonl`), every round `--- round j/m: <label> |
@@ -153,8 +152,9 @@ Look (Claude Design handoff, 2026-09-25): `benchtheme.py` (drop-in — named ttk
 native vista theme, tooltip / help-icon / log / row-tag specs), `icons/` (16 px Tk PNGs, rest +
 disabled, and the 12 px variant markers — rendered from the handoff's vector symbols; the app is
 not DPI-aware, so only the @1x set is used). The report charts use `gleipnir.mplstyle` +
-`variant_style.py` (colour, marker, dash and hatch looked up by variant slug, never by the
-matplotlib colour cycle).
+`variant_style.py` (colour, marker and dash looked up by variant slug, never by the
+matplotlib colour cycle); `benchtheme.VARIANT` is the same table, so the app and the charts
+share one label/colour source.
 
 | Tab | Input boxes (each `sweeps.yaml` value is editable in exactly one place) |
 |---|---|
@@ -197,6 +197,7 @@ benchmark/results/<exp>/<exp>-results.csv            per-round Excel export (rew
 benchmark/results/<exp>/<variant>/<levels>/r<rep>/     levels = batch<N>-ch<C>-cases<K>[-ref]
                                                        (cell: + -rate<R>[-<R>...] [-x<overrides hash>])
   run.json            seeded identity + provenance (experiment.py)
+  parallel-c<C>.yaml  Caliper network config (parallel only; rounds.py)
   rounds/<label>/     bench.yaml round.json caliper.log report.html tx-w<i>.jsonl
   checkpoints.jsonl   t0..tN storage rows (checkpoint.py)
   anchoring.json      batcher /status after the final flush (anchored variants)
@@ -278,9 +279,8 @@ calibrated, never "optimal".
 ## Verify (no live network)
 
 ```bash
-bash -n up.sh down.sh reset-network.sh backup-volumes.sh provision-channel.sh teardown-channel.sh smoke-standard.sh lib.sh
+bash -n up.sh down.sh reset-network.sh backup-volumes.sh provision-channel.sh smoke-standard.sh lib.sh
 python -m py_compile rounds.py experiment.py collect.py report.py checkpoint.py
-python rounds.py --static
 python collect.py --selftest
 python experiment.py --exp e3a --dry-run
 python experiment.py --exp cell --send-rate 25 50 --cases 7 --dry-run

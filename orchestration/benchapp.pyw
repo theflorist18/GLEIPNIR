@@ -15,55 +15,23 @@ All logic that is not a widget lives in benchcore.py (tested by test_benchapp.py
 """
 import datetime
 import glob
-import hashlib
 import os
+import queue
 import re
-import sys
 import threading
 import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import benchcore as BC  # noqa: E402
-import benchhelp as H  # noqa: E402
-import benchtheme as T  # noqa: E402
-import experiment as E  # noqa: E402
-import report as REP  # noqa: E402
-import rounds as R  # noqa: E402
-import yaml  # noqa: E402
+import benchcore as BC
+import benchhelp as H
+import benchtheme as T
+import experiment as E
+import report as REP
+import rounds as R
+import yaml
 
-# path -> (label with unit, kind). Each value is editable in exactly ONE tab (see TAB_FIELDS).
-FIELDS = {
-    "seed": ("seed (trace PRNG — same sequence for all variants)", "int"),
-    "workers": ("Caliper workers", "int"),
-    "repetitions": ("repetitions r (results = mean ± SD)", "int"),
-    "workload.evidence_per_case": ("evidence items per case (n)", "int"),
-    "workload.events_per_case_per_round": ("write events per case per round (n)", "int"),
-    "workload.rounds": ("trace rounds per run at one send rate (n)", "int"),
-    "workload.mix.transfer_weight": ("TransferCustody weight (relative)", "float"),
-    "workload.mix.access_weight": ("AccessLog weight (relative)", "float"),
-    "workload.mix.dispose_fraction": ("fraction of evidence disposed (0–1)", "float"),
-    "workload.payload_bytes": ("evidence file size (B) — off-chain; only its hash goes on-chain", "int"),
-    "workload.audit_cases": ("cases reconstructed for audit time (n)", "int"),
-    "anchoring.flush_timeout_ms": ("batcher flush timeout (ms, 0 = size-only)", "int"),
-    "monitor.interval_s": ("CPU/memory monitor interval (s)", "int"),
-    "regimes.steady.min_events_per_channel": ("steady floor (write events per channel) — methodology rule", "int"),
-    "baseline.send_rate_tps": ("send rate (tx/s) — from E0", "int"),
-    "baseline.batch_size": ("batch size (events) — from E1", "int"),
-    "baseline.channels": ("cases (= channels on Parallel variants) — E2 median", "int"),
-    "baseline.channels_max": ("max cases / channels — E2 top of healthy range", "int"),
-    "regimes.smoke.cases": ("smoke cases (n) — Parallel runs one channel per case", "int"),
-    "regimes.smoke.evidence_per_case": ("smoke evidence per case (n)", "int"),
-    "regimes.smoke.logs_per_case_min": ("smoke logs per case, min (n)", "int"),
-    "regimes.smoke.logs_per_case_max": ("smoke logs per case, max (n)", "int"),
-    "regimes.smoke.send_rate_tps": ("smoke send rate (tx/s)", "int"),
-    "ramp.events_per_case_per_round": ("ramp events per case per send rate (n)", "int"),
-    "send_rates_tps": ("send-rate grid (tx/s) — ramp + E3a", "list"),
-    "batch_sizes": ("batch-size grid (events per batch)", "list"),
-    "channel_counts": ("channel = case grid (n)", "list"),
-    "case_counts": ("case grid (n, trimmed to ≤ max cases)", "list"),
-}
+FIELDS = BC.FIELDS
 WORKLOAD = ["seed", "workers", "repetitions", "workload.evidence_per_case", "workload.events_per_case_per_round",
             "workload.rounds", "workload.mix.transfer_weight", "workload.mix.access_weight",
             "workload.mix.dispose_fraction", "workload.payload_bytes", "workload.audit_cases",
@@ -103,6 +71,11 @@ def parse_value(kind, s):
     return [int(x) for x in re.split(r"[,\s]+", s.strip("[] ")) if x]
 
 
+def num(var, kind=int):
+    s = var.get().strip()
+    return kind(s) if s else None
+
+
 def today():
     return datetime.date.today().isoformat()
 
@@ -136,13 +109,13 @@ class Tip:
             self.win = None
 
 
-def help_icon(parent, text, size=16):
+def help_icon(parent, text):
     """The circled "?" (benchtheme spec): a ring at rest, a filled disc on hover; shows `text` on hover."""
     bg = ttk.Style().lookup("TFrame", "background") or parent.winfo_toplevel().cget("background")
-    c = tk.Canvas(parent, width=size, height=size, highlightthickness=0, background=bg, cursor="question_arrow")
-    T.draw_help_icon(c, size)
-    c.bind("<Enter>", lambda e: T.draw_help_icon(c, size, hover=True), add="+")
-    c.bind("<Leave>", lambda e: T.draw_help_icon(c, size), add="+")
+    c = tk.Canvas(parent, width=16, height=16, highlightthickness=0, background=bg, cursor="question_arrow")
+    T.draw_help_icon(c, 16)
+    c.bind("<Enter>", lambda e: T.draw_help_icon(c, 16, hover=True), add="+")
+    c.bind("<Leave>", lambda e: T.draw_help_icon(c, 16), add="+")
     Tip(c, text)
     return c
 
@@ -245,7 +218,6 @@ class App:
         with open(BC.SWEEPS, encoding="utf-8", newline="") as fh:
             self.text = fh.read()
         self.sweeps = yaml.safe_load(self.text)
-        self.text_hash = hashlib.sha256(self.text.encode()).hexdigest()
         for path in FIELDS:
             val = show_value(BC.get_path(self.sweeps, path))
             if path in self.vars:
@@ -270,7 +242,7 @@ class App:
         """Apply {path: value} to the file in place; refuse if it changed on disk since it was loaded."""
         with open(BC.SWEEPS, encoding="utf-8", newline="") as fh:
             disk = fh.read()
-        if hashlib.sha256(disk.encode()).hexdigest() != self.text_hash:
+        if disk != self.text:
             raise RuntimeError("benchmark/sweeps.yaml changed on disk since it was loaded — Reload first")
         text = disk
         for path, value in edits.items():
@@ -429,7 +401,7 @@ class App:
     def actions(self, parent, args_fn, row, col=0, note=""):
         box = ttk.Frame(parent)
         box.grid(row=row, column=col, columnspan=3, sticky="w", padx=4, pady=6)
-        for text, name, cmd, primary in (("Preview plan", "preview", lambda: self.preview(args_fn), False),
+        for text, name, cmd, primary in (("Preview plan", "preview", lambda: self.start_run(args_fn, preview_only=True), False),
                                          ("Run…", "run", lambda: self.start_run(args_fn, resume=False), True),
                                          ("Resume…", "resume", lambda: self.start_run(args_fn, resume=True), False)):
             Tip(ibutton(box, text, name, cmd, primary=primary), H.BUTTON_HELP[text]).widget.pack(side="left", padx=2)
@@ -446,18 +418,9 @@ class App:
         tk.Frame(box, width=3, background=T.SELECT_BG).pack(side="left", fill="y", padx=(0, 8))
         inner = ttk.Frame(box)
         inner.pack(side="left", fill="both", expand=True)
-        first, rest = (cols[0], cols[1:]) if variant_col else (None, cols)
-        tree = ttk.Treeview(inner, columns=[c for c, _ in rest], show="tree headings" if variant_col else "headings",
-                            height=7)
-        if variant_col:
-            tree.heading("#0", text=first[0], anchor="w")
-            tree.column("#0", width=first[1], stretch=False)
-        for c, w in rest:
-            tree.heading(c, text=c)
-            tree.column(c, width=w, anchor="e")
-        T.tag_tree(tree)
+        tree = self.results_tree(inner, cols, run_col=variant_col)
+        tree.configure(height=7)
         tree.tag_configure("qualifies", background="#E8F5EC")
-        tree.pack(fill="x")
         verdict = tk.StringVar(value="no results yet")
         ttk.Label(inner, textvariable=verdict, wraplength=1250, justify="left").pack(anchor="w", pady=4)
         buttons = ttk.Frame(inner)
@@ -505,7 +468,7 @@ class App:
         self.readonly(f, ["baseline.send_rate_tps", "baseline.channels"], "held fixed", 0, 2)
         self.e1_reps = self.reps_box(f, 1, 0)
         self.actions(f, lambda: BC.experiment_args("e1", variants=self.pick(self.e1_vars),
-                                                   reps=self.reps(self.e1_reps)), 2)
+                                                   reps=num(self.e1_reps)), 2)
         self.s_e1 = self.suggestion(f, "Suggested baseline batch size (methodology §4.1)", [
             ("variant", 170), ("batch (events)", 90), ("reps (n)", 60), ("throughput (TPS, mean)", 140),
             ("Δ throughput to next (%)", 150), ("on-chain (B/event)", 115), ("Δ on-chain to next (%)", 140),
@@ -516,7 +479,7 @@ class App:
         self.fields(f, ["channel_counts"], "independent variable (Parallel only; cases = channels)", 0, 0)
         self.readonly(f, ["baseline.send_rate_tps"], "held fixed", 0, 1)
         self.e2_reps = self.reps_box(f, 1, 0)
-        self.actions(f, lambda: BC.experiment_args("e2", reps=self.reps(self.e2_reps)), 2,
+        self.actions(f, lambda: BC.experiment_args("e2", reps=num(self.e2_reps)), 2,
                      note=f"host: {os.cpu_count()} logical cores seen by Windows (WSL figure is in each run.json)")
         self.s_e2 = self.suggestion(f, "Suggested cases/channels (methodology §4.2: median of the healthy range)", [
             ("channels (n)", 85), ("reps (n)", 60), ("throughput (TPS, mean)", 140), ("× previous", 80),
@@ -543,7 +506,7 @@ class App:
                  padx=8, pady=4).pack(padx=(3, 0))
         self.e3_reps = self.reps_box(f, 3, 0)
         self.actions(f, lambda: BC.experiment_args(self.e3_mode.get(), variants=self.pick(self.e3_vars),
-                                                   reps=self.reps(self.e3_reps)), 4,
+                                                   reps=num(self.e3_reps)), 4,
                      note="Supervisor gate: the variable table + three flowcharts go to D before E3 runs.")
 
     def tab_custom(self):
@@ -580,16 +543,13 @@ class App:
         self.actions(f, self.custom_args, 4)
 
     def custom_args(self):
-        def num(var, kind=int):
-            s = var.get().strip()
-            return kind(s) if s else None
         controls = {}
         for flag, _p, typ, _lo, _hi, _h in E.CONTROL_FLAGS:
             v = num(self.c_ctl[flag], typ)
             if v is not None:
                 controls[flag] = v
         rates = parse_value("list", self.c_send.get()) if self.c_send.get().strip() else ()
-        return BC.experiment_args("cell", variants=self.pick(self.c_vars), reps=self.reps(self.c_reps),
+        return BC.experiment_args("cell", variants=self.pick(self.c_vars), reps=num(self.c_reps),
                                   send_rates=rates, batch_size=num(self.c_batch), cases=num(self.c_cases),
                                   controls=controls, reuse_network=self.c_reuse.get(), no_monitor=self.c_nomon.get(),
                                   no_audit=self.c_noaud.get())
@@ -706,10 +666,6 @@ class App:
     def pick(self, vs):
         return [v for v, var in vs.items() if var.get()]
 
-    def reps(self, var):
-        s = var.get().strip()
-        return int(s) if s else None
-
     def on_error(self, *exc):
         messagebox.showerror("GLEIPNIR Bench", f"{exc[0].__name__}: {exc[1]}")
 
@@ -747,10 +703,11 @@ class App:
                 else:
                     tree.insert("", "end", values=vals, tags=tags)
 
+        for *_, buttons in (self.s_e0, self.s_e1, self.s_e2):
+            for w in buttons.winfo_children():
+                w.destroy()
         # E0 ramp -> baseline.send_rate_tps
         tree, verdict, buttons = self.s_e0
-        for w in buttons.winfo_children():
-            w.destroy()
         ms = REP.load_manifests("ramp", BC.RESULTS)
         if ms:
             s = REP.suggest_send_rate(ms, self.sweeps["send_rates_tps"])
@@ -767,8 +724,6 @@ class App:
                     lambda g=s["trimmedGrid"]: self.apply({"send_rates_tps": g}, "ramp")).pack(side="left")
         # E1 -> baseline.batch_size
         tree, verdict, buttons = self.s_e1
-        for w in buttons.winfo_children():
-            w.destroy()
         ms = REP.load_manifests("e1", BC.RESULTS)
         if ms:
             s = REP.suggest_batch_size(REP.aggregate(REP.data_points("e1", ms)))
@@ -784,8 +739,6 @@ class App:
                         primary=True).pack(side="left")
         # E2 -> baseline.channels + channels_max
         tree, verdict, buttons = self.s_e2
-        for w in buttons.winfo_children():
-            w.destroy()
         ms = REP.load_manifests("e2", BC.RESULTS)
         if ms:
             s = REP.suggest_channels(REP.aggregate(REP.data_points("e2", ms)), REP.host_cores(ms))
@@ -824,7 +777,7 @@ class App:
         for i, r in enumerate(reversed(E.load_json_lines(E.RUNLOG))):
             if exp != "all" and r.get("exp") != exp:
                 continue
-            run = BC._load(os.path.join(BC.RESULTS, *r["runId"].split("/"), "run.json"), {})
+            run = E.load_json(os.path.join(BC.RESULTS, *r["runId"].split("/"), "run.json")) or {}
             wall = r.get("wallSeconds")
             status, regime = r.get("status") or "", run.get("regime", "")
             tags = [status] if status in ("failed", "running") else [regime] if regime in ("smoke", "sub-floor") else []
@@ -842,7 +795,7 @@ class App:
         if not sel:
             return
         _, started, run_id = sel[0].split("|", 2)
-        m = BC._load(os.path.join(BC.RESULTS, *run_id.split("/"), "manifest.json"), None)
+        m = E.load_json(os.path.join(BC.RESULTS, *run_id.split("/"), "manifest.json"))
         if not m or not m.get("rounds") or (started and m.get("startedAt") != started):
             self.h_rounds.insert("", "end", values=["no results for this attempt (failed, cancelled or re-run "
                                                     "since)"] + [""] * len(ROUND_KEYS))
@@ -933,25 +886,15 @@ class App:
     def idle(self):
         return not self.runner.busy() and not self.job
 
-    def preview(self, args_fn):
-        if not self.idle():
-            messagebox.showwarning("Busy", "A benchmark process is already running.")
-            return
-        if not self.ensure_saved():
-            return
-        args = args_fn() + (["--verbose"] if self.verbose.get() else [])
-        self.job = {"previewOnly": True}
-        self.plan_lines = []
-        self.begin("preview", BC.experiment_script(args + ["--dry-run"], wipe=False), "preview")
-
-    def start_run(self, args_fn, resume):
+    def start_run(self, args_fn, resume=False, preview_only=False):
         if not self.idle():
             messagebox.showwarning("Busy", "A benchmark process is already running.")
             return
         if not self.ensure_saved():
             return
         args = args_fn() + (["--resume"] if resume else []) + (["--verbose"] if self.verbose.get() else [])
-        self.job = {"args": args, "exp": args[1], "ts": f"{datetime.datetime.now():%Y%m%d-%H%M%S}"}
+        self.job = {"args": args, "exp": args[1], "ts": f"{datetime.datetime.now():%Y%m%d-%H%M%S}",
+                    "previewOnly": preview_only}
         self.plan_lines = []
         self.begin("preview", BC.experiment_script(args + ["--dry-run"], wipe=False), "preview")
 
@@ -1166,15 +1109,12 @@ class App:
     def poll(self):
         try:
             for _ in range(500):
-                item = self.runner.q.get_nowait()
-                if item[1] == "line":
-                    self.on_line(item[0], item[2])
-                else:
-                    self.on_exit(item[0], item[2])
-        except Exception as e:  # noqa: BLE001 — queue.Empty ends a tick; anything else is shown
-            if type(e).__name__ != "Empty":
-                self.on_error(type(e), e, None)
-        self.root.after(100, self.poll)
+                tag, what, val = self.runner.q.get_nowait()
+                (self.on_line if what == "line" else self.on_exit)(tag, val)
+        except queue.Empty:
+            pass
+        finally:   # anything else reaches on_error through root.report_callback_exception
+            self.root.after(100, self.poll)
 
     def on_line(self, tag, text):
         if self.logfh:
@@ -1221,7 +1161,7 @@ class App:
         elif kind == "csv" and self.current_run:
             # collect.py has finished this run: its manifest adds CPU, memory and bytes/event to the live rows
             run_id = self.current_run["runId"]
-            m = BC._load(os.path.join(BC.RESULTS, *run_id.split("/"), "manifest.json"), None)
+            m = E.load_json(os.path.join(BC.RESULTS, *run_id.split("/"), "manifest.json"))
             for r in (m or {}).get("rounds", []):
                 x = REP.round_metrics(m, r)
                 self.live_row(run_id, r.get("label"), [x[k] for k in ROUND_KEYS])

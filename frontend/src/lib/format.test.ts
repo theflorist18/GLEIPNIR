@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatDate, formatTs, isDisposed } from './format';
+import { formatTs, isDisposed } from './format';
 
 describe('formatTs', () => {
   it('renders a fixed UTC datetime', () => {
@@ -25,11 +25,5 @@ describe('isDisposed', () => {
     expect(isDisposed('REMOVED')).toBe(true);
     expect(isDisposed('ACTIVE')).toBe(false);
     expect(isDisposed(undefined)).toBe(false);
-  });
-});
-
-describe('formatDate', () => {
-  it('renders a UTC date only', () => {
-    expect(formatDate('2026-07-21T23:59:59.999Z')).toBe('2026-07-21');
   });
 });

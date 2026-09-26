@@ -3,7 +3,6 @@
 // The record/event shapes mirror docs/CONTRACTS.md §5 (Codex-Entry-inspired
 // evidence head + CoC event).
 
-export type Variant = 'standard' | 'anchoring' | 'parallel' | 'parallel-anchored';
 export type Op = 'CREATE' | 'TRANSFER' | 'ACCESS' | 'DISPOSE';
 
 // ---- Evidence head record (CONTRACTS §5, Codex-Entry mapping) ----
@@ -13,12 +12,6 @@ export interface StoragePointer {
   location?: string;
   integrity_proof?: string; // RFC 6920 ni-URI; computed by the gateway (or client-side hash)
   jurisdiction?: string;
-}
-
-export interface EncryptionInfo {
-  alg?: string;
-  key_id?: string;
-  last_controlled_by?: string;
 }
 
 export interface IdentityInfo {
@@ -34,20 +27,12 @@ export interface AnchorInfo {
   hash_alg?: string;
 }
 
-export interface SignatureInfo {
-  alg?: string;
-  kid?: string;
-  signature?: string;
-}
-
 export interface EvidenceRecord {
   id?: string;
   version?: string;
   storage?: StoragePointer;
-  encryption?: EncryptionInfo;
   identity?: IdentityInfo;
   anchor?: AnchorInfo;
-  signatures?: SignatureInfo[];
   previous_id?: string;
   custodian?: string;
   status?: string;
@@ -79,20 +64,6 @@ export interface VerifyResult {
 }
 
 // ---- Request bodies ----
-
-export interface CreateEvidenceRequest {
-  evidenceId?: string; // gateway generates a UUIDv4 if omitted
-  caseId?: string; // "shared" (standard/anchoring) or "case-00x" (parallel)
-  version?: string;
-  actor: string;
-  storage: StoragePointer;
-  identity?: IdentityInfo;
-  encryption?: EncryptionInfo;
-  previous_id?: string;
-  // Optional: raw bytes for the gateway to hash into storage.integrity_proof.
-  // Used ONLY for hashing, never for storage. Omitted when the client hashes locally.
-  payloadBase64?: string;
-}
 
 export interface TransferCustodyRequest {
   newCustodian: string;
@@ -206,36 +177,18 @@ export interface CocReport {
   evidence: Array<EvidenceIndexRow & { category: string | null; auditTrail: CoCEvent[] }>;
 }
 
-/** M25b: the case audit-log event types (append-only, actor-attributed).
- * Management actions only — evidence ACCESS stays on-chain per evidence. */
-export type CaseActivityType =
-  | 'CASE_CREATED' | 'CASE_UPDATED'
-  | 'PARTICIPANT_ADDED' | 'PARTICIPANT_REMOVED' | 'PARTICIPANT_ROLE_CHANGED'
-  | 'CATEGORY_CREATED' | 'CATEGORY_RENAMED' | 'CATEGORY_DELETED'
-  | 'EVIDENCE_ADDED' | 'EVIDENCE_ASSIGNED' | 'EVIDENCE_UNASSIGNED' | 'EVIDENCE_REMOVED'
-  | 'EVIDENCE_DETAILS_UPDATED' | 'FLAG_CHANGED' | 'NOTE_ADDED';
-
 /** One entry of the case activity feed (M20; persistent audit log since M25b). */
 export interface CaseActivityEvent {
   /** Audit-log row id (evt-<uuid>). */
   id?: string;
-  /** Render defensively: the enum can grow. */
-  type: CaseActivityType | (string & {});
+  /** M25b event type (lib/activity.ts enumerates them). Render defensively: the enum can grow. */
+  type: string;
   ts: string;
   actor?: string;
   evidenceId?: string;
   /** The acted-on entity: a userId for participant events, a categoryId for category events. */
   target?: string;
   detail?: Record<string, unknown>;
-}
-
-/** PATCH /evidence/:id/details payload (M19): string sets, null clears. */
-export interface EvidenceDetailsPatch {
-  label?: string | null;
-  categoryId?: string | null;
-  seizedAt?: string | null;
-  acquisitionLocation?: string | null;
-  handedOverBy?: string | null;
 }
 
 export interface UploadResult {

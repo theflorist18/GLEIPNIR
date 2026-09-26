@@ -25,17 +25,9 @@ class RestGatewayConnector extends ConnectorBase {
     this.token = process.env.GLEIPNIR_TOKEN || 'dev-token';
   }
 
-  getType() {
-    return 'rest-gateway';
-  }
-
   async init(_workerInit) { /* nothing to bootstrap */ }
 
   async installSmartContract() { /* chaincode is deployed by orchestration, not here */ }
-
-  async prepareWorkerArguments(number) {
-    return Array.from({ length: number }, () => ({}));
-  }
 
   async getContext() {
     return {};
@@ -82,4 +74,3 @@ async function ConnectorFactory(workerIndex) {
 }
 
 module.exports.ConnectorFactory = ConnectorFactory;
-module.exports.RestGatewayConnector = RestGatewayConnector;

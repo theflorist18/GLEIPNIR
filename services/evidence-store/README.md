@@ -25,8 +25,6 @@ reinvention): `ni:///sha-256;<base64url(sha256(bytes))>`, no padding.
 |---|---|---|
 | `PUT` | `/blobs/:evidenceId` | store raw body (+ `X-Content-Type`/`X-Original-Filename` headers) → `201 {integrityProof, sizeBytes, storedAt}`; `409` if it exists (immutable); `413` over `MAX_UPLOAD_BYTES` |
 | `GET` | `/blobs/:evidenceId` | stream bytes back, `Content-Disposition: attachment` |
-| `GET` | `/blobs/:evidenceId/meta` | sidecar JSON |
-| `GET` | `/blobs/:evidenceId/verify?expected=<ni-uri>` | recompute hash from stored bytes → `{ok, expected, actual, sizeBytes}`; `expected` defaults to the ingest-time proof |
 | `DELETE` | `/blobs/:evidenceId` | orphan cleanup ONLY (gateway rolls back a blob whose on-chain CreateEvidence failed) → `204` |
 
 ## Inputs / outputs
@@ -35,7 +33,7 @@ reinvention): `ni:///sha-256;<base64url(sha256(bytes))>`, no padding.
 - **Out:** blob + sidecar files under `DATA_DIR`.
 
 Env: `PORT=4006`, `DATA_DIR=/data`, `GLEIPNIR_INTERNAL_TOKEN`,
-`MAX_UPLOAD_BYTES=26214400`, `LOG_LEVEL`.
+`MAX_UPLOAD_BYTES=26214400`.
 
 ## Does NOT — and MUST NOT
 
@@ -59,5 +57,5 @@ Env: `PORT=4006`, `DATA_DIR=/data`, `GLEIPNIR_INTERNAL_TOKEN`,
 ## Test
 
 ```bash
-npm install && npm test    # node:test — roundtrip, immutability, verify/tamper, traversal, 413
+npm install && npm test    # node:test — roundtrip, immutability, rollback-token DELETE, traversal, 413
 ```

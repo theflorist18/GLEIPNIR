@@ -59,19 +59,10 @@ function loadConfig() {
     port: parseInt(process.env.PORT, 10) || 4005,
     dataDir: process.env.DATA_DIR || '/data',
     internalToken: process.env.GLEIPNIR_INTERNAL_TOKEN || 'internal-dev-token',
-    logLevel: process.env.LOG_LEVEL || 'info',
   };
 }
 
 const nowIso = () => new Date().toISOString();
-
-// Idempotent column-add guard (M19): the live case-registry-data volume has
-// no migration framework, so new nullable columns land via checked ALTERs.
-function addColumnIfMissing(db, table, col, ddl) {
-  if (!db.pragma(`table_info(${table})`).some((c) => c.name === col)) {
-    db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
-  }
-}
 
 function openDb(dataDir) {
   const db = new Database(path.join(dataDir, 'case-registry.db'));
@@ -104,7 +95,14 @@ function openDb(dataDir) {
       uploaded_by       TEXT,
       uploaded_at       TEXT,
       status            TEXT NOT NULL DEFAULT 'ACTIVE',
-      last_synced_at    TEXT
+      last_synced_at    TEXT,
+      -- M19 forensic ingest metadata + M20 flag: off-chain only, nullable, validated in code
+      label             TEXT,
+      category_id       TEXT,
+      seized_at         TEXT,
+      acquisition_location TEXT,
+      handed_over_by    TEXT,
+      flag              TEXT
     );
     CREATE TABLE IF NOT EXISTS evidence_categories (
       id         TEXT PRIMARY KEY,
@@ -137,37 +135,6 @@ function openDb(dataDir) {
     CREATE INDEX IF NOT EXISTS idx_participants_user ON case_participants(user_id);
     CREATE INDEX IF NOT EXISTS idx_categories_case ON evidence_categories(case_id);
   `);
-  // M19: forensic ingest metadata — off-chain only, nullable, validated in
-  // code (no CHECKs: the volume has live rows and CHECKs cannot be altered).
-  addColumnIfMissing(db, 'evidence_index', 'label', 'label TEXT');
-  addColumnIfMissing(db, 'evidence_index', 'category_id', 'category_id TEXT');
-  addColumnIfMissing(db, 'evidence_index', 'seized_at', 'seized_at TEXT');
-  addColumnIfMissing(db, 'evidence_index', 'acquisition_location', 'acquisition_location TEXT');
-  addColumnIfMissing(db, 'evidence_index', 'handed_over_by', 'handed_over_by TEXT');
-  addColumnIfMissing(db, 'evidence_index', 'flag', 'flag TEXT');
-  // M18: role_in_case gained 'lead'. SQLite cannot ALTER a CHECK constraint,
-  // so a pre-M18 table (its stored DDL lacks 'lead') is rebuilt in place —
-  // transactional, and idempotent because the second boot sees 'lead' in
-  // sqlite_master. Fresh databases take the CREATE above and skip this.
-  const cp = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='case_participants'").get();
-  if (cp && !cp.sql.includes("'lead'")) {
-    db.exec(`
-      BEGIN;
-      CREATE TABLE case_participants_m18 (
-        case_id      TEXT NOT NULL REFERENCES cases(id),
-        user_id      TEXT NOT NULL,
-        role_in_case TEXT NOT NULL DEFAULT 'viewer' CHECK (role_in_case IN ('viewer','contributor','lead')),
-        added_by     TEXT NOT NULL,
-        added_at     TEXT NOT NULL,
-        PRIMARY KEY (case_id, user_id)
-      );
-      INSERT INTO case_participants_m18 SELECT case_id, user_id, role_in_case, added_by, added_at FROM case_participants;
-      DROP TABLE case_participants;
-      ALTER TABLE case_participants_m18 RENAME TO case_participants;
-      CREATE INDEX IF NOT EXISTS idx_participants_user ON case_participants(user_id);
-      COMMIT;
-    `);
-  }
   return db;
 }
 
@@ -200,37 +167,12 @@ const categoryWire = (r) => r && ({
 // LIKE-escape so a search term containing % or _ matches literally.
 const likeOf = (q) => `%${String(q).replace(/([\\%_])/g, '\\$1')}%`;
 
-// S19: bound list/search result sets so a query can never return an unbounded
-// set. Optional ?limit override, itself capped. (The activity feed already caps
-// its own results; this covers /cases and /evidence-index search.)
-const DEFAULT_LIST_LIMIT = 500;
-const MAX_LIST_LIMIT = 1000;
-const boundedLimit = (q) => {
-  const n = parseInt(q, 10);
-  return Number.isFinite(n) && n > 0 ? Math.min(n, MAX_LIST_LIMIT) : DEFAULT_LIST_LIMIT;
-};
+const LIST_LIMIT = 500; // S19: every list/search result set is capped (the activity feed caps its own)
 
 function createApp(overrides) {
   const cfg = { ...loadConfig(), ...(overrides || {}) };
   fs.mkdirSync(cfg.dataDir, { recursive: true });
   const db = openDb(cfg.dataDir);
-
-  // M25 backfill: cases that predate preset seeding start with an empty
-  // taxonomy, which leaves the ingest wizard's category picker empty. Any
-  // ZERO-category case gets the current preset set on boot (attributed to the
-  // case creator); a case whose lead already defined categories — including a
-  // partial preset set — is left untouched.
-  db.transaction(() => {
-    const insert = db.prepare('INSERT INTO evidence_categories (id, case_id, name, created_by, created_at) VALUES (@id, @case_id, @name, @created_by, @created_at)');
-    const empty = db.prepare(`SELECT c.id, c.created_by FROM cases c
-                              WHERE NOT EXISTS (SELECT 1 FROM evidence_categories ec WHERE ec.case_id = c.id)`).all();
-    for (const c of empty) {
-      for (const name of DEFAULT_CATEGORIES) {
-        insert.run({ id: `cat-${crypto.randomUUID()}`, case_id: c.id, name, created_by: c.created_by, created_at: nowIso() });
-      }
-    }
-    if (empty.length > 0) console.log(`[case-registry] seeded preset categories into ${empty.length} pre-M25 case(s)`);
-  })();
 
   const app = express();
   app.use(express.json({ limit: '1mb' }));
@@ -272,32 +214,6 @@ function createApp(overrides) {
       evidence_id: evidenceId, target, detail: detail === null ? null : JSON.stringify(detail),
     });
   }
-
-  // History backfill, once per case: the M20 feed was SYNTHESIZED from
-  // timestamped rows (so participant removals etc. were invisible). Cases
-  // with zero audit rows get their derivable history materialized with the
-  // original timestamps; from then on every event is a real appended row.
-  db.transaction(() => {
-    const bare = db.prepare(`SELECT c.* FROM cases c
-                             WHERE NOT EXISTS (SELECT 1 FROM case_audit_log a WHERE a.case_id = c.id)`).all();
-    for (const row of bare) {
-      audit(row.id, 'CASE_CREATED', { actor: row.created_by, ts: row.created_at });
-      if (row.updated_at !== row.created_at) {
-        audit(row.id, 'CASE_UPDATED', { ts: row.updated_at, detail: { status: row.status } });
-      }
-      for (const p of db.prepare('SELECT * FROM case_participants WHERE case_id = ?').all(row.id)) {
-        audit(row.id, 'PARTICIPANT_ADDED', { actor: p.added_by, ts: p.added_at, target: p.user_id, detail: { roleInCase: p.role_in_case } });
-      }
-      for (const e of db.prepare('SELECT * FROM evidence_index WHERE case_id = ?').all(row.id)) {
-        audit(row.id, 'EVIDENCE_ADDED', { actor: e.uploaded_by || '', ts: e.uploaded_at, evidenceId: e.evidence_id, detail: { label: e.label ?? null } });
-      }
-      const notes = db.prepare(`SELECT n.* FROM evidence_notes n JOIN evidence_index e ON e.evidence_id = n.evidence_id WHERE e.case_id = ?`).all(row.id);
-      for (const n of notes) {
-        audit(row.id, 'NOTE_ADDED', { actor: n.author, ts: n.created_at, evidenceId: n.evidence_id, detail: { noteId: n.id } });
-      }
-    }
-    if (bare.length > 0) console.log(`[case-registry] backfilled audit history for ${bare.length} case(s)`);
-  })();
 
   // ---- cases ----
   app.post('/cases', (req, res) => {
@@ -346,10 +262,9 @@ function createApp(overrides) {
     }
     // Participant-filtered listings join the roster so each row carries the
     // caller's own role (myRoleInCase); unfiltered listings stay role-free.
-    params.__limit = boundedLimit(req.query.limit);
     const sql = participant
-      ? `SELECT c.*, cp.role_in_case AS my_role FROM cases c JOIN case_participants cp ON cp.case_id = c.id ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY c.created_at DESC LIMIT @__limit`
-      : `SELECT c.* FROM cases c ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY c.created_at DESC LIMIT @__limit`;
+      ? `SELECT c.*, cp.role_in_case AS my_role FROM cases c JOIN case_participants cp ON cp.case_id = c.id ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY c.created_at DESC LIMIT ${LIST_LIMIT}`
+      : `SELECT c.* FROM cases c ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY c.created_at DESC LIMIT ${LIST_LIMIT}`;
     res.json(db.prepare(sql).all(params).map(caseWire));
   });
 
@@ -456,11 +371,6 @@ function createApp(overrides) {
       throw err;
     }
     res.status(201).json(categoryWire(row));
-  });
-
-  app.get('/cases/:caseId/categories', (req, res) => {
-    if (!getCase.get(req.params.caseId)) return notFound(res, 'case not found');
-    res.json(db.prepare(`SELECT * FROM evidence_categories WHERE case_id = ? ORDER BY ${CATEGORY_ORDER}`).all(req.params.caseId).map(categoryWire));
   });
 
   app.patch('/cases/:caseId/categories/:categoryId', (req, res) => {
@@ -591,7 +501,6 @@ function createApp(overrides) {
     return res.status(201).json(evidenceWire(row));
   });
 
-  // Search MUST be registered before /evidence-index/:evidenceId would match.
   app.get('/evidence-index', (req, res) => {
     const { caseId, q, uploadedBy, type, from, to, visibleToUserId, flag } = req.query;
     const where = [];
@@ -616,15 +525,8 @@ function createApp(overrides) {
                    OR (case_id IS NULL AND uploaded_by = @vis))`);
       params.vis = visibleToUserId;
     }
-    params.__limit = boundedLimit(req.query.limit);
-    const sql = `SELECT * FROM evidence_index ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY uploaded_at DESC LIMIT @__limit`;
+    const sql = `SELECT * FROM evidence_index ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY uploaded_at DESC LIMIT ${LIST_LIMIT}`;
     res.json(db.prepare(sql).all(params).map(evidenceWire));
-  });
-
-  app.get('/evidence-index/:evidenceId', (req, res) => {
-    const row = getEvidence.get(req.params.evidenceId);
-    if (!row) return notFound(res, 'evidence not found in index');
-    res.json(evidenceWire(row));
   });
 
   // Cache sync + metadata updates: the chain stays authoritative for status

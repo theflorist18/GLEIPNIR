@@ -6,11 +6,9 @@
 
 const { createApp } = require('./app');
 const { connectFabric } = require('./fabric');
-const { makeBatcherClient } = require('./batcherClient');
-const { makeReceiptsClient } = require('./receiptsClient');
 const { makeUsersStore } = require('./users');
 const { makeSessions } = require('./sessions');
-const { makeCaseRegistryClient, makeEvidenceStoreClient } = require('./serviceClients');
+const { makeBatcherClient, makeReceiptsClient, makeCaseRegistryClient, makeEvidenceStoreClient } = require('./serviceClients');
 
 // User-session auth (M12) is additive: if the auth data dir is unavailable
 // (e.g. a container without the gateway-auth-data volume), the gateway still
@@ -24,10 +22,7 @@ async function makeAuthStores(env) {
     console.warn(`[gateway] auth store unavailable (${err.message}) — user login disabled; service token unaffected`);
     return { users: undefined, sessions: undefined };
   }
-  const sessions = makeSessions({
-    ttlSeconds: parseInt(env.SESSION_TTL_SECONDS, 10) || 28800,
-    idleTtlSeconds: parseInt(env.SESSION_IDLE_TTL_SECONDS, 10) || 1800, // N3: 30-min sliding idle
-  });
+  const sessions = makeSessions({ ttlSeconds: parseInt(env.SESSION_TTL_SECONDS, 10) || 28800 });
   if (env.ADMIN_USERNAME && env.ADMIN_PASSWORD) {
     const seeded = await users.seedAdmin({ username: env.ADMIN_USERNAME, password: env.ADMIN_PASSWORD });
     if (seeded) console.log(`[gateway] seeded first admin user '${seeded.username}'`);

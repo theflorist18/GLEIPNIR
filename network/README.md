@@ -36,7 +36,9 @@ channel of any kind** (that mechanism is removed in Fabric 3.0).
   rich-query backend removed); mounted into peers/orderers; overrides via env in compose.
 - `crypto/registerEnroll.sh` — Fabric CA 1.5.19 enrollment for all four orgs (NodeOUs).
   Anchor org only when `ENABLE_ANCHOR_ORG=true`. Output → `organizations/` (gitignored).
-- `compose/compose-{net,ca,services}.yaml` + `.env` — the three-file topology.
+- `compose/compose-{net,ca,services}.yaml` + `.env` — the three-file topology, always merged
+  (`-f` all three): `gleipnir-net` is declared once in `compose-net.yaml`, and the settings
+  shared by the orderers / peers / CAs live in `x-*` anchors merged into each service.
 
 ## Compose profiles per variant (docs/CONTRACTS.md §8)
 
