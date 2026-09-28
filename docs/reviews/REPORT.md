@@ -152,7 +152,7 @@ missing channel-artifacts dir after the F46 hoist) — details, watch-list
 observations (F35 didn't bite; F52 no crash-loop; F46 single install; healthz
 200s) and the host-environment runbook are in `chunk-7-live-e2e.md`.
 **Steps 2–4 are GO.** Prereq for any run on this machine: the compose images
-must already exist (`chunk-7-build-images.sh`) — the MITM proxy breaks
+must already exist (`orchestration/build-images.sh`) — the MITM proxy breaks
 in-build TLS if compose ever builds them itself.
 
 ## Step 2 result (2026-07-10) — GREEN

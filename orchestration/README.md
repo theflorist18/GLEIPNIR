@@ -20,6 +20,8 @@ fabric-tools container. Python 3.10+ with `pyyaml` (`pip install -r requirements
 | `backup-volumes.sh <dir> [--restore]` | tar every `gleipnir_*` volume (one file each) via `alpine`; `--restore` untars them back |
 | `provision-channel.sh case-NNN` | per-case channel + chaincode approve/commit (idempotent-safe) |
 | `smoke-standard.sh` | end-to-end via the gateway (create → transfer → access×2 → audit==4 → dispose → status DISPOSED → transfer fails) |
+| `smoke-library.sh` | evidence-library gate on the standard variant (login/roles → case + participant → multipart ingest → categorize → search → auto-log asserts → authz negatives), 17 steps |
+| `build-images.sh` | dev-host workaround, not product code: builds all 9 compose images with the host's MITM-proxy CA injected at build time only (`GLEIPNIR_CA_BUNDLE=<bundle> bash orchestration/build-images.sh`); the tracked Dockerfiles are untouched. Afterwards check that the dependencies really resolve inside each Node image — npm can exit 0 with nothing installed when TLS fails |
 | `rounds.py` (library) | the ONLY renderer of Caliper configs from `sweeps.yaml`: `render_round(...)` and `render_parallel_network(C)`, which experiment.py writes per run into the run dir (no generated config is committed) |
 | `benchapp.pyw` | the desktop app (M27): input boxes for every `sweeps.yaml` value, Preview/Run/Resume/Cancel of each experiment through WSL, live results, history, CSV export, suggested baselines, automatic backup/restore — see below |
 | `experiment.py --exp e0\|ramp\|e1\|e2\|e3a\|e3b\|ops\|cell` | the campaign driver — plans cells × reps, runs the lifecycle below per run, loud failures; `cell` runs ONE cell at the factor levels you pass |

@@ -117,7 +117,7 @@ gleipnir/
 │   ├── up.sh  down.sh  reset-network.sh  backup-volumes.sh  provision-channel.sh
 │   ├── rounds.py  experiment.py  checkpoint.py  collect.py  report.py
 │   └── README.md
-└── docs/                             # this document, contracts, as-built, methodology/experiments.md, audit/
+└── docs/                             # STATUS.md (living handoff), this document, CONTRACTS, AS-BUILT, methodology/experiments.md, supervisor-brief-2026-09-22.md, reviews/, research/, design/
 ```
 
 **Methodology hook:** `/network` is version-controlled and every benchmark run records the **commit SHA** of `configtx.yaml`, `core.yaml`, `orderer.yaml` (and the compose files) in its results manifest, so results are reproducible against exact config.

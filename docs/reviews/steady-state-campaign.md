@@ -1,5 +1,11 @@
 # Steady-state campaign — roll-up (all four variants)
 
+> **Pre-M26 record.** This campaign ran on the July 2026 grids (N ∈ {10,50,100,250},
+> K ∈ {5,10,25,50}, channels ∈ {1,2,5}, `RemoveEvidence`). The supervisor brief of 2026-09-22
+> replaced them with E1/E2/E3 (`docs/methodology/experiments.md`, `benchmark/sweeps.yaml`), so
+> nothing here is a current level or a reportable number. Kept as the record of the runs, the
+> bugs they surfaced, and the first RQ1/RQ2 evidence.
+
 Date: 2026-07-21/22 · Regime: steady (≥1000 events/channel, 3 repetitions) · Host: single-host
 Ubuntu-22.04 WSL. `benchmark/results/` is gitignored, so the per-variant notes in this
 directory are the committed record of the numbers; the raw manifests/logs live locally.

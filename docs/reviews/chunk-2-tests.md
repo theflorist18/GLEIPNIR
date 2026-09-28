@@ -29,7 +29,7 @@ TLS canary for chunk 7 was explicitly exercised and passes.
 | Frontend `frontend/` | `npm run build` passes | `tsc --noEmit && vite build` → **passes**, 833 modules, `dist/assets/index-*.js` 542.89 kB (chunk-size *warning* only — known, HANDOFF §9.7) | ☑ |
 
 Post-run `git status --porcelain`: only the known untracked files (`HANDOFF.md`,
-`Pre-Thesis Paper.*`, `docs/audit/`) — **no build/gen step modified any tracked file**,
+`Pre-Thesis Paper.*`, `docs/reviews/`) — **no build/gen step modified any tracked file**,
 i.e. the committed `steady-standard.yaml`/`steady-anchoring.yaml` are byte-identical to
 what `gen:rounds` regenerates from `sweeps.yaml` (no drift).
 

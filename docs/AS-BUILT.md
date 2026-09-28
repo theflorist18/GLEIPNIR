@@ -16,7 +16,7 @@ landed in code and CONTRACTS.md but not yet in this document's route table
 and frontend catalogue, and to add §9 covering the `owasp-top10-review`
 branch's web-app-tier security hardening (N1–N6). **Updated 2026-09-22 for
 M26**, the experimental redesign mandated by the supervisor brief
-(`GLEIPNIR_Supervisor_Guidance_Consolidated_2026-09-22.md`; decision record
+(`docs/supervisor-brief-2026-09-22.md`; decision record
 CONTRACTS §12-10..17): `RemoveEvidence` → `DisposeEvidence`; one batch-size
 grid (`BATCH_SIZE`/`BATCH_FLUSH_MS`); receipts carry the event copy and the
 receipt store indexes them per evidence, so the anchored variants read their
@@ -39,9 +39,11 @@ normative; the paper-facing procedure lives in `docs/methodology/experiments.md`
 | `docs/ARCHITECTURE.md` | The binding **build plan** (written before implementation; milestones, module specs) |
 | `docs/CONTRACTS.md` | The binding **interface contracts** (§1–§12; cited below rather than restated) |
 | **`docs/AS-BUILT.md`** (this file) | The system **as implemented**: modules, dependencies, ports, data flows |
-| `docs/audit/REPORT.md` + `docs/audit/*` | The **verification record**: static audit (F1–F71), live E2E (F72–F73), variant smokes (F74–F76) |
-| `docs/audit/security-review.md` | The **S1–S20 security pass** — first systematic security review, all fixable items resolved |
-| `docs/audit/owasp-top10-review.md` | The **OWASP Top 10 (2021) pass** over the web-app tier — six new fixes (N1–N6), summarized in §9 |
+| `docs/STATUS.md` | **Where things stand**: live environment, how to run, next steps, open decisions — one living file, updated in place (replaced the dated handoffs on 2026-09-28) |
+| `docs/supervisor-brief-2026-09-22.md` | The supervisor's consolidated guidance that mandated M26 (governing input; moved from the repo root on 2026-09-28) |
+| `docs/reviews/REPORT.md` + `docs/reviews/*` | The **verification record** (`docs/audit/` until 2026-09-28): static code audit (F1–F71), live E2E (F72–F73), variant smokes (F74–F76), the library reviews, and the pre-M26 steady-state campaign notes |
+| `docs/reviews/security-review.md` | The **S1–S20 security pass** — first systematic security review, all fixable items resolved |
+| `docs/reviews/owasp-top10-review.md` | The **OWASP Top 10 (2021) pass** over the web-app tier — six new fixes (N1–N6), summarized in §9 |
 | `docs/methodology/experiments.md` | The **paper-facing methodology** (M26): 2×2 frame, variable table, E0–E3 + ops procedures, level-selection rules, run budget, flowcharts, threats to validity, defaults to confirm with D |
 
 GLEIPNIR benchmarks four blockchain chain-of-custody (B-CoC) architectural
@@ -362,7 +364,7 @@ sequenceDiagram
 | `GET /api/v1/evidence/:id/download` | stream from evidence-store; authz-gated with `{content:true}` — **admin bypass does not apply** (M18/§12-8: admins lose blob-content access off their own cases); auto-`AccessLog(download)` |
 | `GET /api/v1/evidence/:id/export` | `{record, auditTrail}` bundle; auto-`AccessLog(export)` |
 | `GET /api/v1/evidence/:id/audit[?proofs=1]` | `GetAuditTrail` (evaluate) — on the anchored variants (M26) the CoC events from the receipt-store index in receipt order, `?proofs=1` attaching each event's `proof {leafHash, siblingPath, batchId, leafIndex, rootRef}` verbatim (the gateway verifies nothing); authz-gated, never auto-logged |
-| `GET /api/v1/evidence/:id/verify?eventId=` | proxy → verification `/verify/:eventId`; not variant-restricted at the gateway itself — on Standard the call 502s because `verification:4004` only ships with the anchoring variants (not SSRF, tracked separately in `docs/audit/owasp-top10-review.md` A10); the SPA never calls it under Standard |
+| `GET /api/v1/evidence/:id/verify?eventId=` | proxy → verification `/verify/:eventId`; not variant-restricted at the gateway itself — on Standard the call 502s because `verification:4004` only ships with the anchoring variants (not SSRF, tracked separately in `docs/reviews/owasp-top10-review.md` A10); the SPA never calls it under Standard |
 | `PATCH /api/v1/evidence/:id/details` | M19 forensic metadata (label/seizedAt/acquisitionLocation/handedOverBy); write-gated (contributor+), never auto-logged |
 | `GET/POST /api/v1/evidence/:id/notes` | M20 examiner notes — append-only, immutable-by-API; read/write case-role gated |
 | `PUT /api/v1/evidence/:id/flag` | M20 strict-enum triage flag (`HIGH_PRIORITY`/`PROCESSED`/`NEEDS_LEAD_REVIEW`); write-gated |
@@ -854,9 +856,9 @@ These are experimental controls; each was audited as an invariant:
 
 ## 9. Security posture (`owasp-top10-review` branch)
 
-A prior systematic pass (`docs/audit/security-review.md`, S1–S20) resolved
+A prior systematic pass (`docs/reviews/security-review.md`, S1–S20) resolved
 every fixable web-app-tier finding. A follow-on OWASP Top 10 (2021) review
-(`docs/audit/owasp-top10-review.md`, 2026-07-24) re-verified the S-fixes live
+(`docs/reviews/owasp-top10-review.md`, 2026-07-24) re-verified the S-fixes live
 against the running **standard** variant and found six residual gaps, all now
 fixed (N1–N6) and unit-tested — none touch the chaincode, the frozen
 contracts, or the service-token/benchmark write path:
@@ -885,13 +887,14 @@ Final verification (Chunk 11): gateway unit suites 45/45, evidence-store 9/9,
 gap a known harness-ordering artifact, not an app defect), and the manual
 23-exhibit test fixture confirmed untouched (0 events added by the review
 itself). Full detail, live-probe transcripts, and the OWASP-category-by-
-category writeup live in `docs/audit/owasp-top10-review.md`.
+category writeup live in `docs/reviews/owasp-top10-review.md`.
 
 ## 10. Repository layout
 
 ```
 Gleipnir/
-├── CLAUDE.md                 # build rulebook (invariants, pins, bans)
+├── CLAUDE.md                 # build rulebook (invariants, pins, bans) — local, gitignored (a935b30)
+├── README.md                 # entry point + docs map
 ├── chaincode/evidence/       # Go ccaas contract + Dockerfile
 ├── gateway/                  # BFF service (Node 20, express, fabric-gateway, auth/users/sessions)
 ├── services/
@@ -908,7 +911,7 @@ Gleipnir/
 │   ├── crypto/               # registerEnroll.sh (Fabric-CA, no cryptogen)
 │   ├── core.yaml             # peer sampleconfig (goleveldb pin)
 │   └── orderer.yaml          # orderer sampleconfig (BootstrapMethod: none)
-├── orchestration/            # up/down/reset-network/backup-volumes/provision, rounds.py/experiment.py/checkpoint/collect/report, benchapp.pyw (desktop app)
+├── orchestration/            # up/down/reset-network/backup-volumes/provision, build-images.sh (proxy-CA dev-host build), rounds.py/experiment.py/checkpoint/collect/report, benchapp.pyw (desktop app)
 ├── benchmark/                # Caliper 0.6.0 workspace (sweeps.yaml = truth)
 │   ├── networks/             # connector configs (coc-main, rest-gateway, connection profile; parallel-c{C} rendered per run)
 │   ├── connectors/rest/      # custom Caliper REST connector
@@ -917,7 +920,7 @@ Gleipnir/
 │   ├── workload/             # trace replay + per-op + read + verify modules, lib/txlog.js
 │   ├── traces/               # generated <hash>.json traces (gitignored)
 │   └── results/              # <exp>/<variant>/<levels>/r<rep>/ + runlog.jsonl (gitignored)
-└── docs/                     # ARCHITECTURE (plan), CONTRACTS, methodology/experiments.md, audit/, this file
+└── docs/                     # STATUS (living handoff), ARCHITECTURE (plan), CONTRACTS, this file, methodology/experiments.md, supervisor-brief-2026-09-22.md, reviews/, research/, design/
 ```
 
 ## 11. Provenance & citation
@@ -934,8 +937,8 @@ Gleipnir/
   transaction sequence that produced it.
 - **Stack:** all images and packages are version-pinned (§2); `:latest` is
   never used (it resolves to Fabric 3.x).
-- **Verification trail:** `docs/audit/REPORT.md` consolidates the six-chunk
+- **Verification trail:** `docs/reviews/REPORT.md` consolidates the six-chunk
   static audit, the chunk-7 live bring-up, and the step-2 variant smokes,
-  including every finding (F1–F76) and its resolution. `docs/audit/
-  security-review.md` (S1–S20) and `docs/audit/owasp-top10-review.md`
+  including every finding (F1–F76) and its resolution. `docs/reviews/
+  security-review.md` (S1–S20) and `docs/reviews/owasp-top10-review.md`
   (N1–N6, §9 above) cover the security-specific passes.

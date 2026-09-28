@@ -94,7 +94,7 @@ Bash + docker-desktop. Established once, reusable for all remaining runs:
    Published container ports are reachable on `localhost` inside the distro
    (verified) — this is what `CA_HOST=localhost` enrollment, `wait_healthz`,
    and the smoke curl all rely on.
-3. **Image pre-build with build-time CA injection** (`chunk-7-build-images.sh`
+3. **Image pre-build with build-time CA injection** (`orchestration/build-images.sh`
    beside this doc). The MITM proxy breaks in-build TLS (`npm ci`,
    `go mod download` → `UNABLE_TO_VERIFY_LEAF_SIGNATURE`), and the tracked
    Dockerfiles are citation-pinned. Wrapper Dockerfiles are **generated from

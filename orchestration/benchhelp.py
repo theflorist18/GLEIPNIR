@@ -1,7 +1,7 @@
 """Hover-help texts for benchapp.pyw (the "?" icons, tab headers, buttons and table columns).
 
 Text only — no logic. Keep it in step with benchmark/sweeps.yaml, docs/methodology/experiments.md §4
-and the supervisor guidance (GLEIPNIR_Supervisor_Guidance_Consolidated_2026-09-22.md).
+and the supervisor guidance (docs/supervisor-brief-2026-09-22.md).
 Terminology: send rate = configured input; throughput = measured output; TPS only as a unit;
 "baseline", never "optimal".
 """

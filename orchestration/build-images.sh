@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
-# Chunk-7 environment workaround (docs/audit/chunk-7-live-e2e.md §Environment):
+# Dev-host workaround (first used in docs/reviews/chunk-7-live-e2e.md §Environment):
 # pre-build the compose images with the host MITM-proxy CA injected at BUILD
 # time only. The tracked Dockerfiles are citation-pinned and must not change,
 # so wrappers are GENERATED from them (awk-inserted CA lines only) and the CA
 # is supplied via --build-context — it never enters the repo. Tags match the
 # compose-v2 defaults (<project>-<service>) so `compose up` skips building.
 #
-# Re-run only if the engine's image store is reset (down.sh --wipe keeps
-# images). Not product code — dev-host workaround; on a proxy-free host the
-# tracked Dockerfiles build as-is and this script is unnecessary.
+# Re-run after code changes to any image, or if the engine's image store is
+# reset (down.sh --wipe keeps images). Not product code; on a proxy-free host
+# the tracked Dockerfiles build as-is and this script is unnecessary.
+# Afterwards verify the dependencies resolve inside each Node image: npm can
+# exit 0 with an empty node_modules when TLS through the proxy fails.
 #
 #   GLEIPNIR_REPO=/path/to/repo GLEIPNIR_CA_BUNDLE=/path/to/ca.crt \
-#     bash docs/audit/chunk-7-build-images.sh
+#     bash orchestration/build-images.sh
 set -euo pipefail
 REPO="${GLEIPNIR_REPO:-/c/theflorist18/Gleipnir}"
 CA_BUNDLE="${GLEIPNIR_CA_BUNDLE:-/c/Users/LENOVO/gleipnir-ca-bundle.crt}"

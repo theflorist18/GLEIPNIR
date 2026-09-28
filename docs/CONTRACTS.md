@@ -767,7 +767,7 @@ it is one GoLevelDB directory shared by all of a peer's channels).
    collaboration routes write to the chain or auto-append `AccessLog`.
 
 Entries 10–17 below are **M26 — authorized by the supervisor brief 2026-09-22**
-(`GLEIPNIR_Supervisor_Guidance_Consolidated_2026-09-22.md` §4–§7, decided in the build
+(`docs/supervisor-brief-2026-09-22.md` §4–§7, decided in the build
 brief §1). Where an entry rests on one of the spec's OPEN questions it is a documented
 default marked **confirm with D**; the code implements it, labels it, and does not silently
 pick something else.

@@ -242,7 +242,7 @@ It also sends `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff` and `Re
 
 #### 1.5.5 Accessibility baseline
 
-Target **WCAG 2.2 AA** for the web app and the same contrast rules for the desktop app. These rules come from `docs/audit/ux-review.md` (U1–U4) plus the standard baseline:
+Target **WCAG 2.2 AA** for the web app and the same contrast rules for the desktop app. These rules come from `docs/reviews/ux-review.md` (U1–U4) plus the standard baseline:
 
 | Ref | Requirement | Source / status in code |
 |---|---|---|
@@ -3683,7 +3683,7 @@ Colour tokens follow the foundations section. This section also relies on these 
 ### 8.1 Cross-cutting UX principles
 
 1. **Reading an exhibit writes to the ledger.** In this app, opening, previewing, downloading or exporting an exhibit, and generating a report, each append an on-chain `ACCESS` event under the signed-in username. Wherever that happens the UI must say so *before* the click, in words and with an icon (`web-icon-auto-logged`). The wording is that the action is recorded, not that it is audited.
-2. **The UI must never add audit events of its own.** Defect F79 (`docs/audit/audit-log-live-verification.md`) was caused by a refresh after a download that re-read `GET /evidence/:id` and so logged a `view` nobody performed. Design rule: after any action that logs itself, refresh the trail only (`GET /evidence/:id/audit`, which is never logged). The design must not add any of the following on links to `/evidence/:id`, `/cases/:id/report`, or buttons that hit `/download`, `/export` or `/coc-report`:
+2. **The UI must never add audit events of its own.** Defect F79 (`docs/reviews/audit-log-live-verification.md`) was caused by a refresh after a download that re-read `GET /evidence/:id` and so logged a `view` nobody performed. Design rule: after any action that logs itself, refresh the trail only (`GET /evidence/:id/audit`, which is never logged). The design must not add any of the following on links to `/evidence/:id`, `/cases/:id/report`, or buttons that hit `/download`, `/export` or `/coc-report`:
    - hover prefetch or link preloading
    - "peek" popovers
    - auto-refresh timers
@@ -3908,7 +3908,7 @@ The reuse option **pollutes the authors' test trails** and must be a T2 checkbox
 | Desktop variant checkboxes (E0, E3) | Show raw ids `standard`, `parallel-anchored` | Labels must be exactly Standard, Anchoring, Parallel, Parallel-Anchored |
 | Desktop dialogs | "Start"/"Restore" packed rightmost, no default | Default = Cancel; Escape = Cancel; Enter only activates the focused button |
 
-#### 8.7.4 ARIA for the UI kit (per `docs/audit/ux-review.md` U2)
+#### 8.7.4 ARIA for the UI kit (per `docs/reviews/ux-review.md` U2)
 - **Tabs:** `role="tablist"` / `tab` / `aria-selected`, roving `tabIndex` (only the active tab is a tab stop), Arrow/Home/End with activation following focus. Must also have `aria-controls` → `role="tabpanel"` with `aria-labelledby` **(proposal: panels are not marked today)**. The tab label "Chain of custody (N)" keeps the count in its accessible name.
 - **Stepper:** `<ol>`; `aria-current="step"` on the active step; completed steps add visually-hidden text "completed" (the ✓ glyph alone is not enough). The step change moves focus to the new step's heading **(proposal)**.
 - **Modal:** `role="dialog"`, `aria-modal="true"`, `aria-labelledby` → title, focus moves to the panel on open and back to the opener on close. **No focus trap, by design** (ARCHITECTURE §5). Keep that decision; the design must not assume a trap. Close button `aria-label="Close"`.

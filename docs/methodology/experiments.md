@@ -1,7 +1,7 @@
 # GLEIPNIR — Experimental Methodology (E0–E3)
 
 Paper-facing methodology layer for the M26 experimental redesign. Derived from the
-supervisor brief of 2026-09-22 (`GLEIPNIR_Supervisor_Guidance_Consolidated_2026-09-22.md`
+supervisor brief of 2026-09-22 (`docs/supervisor-brief-2026-09-22.md`
 §5) and the binding build brief. Every constant named here lives in
 `benchmark/sweeps.yaml` (single source of truth); every rule here is what
 `orchestration/experiment.py`, `collect.py` and `report.py` implement. Values marked

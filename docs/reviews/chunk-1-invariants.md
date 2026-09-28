@@ -6,8 +6,10 @@ session-limit reset mid-run; every finding was instead **re-verified inline by t
 (each cited file:line re-read, both sides of every mismatch quoted). Verification status below
 reflects that inline pass: **17/17 CONFIRMED**.
 
-**Paper text extracted to** `docs/audit/paper-extract.txt` (from `Pre-Thesis Paper.docx`;
-paper line numbers below refer to that file). The paper (Jun 12) predates the code, so for
+**Paper text was extracted to** `paper-extract.txt` (from `Pre-Thesis Paper.docx`; paper line
+numbers below refer to that file). The extract was removed from the tree on 2026-09-28 because
+the thesis drafts are kept out of the repo by policy (`.gitignore`); it remains in git history
+(`git show 7499395:docs/audit/paper-extract.txt`). The paper (Jun 12) predates the code, so for
 paper-vs-code drift the "proposed fix" states **which side should move**.
 
 ---
@@ -108,7 +110,7 @@ paper-vs-code drift the "proposed fix" states **which side should move**.
 - **F3 · `network/README.md:26` — "No system channel."** Borderline: negative rule-statement
   in README prose (not in CLAUDE.md's enforced surface list, but not in HANDOFF's allowed
   list either). Fix: reword or add to the known-allowed list.
-- **F4 · `.gitignore` — untracked `HANDOFF.md`, `Pre-Thesis Paper.*`, `docs/audit/` are not
+- **F4 · `.gitignore` — untracked `HANDOFF.md`, `Pre-Thesis Paper.*`, `docs/reviews/` are not
   ignored**, risking accidental commit of binary thesis drafts into a never-rewritten history.
   Fix: decide — ignore them or deliberately commit them (chunk 6 offers this).
 - **F14 · paper line 124 — "endorsement policy is identical across all channels and variants"**

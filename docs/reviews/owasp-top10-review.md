@@ -17,7 +17,7 @@ Legend: **[FIXED]** already remediated under an S-number; **[NEW]** a gap this O
 found and fixed (N1–N5); **[CAVEAT]** intentional, documented-as-designed (D1–D4, C1) —
 **not** a defect.
 
-Prior review: `docs/audit/security-review.md` (S1–S20, all fixable items resolved).
+Prior review: `docs/reviews/security-review.md` (S1–S20, all fixable items resolved).
 
 ---
 
@@ -156,7 +156,7 @@ business-logic flows.
   event sub-keys `(evidenceId, monotonicCounter)`, not client retry loops; case↔evidence
   linkage is off-chain only; users are deactivated-never-deleted so audit actor
   attribution always resolves; notes are append-only.
-- **Prior systematic review.** The S1–S20 pass (`docs/audit/security-review.md`) is itself
+- **Prior systematic review.** The S1–S20 pass (`docs/reviews/security-review.md`) is itself
   the design-level control audit; all `fix`-class items are resolved, S18 is a documented
   design trade, C1 is contract-frozen.
 
