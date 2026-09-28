@@ -10,8 +10,9 @@ full pre-flight check done. **The experiment campaign starts 2026-09-29** — fo
 
 ## 1. Where the repo stands
 
-- `main` is **one commit ahead of `origin/main`**: `bf8215c` (docs reorg) is not pushed. Push it
-  before the first run — every `run.json` stamps HEAD as provenance and the thesis cites GitHub SHAs.
+- **Push `main` before the first run** (`git status -sb` must show no `[ahead]`): every `run.json`
+  stamps HEAD as provenance and the thesis cites GitHub SHAs. `bf8215c` (docs reorg) reached
+  `origin/main` on 2026-09-28; this handoff commit is the only one that may still be local.
 - Landed, in order: M27 desktop benchmark app + web dashboard removal (`63d534b`), web redesign
   (`ba48923`), the over-engineering refactor (`6073abc`, CONTRACTS §12-20), docs re-organisation
   (`bf8215c`: `docs/audit/` → `docs/reviews/`, supervisor brief → `docs/supervisor-brief-2026-09-22.md`,
