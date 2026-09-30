@@ -283,7 +283,11 @@ sequenceDiagram
 by `benchmark/audit/reconstruct.js` per case: fetch every evidence trail of
 the case through the gateway, and on the anchored variants recompute every
 event's leaf + branch (`?proofs=1`) and read each distinct root once via
-`GET /api/v1/anchor-roots/:scopeId/:batchId` (cached per scope+batch). On
+`GET /api/v1/anchor-roots/:scopeId/:batchId` (cached per scope+batch within
+the case: the cache is reset for every case, so each case pays its own root
+reads). One untimed pass over case 1's first evidence item (trail + root
+reads, results discarded) precedes the timed cases, so case 1 is not timed
+cold (CONTRACTS §12-23). On
 Standard/Parallel the trail is on-chain and there is no Merkle step
 (`method: on-chain-trail` vs `merkle-branch`). Output → `audit.json` per run.
 
@@ -743,7 +747,7 @@ case_counts: [5, 10, 20, 30, 40, 50]              # E3b — trimmed to ≤ basel
 baseline: { send_rate_tps: 50, batch_size: 50, channels: 20, channels_max: 50 }   # calibrated by E0/E1/E2 — PLACEHOLDERS until then; "baseline", never "optimal"; channels = the set case count (parallel*: one channel per case)
 workload:
   evidence_per_case: 20
-  events_per_case_per_round: 200  # cases*200/workers must be an integer
+  events_per_case_per_round: 224  # cases*224/workers must be an integer for every grid case count
   rounds: 5                       # trace slices per run (E3a: one slice per send rate)
   mix: { transfer_weight: 0.15, access_weight: 0.85, dispose_fraction: 0.5 }
   payload_bytes: 256
@@ -753,7 +757,7 @@ monitor:   { interval_s: 5 }         # Caliper docker monitor
 regimes:
   smoke:  { cases: 10, evidence_per_case: 2, logs_per_case_min: 10, logs_per_case_max: 25, send_rate_tps: 5 }
   steady: { min_events_per_channel: 1000 }   # below → "sub-floor", never "steady"
-ramp: { events_per_case_per_round: 40 }
+ramp: { events_per_case_per_round: 224 }   # = the E3a slice: 40 would let Parallel's 2 s end-of-round block wait read as saturation
 ```
 
 `benchmark/` has **no generator of its own**, and **no generated config is committed**:
@@ -765,12 +769,24 @@ slash Caliper matches verbatim).
 
 **Transaction trace** (`trace/generate.js`, `npm run gen:trace`): a pure
 function of `(seed, cases, channels, evidencePerCase, eventsPerCasePerRound,
-rounds, workers, mix, payloadBytes)` with a mulberry32 PRNG — same params →
+rounds, workers, mix, payloadBytes, headGap)` with a mulberry32 PRNG — same params →
 byte-identical `traces/<hash>.json` (gitignored; hash recorded in
 `run.json`). Evidence `e` is owned by worker `e mod workers`, its ops sit in
 that worker's sequence in lifecycle order CREATE → (TRANSFER|ACCESS)* →
-[DISPOSE], each worker holds exactly `rounds × S` items (`S = cases ×
-eventsPerCasePerRound / workers`), and round `k` replays `[k·S, (k+1)·S)`.
+[DISPOSE], interleaved with the worker's other lifecycles in proportion to
+their remaining ops (so every lifecycle ends near the end of the sequence and
+all DISPOSEs fall in the last round — E3a and the ramp: the top send-rate
+level; trace-based DISPOSE latency comes only from that round, the
+per-operation breakdown from `ops`); within a round a TRANSFER/DISPOSE sits
+≥ `headGap` items after the same evidence's previous CREATE/TRANSFER — 110 in
+campaign traces, 7 (S/8; 5.6 s at 5 tx/s) in the E0 smoke trace's 60-item
+rounds; closer, for the campaign shapes (≥ 5 cases × 224 events/case/round),
+only in a worker's last ≤ `headGap` items (at most 72 measured), while cells
+with ≤ 4 cases fall back earlier — so below saturation it is normally not
+endorsed before its predecessor commits (CONTRACTS §12-22). Each worker holds
+exactly `rounds × S` items (`S = cases × eventsPerCasePerRound / workers`),
+and round `k` replays
+`[k·S, (k+1)·S)`.
 `caseId = case-NNN`, `NNN = ((dataCase−1) mod channels)+1`, is the channel
 routing key. All four variants replay the same file; only `mode` differs.
 
@@ -825,8 +841,10 @@ limit: the 0.6.0 peer-gateway connector sets no error string, so fabric-mode
 **Audit reconstruction** (`audit/reconstruct.js`, `npm run audit`; host-side,
 gateway only): the first `audit_cases` data-cases of the trace, timed per
 case with `hrtime` — on-chain trail on Standard/Parallel, `?proofs=1` + leaf
-recompute + sibling-path fold + one cached root read per `(scopeId, batchId)`
-on the anchored variants (`audit/merkle.js` is a byte-identical copy of the
+recompute + sibling-path fold + one root read per `(scopeId, batchId)` per
+case (the cache is reset for every case) on the anchored variants, after one
+untimed pass over case 1's first evidence item (trail + root reads,
+discarded) (`audit/merkle.js` is a byte-identical copy of the
 services' Merkle file, pinned by `test/merkle-identity.test.js`). Output
 `{variant, method, traceHash, cases[], summary{msPerCase{mean,sd,min,max},
 msPerEvent, okRate}}` → `audit.json`.

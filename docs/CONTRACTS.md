@@ -462,7 +462,7 @@ baseline:                 # calibrated constants carried forward ("baseline", ne
   channels_max: 50        # from E2: top of the healthy range → E3b upper bound [PLACEHOLDER until E2]
 workload:                 # controlled, identical across variants, recorded in every run.json
   evidence_per_case: 20
-  events_per_case_per_round: 200  # per-worker share cases*200/workers must be an integer
+  events_per_case_per_round: 224  # cases*224/workers must be an integer for every grid case count (§12-21)
   rounds: 5                       # trace slices per run (E1/E2/E3b); E3a uses one slice per send rate
   mix: { transfer_weight: 0.15, access_weight: 0.85, dispose_fraction: 0.5 }
   payload_bytes: 256              # synthetic Codex-Entry filler hashed into storage.integrity_proof
@@ -472,7 +472,7 @@ monitor:   { interval_s: 5 }         # Caliper docker resource monitor sampling 
 regimes:
   smoke:  { cases: 10, evidence_per_case: 2, logs_per_case_min: 10, logs_per_case_max: 25, send_rate_tps: 5 }
   steady: { min_events_per_channel: 1000 }   # below the floor a run is labelled "sub-floor", never "steady"
-ramp: { events_per_case_per_round: 40 }      # E0 short ramp to locate approximate saturation
+ramp: { events_per_case_per_round: 224 }     # E0 ramp = the E3a slice: 40 would let Parallel's 2 s end-of-round block wait read as saturation (§12-21)
 ```
 
 - Caliper workspace `benchmark/`, CLI pinned `@hyperledger/caliper-cli@0.6.0`; the exact
@@ -480,14 +480,25 @@ ramp: { events_per_case_per_round: 40 }      # E0 short ramp to locate approxima
   `benchmark/README.md`.
 - **Transaction trace** (`benchmark/trace/generate.js`, `npm run gen:trace`): a pure
   function of `(seed, cases, channels, evidencePerCase, eventsPerCasePerRound, rounds,
-  workers, mix, payloadBytes)` (mulberry32 PRNG; same params → byte-identical file). File
+  workers, mix, payloadBytes, headGap)` (mulberry32 PRNG; same params → byte-identical file;
+  `headGap` is not a `sweeps.yaml` key: the generator constant `HEAD_GAP` = 110, or
+  `floor(S/8)` for a round shorter than that — the E0 smoke trace, `S` = 60: 7). File
   `benchmark/traces/<hash>.json` (gitignored; `hash = sha256(canonicalJSON(params))`):
   `{version:1, hash, params, sliceSize, opCounts:{total:{CREATE,TRANSFER,ACCESS,DISPOSE},
   perRound:[…]}, workers:[[item…]…]}`, item = `{op, dataCase, caseId:'case-NNN',
   evidenceId:'ev-cCCC-eEEE', actor, detail}` with `caseId` the channel routing key
   `NNN = ((dataCase−1) mod channels)+1`. Evidence `e` is owned by worker `e mod workers`;
-  lifecycle order CREATE → (TRANSFER|ACCESS)* → [DISPOSE]; each worker holds exactly
-  `rounds × S` items, `S = cases × eventsPerCasePerRound / workers` (integer, asserted);
+  lifecycle order CREATE → (TRANSFER|ACCESS)* → [DISPOSE]; each worker's sequence is a seeded
+  interleave of its lifecycles weighted by remaining ops (lifecycles progress evenly, so every
+  lifecycle ends near the end of the sequence and all DISPOSEs fall in the last round — E3a and
+  the ramp: the top send-rate level; trace-based DISPOSE latency comes only from that round, the
+  per-operation breakdown from `ops`); within a round a head read (TRANSFER/DISPOSE) sits
+  ≥ `headGap` items after the same evidence's previous head write (CREATE/TRANSFER) — 110 in
+  campaign traces, 7 (5.6 s at 5 tx/s) in the E0 smoke trace's 60-item rounds — and when every
+  active lifecycle is cooling down, the one with the oldest head write goes — for the campaign
+  shapes (≥ 5 cases × 224 events/case/round) that happens only in a worker's last ≤ `headGap`
+  items (at most 72 measured); cells with ≤ 4 cases fall back earlier (§12-22);
+  each worker holds exactly `rounds × S` items, `S = cases × eventsPerCasePerRound / workers` (integer, asserted);
   round `k` replays items `[k·S, (k+1)·S)`. DISPOSE count per worker =
   `round(dispose_fraction × owned evidence)`, `dispose_fraction` from `sweeps.yaml`
   `workload.mix`. The generator reads no `sweeps.yaml` and holds no param defaults: every
@@ -621,8 +632,11 @@ ramp: { events_per_case_per_round: 40 }      # E0 short ramp to locate approxima
   okRate}}`. Standard/Parallel: `GET /api/v1/evidence/:id/audit[?caseId=]` per evidence
   (verified = on-chain). Anchored: `…/audit?proofs=1`, recompute `leafHash(canonical(event))`,
   fold the sibling path (`audit/merkle.js`, byte-identical to the services' copy, pinned by
-  `test/merkle-identity.test.js`), read each root once per `(scopeId, batchId)` via
-  `GET /api/v1/anchor-roots/…` (404 = failed events), compare. Non-2xx on `/audit` throws.
+  `test/merkle-identity.test.js`), read each root once per `(scopeId, batchId)` **per case**
+  (the root cache is reset for every case, so each case pays its own root reads) via
+  `GET /api/v1/anchor-roots/…` (404 = failed events), compare. One untimed pass over case 1's
+  first evidence item (trail + root reads, results discarded) precedes the timed cases, so
+  case 1 is not timed cold (§12-23). Non-2xx on `/audit` throws.
 - Throughput is reported **successful-only** (`reported × Succ/(Succ+Fail)`, issue #1418),
   stated in `benchmark/README.md`; "send rate" is the configured input, "throughput" the
   measurement, TPS only a unit. Storage compression is reported as the reduction in on-chain
@@ -868,7 +882,8 @@ pick something else.
     monitor (per container + `fabric`/`offchain`/`all` groups); audit reconstruction time
     (**confirm with D**, spec §6 Q9) from `reconstruct.js` (per case, Merkle verification
     included, first `audit_cases` cases of the trace, evidence fetched sequentially — that IS
-    "time to reconstruct one case"); anchoring delay from the batcher's batch records
+    "time to reconstruct one case"; root cache per case + an untimed warm-up since 2026-09-30,
+    §12-23); anchoring delay from the batcher's batch records
     (leafCount-weighted; forced batches also reported excluded); storage (**confirm with D**,
     spec §6 Q10) from `t0..tN` checkpoints with an OLS bytes/event slope (≥ 3 points) and the
     delta as cross-check, off-chain bytes shown alongside, over a denominator of timed
@@ -917,12 +932,14 @@ pick something else.
     LEAST-loaded channel, not the mean: at plan time on the nominal `rounds × events ×
     ⌊cases / channels⌋`, then — once the trace exists, before the reset — on the trace's
     ACTUAL per-channel write events (`minChannelWriteEvents`). The generator fixes the total
-    per worker, not per case, so channels scatter around the nominal: at the committed
-    `sweeps.yaml` (nominal exactly 1000 per channel) 20 cases / 20 channels gives 938–1060
+    per worker, not per case, so channels scatter around the nominal: at the then-committed
+    `sweeps.yaml` (200 events/case/round, nominal exactly 1000 per channel) 20 cases / 20
+    channels gives 938–1060
     with 8 channels below 1000, 50/50 gives 935–1070 with 24 below. Such runs were labelled
     `steady` and are now `sub-floor` — **OPEN for the authors: raise
     `workload.events_per_case_per_round` or `rounds` so the least-loaded channel clears the
-    floor** (a `sweeps.yaml` decision, not made here). Progress lines + the per-round CSV
+    floor** (a `sweeps.yaml` decision, not made here; RESOLVED 2026-09-29: 224, §12-21).
+    Progress lines + the per-round CSV
     export (`report.export_rounds`, rewritten after every run; a write failure — e.g. the CSV
     open in Excel — only warns, never stops a campaign) are reporting only.
     Checks: `orchestration/test_experiment.py`.
@@ -1034,6 +1051,58 @@ pick something else.
     identical to the pre-refactor ones apart from `collectedAt`). Because the chaincode, workloads and compose
     files changed, **E0 must be re-smoked for all four variants before any steady-state
     sweep**; the earlier E0 results stay valid for the commit they cite.
+
+21. **224 events per case per round, for the campaign and the ramp** (authors, 2026-09-29 and
+    2026-09-30; closes the §12-18 OPEN). `workload.events_per_case_per_round` 200 → 224: at 200
+    the trace's least-loaded channel fell below the steady floor (935–969 write events; every E2
+    run and half the E1/E3b runs `sub-floor`); at 224 (nominal 5 × 224 = 1,120 per channel) it
+    gets 1,046–1,102 over the E2/E3b case grid, and `cases × 224 / workers` is an integer for
+    every grid case count (with 4 workers, a multiple of 4). `ramp.events_per_case_per_round`
+    40 → 224, i.e. the E3a slice (20 cases × 224 = 4,480 tx per send rate; least-loaded channel
+    1,511 over 7 slices): Caliper 0.6.0's throughput is (succ + fail) / (lastFinish −
+    firstCreate), a window that includes the end-of-round wait for the last blocks, and on
+    Parallel every channel's last partial block waits BatchTimeout (2 s) — an 800-tx round would
+    read ≈ 0.89 × the send rate at 50 tx/s (modelled: 16 s of sending plus the ≈ 2 s drain E0
+    showed; no 40-event ramp was run), so the methodology §4.3 rule would have suggested 25 tx/s
+    by construction. At 4,480 tx the drain costs ≈ 2 % at 50 tx/s (methodology §7).
+
+22. **Trace head-op spacing — generator rule (e)** (authors, 2026-09-30). Caliper does not await
+    `submitTransaction`, so two head ops on one evidence can be in flight together: a
+    TRANSFER/DISPOSE endorsed before its CREATE/TRANSFER predecessor commits fails with
+    `MVCC_READ_CONFLICT` or "evidence not found" on Standard/Parallel — a harness artefact, not a
+    property of the design (E0's one failure: a `TransferCustody` endorsed before its CREATE
+    committed). `trace/generate.js` now weights the interleave by remaining ops (no dense
+    single-evidence tail; every lifecycle ends near the end of the sequence, so all DISPOSEs fall
+    in the last round — E3a and the ramp: the top send-rate level — and trace-based DISPOSE
+    latency comes only from that round; the per-operation breakdown comes from `ops`) and, within
+    a round, keeps a head read ≥ `headGap` items after the same evidence's previous head write:
+    campaign traces keep ≥ `HEAD_GAP` = 110 items (2.2 s at 200 tx/s ÷ 4 workers, above a
+    timer-cut block's 2 s); a round shorter than that (the E0 smoke trace, 60 items per worker)
+    keeps ≥ 7 (`floor(S/8)`; 5.6 s at 5 tx/s ÷ 4 workers) and has no forced pair. If every active
+    lifecycle is cooling down, the one with the oldest head write goes — for the campaign shapes
+    (≥ 5 cases × 224 events/case/round) only in a worker's last ≤ `headGap` items (at most 72
+    measured); cells with ≤ 4 cases fall back earlier. `headGap` is in the trace `params`, so
+    every trace hash changed (old cached traces are never reused); the shared PRNG stream shifts
+    too, so per-channel totals moved by a few events (least-loaded 1,046–1,102, was 1,047–1,090
+    over the grid). Because every trace changed, E0 is re-smoked on all four variants before the
+    ramp (precedent §12-20); the 2026-09-26 E0 runs are archived to
+    `benchmark/results/e0-pre-headgap-20260930`. Rejected: a runtime wait in `workload/trace.js` —
+    Caliper's fixed-rate controller counts a tx as submitted only when it reaches the connector,
+    so a waiting module makes the controller burst and overrun the slice ("exhausted", the round
+    aborts), and it stretches the last, densest round. Residual race, modelled on E0's timings (a
+    simulation, not a measurement): below saturation ≤ 0.1 % (Parallel, 20 cases: 0.004 % at
+    50 tx/s over a 5-round run, 0.10 % in the 200 tx/s round; 5–10 cases at 50 tx/s: 0.07–0.08 %;
+    0.48 % and 1.79 % with the previous generator (uniform interleave, no spacing)); past the knee
+    it grows with commit latency (pessimistic queue model: Standard 2–6 % at 150–200 tx/s);
+    counted in the failure rate and classes, never retried or filtered (methodology §7).
+
+23. **Audit reconstruction: root cache per case + one untimed warm-up** (authors, 2026-09-30;
+    restores §12-16's "time to reconstruct one case"). In E0 `msPerCase` measured case order: one
+    root cache for the whole run let case 1 pay every anchor-root read (Anchoring `rootReads`
+    [5,0,0,0,0]), and case 1 was timed cold on every variant (45–161 ms vs 9–17 ms for cases
+    2–5). `reconstruct.js` now resets the `(scopeId, batchId)` root cache for every case and runs
+    one untimed pass over case 1's first evidence item (trail + root reads, results discarded;
+    never auto-logged) before timing. Output shape unchanged.
 
 Anything else that seems to require deviating from ARCHITECTURE.md or CLAUDE.md: STOP
 and ask the authors (per CLAUDE.md ground rule 2).

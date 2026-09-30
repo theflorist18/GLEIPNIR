@@ -86,10 +86,10 @@ def main():
             if r["trace"]:
                 assert r["trace"]["channels"] == want and r["trace"]["cases"] == r["levels"]["cases"], r["runId"]
 
-    # Steady floor per channel: one case per parallel channel, so 3 send rates x 200 = 600 < 1000.
+    # Steady floor per channel: one case per parallel channel, so 3 send rates x 224 = 672 < 1000.
     c = E.cell_levels(cell_args(send_rate=[25, 50, 100], cases=9), SW, ["parallel"])
     (run,) = E.plan(SW, "cell", ["parallel"], 1, c)
-    assert run["regime"] == "sub-floor" and run["writeEventsPerChannel"] == 3 * 200, run
+    assert run["regime"] == "sub-floor" and run["writeEventsPerChannel"] == 3 * SW["workload"]["events_per_case_per_round"], run
     c = E.cell_levels(cell_args(cases=5), SW, ["parallel", "standard"])
     assert [r["regime"] for r in E.plan(SW, "cell", ["parallel", "standard"], 1, c)] == ["steady", "steady"]
 

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <title>GLEIPNIR</title>
+  <style>:root{color:#8C491A}@media (prefers-color-scheme:dark){:root{color:#F6A06B}}</style>
+  <defs>
+    <mask id="cut" maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24">
+      <rect width="24" height="24" fill="#fff"/>
+      <path d="M18.9 17.4C19.6 16.3 19.93 15.2 19.93 14.06C19.93 11 17.9 8.97 16 9" fill="none" stroke="#000" stroke-width="5"/>
+    </mask>
+  </defs>
+  <g fill="none" stroke="currentColor" stroke-width="2.6">
+    <path mask="url(#cut)" d="M4.07 12C4.07 17 8 20.75 12.73 20.75C17 20.75 19.93 17.6 19.93 14.06C19.93 11 17.9 8.97 15.39 8.97C13.5 8.97 12.23 10.3 12.23 12C12.23 13.7 13.5 15.03 15.39 15.03C17.9 15.03 19.93 13 19.93 9.94C19.93 6.4 17 3.25 12.73 3.25C8 3.25 4.07 7 4.07 12Z"/>
+    <path d="M18.9 17.4C19.6 16.3 19.93 15.2 19.93 14.06C19.93 11 17.9 8.97 16 9" stroke-linecap="round"/>
+  </g>
+</svg>

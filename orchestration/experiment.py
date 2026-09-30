@@ -620,7 +620,7 @@ def channel_events(tdoc):
 
     Every trace item is a ledger write (CREATE/TRANSFER/ACCESS/DISPOSE). The generator fixes the
     total per worker, not per case, so channels scatter around the nominal rounds x events x
-    cases/channel (e.g. 935..1070 at a nominal 1000)."""
+    cases/channel (e.g. 1,046..1,179 at a nominal 1,120, 50 cases)."""
     counts = {}
     for seq in tdoc.get("workers") or []:
         for item in seq:

@@ -107,12 +107,13 @@ FIELD_HELP = {
         "must hold every item's create + dispose."),
     "workload.events_per_case_per_round": (
         "Write transactions each case gets in ONE round (create/transfer/access/dispose, in the mix).\n"
-        "Round size = cases x this (20 x 200 = 4,000 tx, split over the workers); it sets HOW MANY, the send\n"
-        "rate sets HOW FAST: round length ~ round size / send rate (4,000 at 50 tx/s = 80 s).\n"
-        "Per run each case gets rounds x this (5 x 200 = 1,000) — the steady floor. The seeded trace scatters\n"
-        "channels around it, so 200 leaves some Parallel channels at 935–999 (sub-floor); 224 clears the\n"
-        "floor with margin (pending decision). cases x this must divide by the workers.\n"
-        "High send rates make rounds short (224 x 20 at 200 tx/s ~ 22 s): check the ramp before raising it."),
+        "Round size = cases x this (20 x 224 = 4,480 tx, split over the workers); it sets HOW MANY, the send\n"
+        "rate sets HOW FAST: round length ~ round size / send rate (4,480 at 50 tx/s ~ 90 s).\n"
+        "Per run each case gets rounds x this (5 x 224 = 1,120), above the steady floor of 1,000. The seeded\n"
+        "trace scatters channels around it: the least-loaded Parallel channel gets 1,046–1,102 over the case\n"
+        "grid (200 left some at 935–999, sub-floor; 224 decided 2026-09-29). cases x this must divide by the\n"
+        "workers for every case count (with 4 workers: a multiple of 4).\n"
+        "High send rates make rounds short (4,480 tx at 200 tx/s ~ 22 s)."),
     "workload.rounds": (
         "Rounds per run when a run uses ONE send rate (E1, E2, E3b, single-rate Custom test). E3a ignores it:\n"
         "there each send rate is its own round.\n"
@@ -121,10 +122,12 @@ FIELD_HELP = {
         "is the slope of a line fitted through those points (needs >= 3). More rounds -> longer runs."),
     "workload.mix.transfer_weight": (
         "Relative share of TransferCustody (the evidence changes custodian) among the follow-up events after\n"
-        "each item's create. 0.15 : 0.85 -> ~15 % transfers, 85 % access logs (E0 trace: 31 of 208).\n"
+        "each item's create. 0.15 : 0.85 -> ~15 % transfers, 85 % access logs (E0 trace: 28 of 208).\n"
         "On Standard/Parallel a transfer READS and UPDATES the evidence record on-chain, so two operations in\n"
-        "flight on one item can collide (the 1-in-240 failures). The anchored variants only enqueue events to\n"
-        "the batcher, so they cannot collide. Our assumption: the guidance fixes the proportions\n"
+        "flight on one item can collide (the first E0's 1-in-240 failures); the trace now keeps such pairs\n"
+        ">= 110 items apart within a round (campaign traces; the E0 smoke trace, 60 items per worker, keeps\n"
+        ">= 7 = S/8, 5.6 s at 5 tx/s). The anchored variants only enqueue events to the batcher, so they\n"
+        "cannot collide. Our assumption: the guidance fixes the proportions\n"
         "('proporsinya tetap') but gives no numbers — state and justify it in Bab 3."),
     "workload.mix.access_weight": (
         "Relative share of AccessLog (someone viewed/handled the evidence — a WRITE custody event) among the\n"
@@ -189,9 +192,11 @@ FIELD_HELP = {
         "workers (24). Not a per-case cap."),
     "regimes.smoke.send_rate_tps": "E0 smoke test: a low send rate (tx/s) — it checks function, not speed.",
     "ramp.events_per_case_per_round": (
-        "E0 ramp: events per case in each send-rate step. Small keeps the pilot short, but at high send rates\n"
-        "the rounds get very short (20 cases x 40 = 800 tx = 4 s at 200 tx/s); ~200 gives a more reliable\n"
-        "saturation estimate. Past saturation a round lasts ~ transactions / actual throughput."),
+        "E0 ramp: events per case in each send-rate step. 224 = the E3a round (20 cases x 224 = 4,480 tx:\n"
+        "~22 s at 200 tx/s, ~7.5 min at 10 tx/s), so the ramp sees what E3a will. Short rounds mislead:\n"
+        "Caliper's throughput window includes the wait for the last blocks (up to 2 s on every Parallel\n"
+        "channel), so 40 (800 tx) would read ~0.89 x send rate at 50 tx/s (modelled) — 'saturated' when it\n"
+        "is not. Past saturation a round lasts ~ transactions / actual throughput."),
     "send_rates_tps": (
         "Send-rate grid (configured input, tx/s): the ramp's steps and E3a's levels (one round each,\n"
         "ascending). Must BRACKET saturation (>= 2 levels below, 1 above). Ramp coarsely first (e.g.\n"

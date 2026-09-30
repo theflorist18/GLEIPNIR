@@ -15,7 +15,12 @@
 //     with `proof`; per event recompute leafHash(canonical(event)), fold the
 //     sibling path (audit/merkle.js — byte-identical to the services' copy),
 //     read the root once per (scopeId, batchId) via
-//     GET /api/v1/anchor-roots/:scopeId/:batchId (cached), compare.
+//     GET /api/v1/anchor-roots/:scopeId/:batchId (cached PER CASE: each case
+//     pays its own root reads, so a case's time does not depend on which
+//     cases ran before it), compare.
+// One untimed pass over case 1's first evidence item (trail + root reads,
+// results discarded) warms the connections and gateway paths first, so case 1
+// is not timed cold.
 // Output: { variant, method, traceHash, cases:[{caseId, dataCase, evidence,
 //   events, ms, verifiedEvents, failedEvents, rootReads}],
 //   summary:{msPerCase:{mean,sd,min,max}, msPerEvent, okRate} }.
@@ -62,7 +67,7 @@ async function reconstruct(opts) {
   const headers = { authorization: `Bearer ${token}` };
   const batched = BATCHED.has(variant);
   const parallel = PARALLEL.has(variant);
-  const rootCache = new Map(); // "scopeId/batchId" -> merkleRoot | null
+  let rootCache; // "scopeId/batchId" -> merkleRoot | null; a new Map for every case
 
   async function getJson(url) {
     const r = await fetch(url, { headers });
@@ -80,35 +85,48 @@ async function reconstruct(opts) {
     return rootCache.get(key);
   }
 
+  function auditUrl(c, id) {
+    const q = [];
+    if (batched) q.push('proofs=1');
+    if (parallel) q.push(`caseId=${enc(c.caseId)}`);
+    return `${gateway}/api/v1/evidence/${enc(id)}/audit${q.length ? `?${q.join('&')}` : ''}`;
+  }
+
+  // One evidence item: fetch its trail and (batched) verify every event against its anchored root.
+  async function auditEvidence(c, id, stat) {
+    const url = auditUrl(c, id);
+    const events = await getJson(url);
+    if (!Array.isArray(events)) throw new Error(`${url}: expected a JSON array of events`);
+    stat.events += events.length;
+    if (!batched) {
+      stat.verifiedEvents += events.length; // on-chain records: the ledger is the proof
+      return;
+    }
+    for (const ev of events) {
+      const { proof, ...event } = ev;
+      let ok = false;
+      if (proof && Array.isArray(proof.siblingPath)) {
+        const ref = proof.rootRef || {};
+        const scopeId = ref.scopeId || (parallel ? c.caseId : 'shared');
+        const batchId = ref.batchId || proof.batchId;
+        const expected = await anchoredRoot(scopeId, batchId, stat);
+        ok = expected !== null && computeRoot(leafHash(event), proof.siblingPath) === expected;
+      }
+      if (ok) stat.verifiedEvents += 1; else stat.failedEvents += 1;
+    }
+  }
+
+  const selected = selectCases(trace, cases);
+  if (selected.length) { // untimed warm-up: case 1's first item end to end (trail + root reads), discarded
+    rootCache = new Map();
+    await auditEvidence(selected[0], selected[0].evidence[0], { events: 0, verifiedEvents: 0, failedEvents: 0, rootReads: 0 });
+  }
   const out = [];
-  for (const c of selectCases(trace, cases)) {
+  for (const c of selected) {
+    rootCache = new Map();
     const stat = { caseId: c.caseId, dataCase: c.dataCase, evidence: c.evidence.length, events: 0, ms: 0, verifiedEvents: 0, failedEvents: 0, rootReads: 0 };
     const t0 = process.hrtime.bigint();
-    for (const id of c.evidence) {
-      const q = [];
-      if (batched) q.push('proofs=1');
-      if (parallel) q.push(`caseId=${enc(c.caseId)}`);
-      const url = `${gateway}/api/v1/evidence/${enc(id)}/audit${q.length ? `?${q.join('&')}` : ''}`;
-      const events = await getJson(url);
-      if (!Array.isArray(events)) throw new Error(`${url}: expected a JSON array of events`);
-      stat.events += events.length;
-      if (!batched) {
-        stat.verifiedEvents += events.length; // on-chain records: the ledger is the proof
-        continue;
-      }
-      for (const ev of events) {
-        const { proof, ...event } = ev;
-        let ok = false;
-        if (proof && Array.isArray(proof.siblingPath)) {
-          const ref = proof.rootRef || {};
-          const scopeId = ref.scopeId || (parallel ? c.caseId : 'shared');
-          const batchId = ref.batchId || proof.batchId;
-          const expected = await anchoredRoot(scopeId, batchId, stat);
-          ok = expected !== null && computeRoot(leafHash(event), proof.siblingPath) === expected;
-        }
-        if (ok) stat.verifiedEvents += 1; else stat.failedEvents += 1;
-      }
-    }
+    for (const id of c.evidence) await auditEvidence(c, id, stat);
     stat.ms = Number(process.hrtime.bigint() - t0) / 1e6;
     out.push(stat);
   }

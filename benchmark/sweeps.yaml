@@ -21,7 +21,7 @@ baseline:
 # ---- controlled workload (identical across variants; recorded in every run.json) ----
 workload:
   evidence_per_case: 20
-  events_per_case_per_round: 200  # per round; per-worker share = cases*200/workers must be an integer
+  events_per_case_per_round: 224  # per round; cases*this/workers must be an integer for EVERY case count in the grids (a multiple of 4 works)
   rounds: 5                       # trace slices per run (E1/E2/E3b); E3a uses one slice per send rate
   mix: { transfer_weight: 0.15, access_weight: 0.85, dispose_fraction: 0.5 }  # CREATE = 1/evidence; DISPOSE ends dispose_fraction of evidence
   payload_bytes: 256              # synthetic Codex-Entry filler hashed into storage.integrity_proof
@@ -34,4 +34,4 @@ regimes:
   smoke:  { cases: 10, evidence_per_case: 2, logs_per_case_min: 10, logs_per_case_max: 25, send_rate_tps: 5 }
   steady: { min_events_per_channel: 1000 }   # cumulative per run; a run below the floor is labelled "sub-floor", never "steady"
 ramp:                              # E0 short ramp to locate approximate saturation
-  events_per_case_per_round: 40
+  events_per_case_per_round: 224    # = the E3a slice: an 800-tx round (40) would let Parallel's 2 s end-of-round block wait read as saturation at 50 tx/s

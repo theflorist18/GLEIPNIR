@@ -82,7 +82,7 @@ test('anchoring: every event verified, one cached root read, proofs=1 without ca
     const auditCall = g.calls.find((x) => x.url.includes('/audit'));
     assert.equal(auditCall.url, '/api/v1/evidence/ev-c001-e001/audit?proofs=1');
     assert.equal(auditCall.auth, 'Bearer test-token');
-    assert.equal(g.calls.filter((x) => x.url.includes('/anchor-roots/')).length, 1);
+    assert.equal(g.calls.filter((x) => x.url.includes('/anchor-roots/')).length, 2); // warm-up + case 1
   } finally {
     g.server.close();
   }
@@ -103,6 +103,24 @@ test('parallel-anchored: a tampered event fails, the others verify; caseId is pa
     assert.equal(r.summary.okRate, 2 / 3);
     const auditCall = g.calls.find((x) => x.url.includes('/audit'));
     assert.equal(auditCall.url, '/api/v1/evidence/ev-c001-e001/audit?proofs=1&caseId=case-001');
+  } finally {
+    g.server.close();
+  }
+});
+
+test('root cache is per case; one untimed warm-up pass (trail + root) precedes the timed cases', async () => {
+  const g = await fakeGateway({
+    audit: () => eventsWithProofs([{ i: 0 }, { i: 1 }, { i: 2 }]), // both cases' events sit in one shared batch
+    root: () => ({ merkleRoot: V2.ROOT }),
+  });
+  try {
+    const r = await reconstruct({ variant: 'anchoring', trace: TRACE, cases: 2, gateway: g.url, token: 't' });
+    assert.deepEqual(r.cases.map((c) => c.rootReads), [1, 1]); // case 2 pays its own root read
+    assert.equal(r.summary.okRate, 1);
+    const audits = g.calls.filter((x) => x.url.includes('/audit'));
+    assert.equal(audits.length, 3); // warm-up + one per case (1 evidence each); the warm-up's stats are discarded
+    assert.equal(audits[0].url, audits[1].url); // the warm-up is case 1's first request
+    assert.equal(g.calls.filter((x) => x.url.includes('/anchor-roots/')).length, 3); // warm-up + one per case
   } finally {
     g.server.close();
   }

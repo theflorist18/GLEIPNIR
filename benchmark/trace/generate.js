@@ -3,20 +3,26 @@
 // Seeded transaction-trace generator — the determinism contract (brief §3).
 //
 // A trace is a PURE function of (seed, cases, channels, evidencePerCase,
-// eventsPerCasePerRound, rounds, workers, mix, payloadBytes): same params →
+// eventsPerCasePerRound, rounds, workers, mix, payloadBytes, headGap): same params →
 // byte-identical file; different seed → different file. The four variants
 // replay the SAME trace (workload/trace.js); only the write path differs.
 //
 // Rules: (a) evidence e (global index) is owned by worker e mod workers and ALL
 // its ops sit in that worker's sequence in lifecycle order
 // CREATE → (TRANSFER|ACCESS)* → [DISPOSE]; (b) each worker's sequence is a
-// seeded interleave of its evidence lifecycles; (c) each sequence has exactly
+// seeded interleave of its evidence lifecycles, weighted by remaining ops so
+// lifecycles progress evenly (no dense single-evidence tail); (c) each sequence has exactly
 // rounds × S items, S = cases × eventsPerCasePerRound / workers (integer);
 // round k replays items [k·S, (k+1)·S); (d) per-evidence further-op counts are
-// drawn so totals hit the length exactly.
+// drawn so totals hit the length exactly; (e) within a round, a head read
+// (TRANSFER/DISPOSE) sits >= headGap items after the same evidence's previous
+// head write (CREATE/TRANSFER): Caliper does not await submissions, so a closer
+// pair can be endorsed before its predecessor commits (MVCC / "not found" on the
+// direct-write variants — a harness artefact, not a property of the design).
+// headGap = HEAD_GAP, or S/8 for a round shorter than that (the E0 smoke trace).
 //
 // CLI: node trace/generate.js --channels 25 [--cases 25] --evidence-per-case 20
-//   --events-per-case-per-round 200 --rounds 5 --workers 4 --seed 20260922
+//   --events-per-case-per-round 224 --rounds 5 --workers 4 --seed 20260922
 //   --payload-bytes 256 --transfer-weight .15 --access-weight .85
 //   --dispose-fraction .5 [--out <path>] [--dry]
 // Every param flag is required (--cases defaults to --channels); a missing one
@@ -43,6 +49,11 @@ function mulberry32(seed) {
 const pad2 = (n) => String(n).padStart(2, '0');
 const pad3 = (n) => String(n).padStart(3, '0');
 const ACTIONS = ['view', 'download', 'export', 'annotate'];
+// Rule (e): 110 items = 2.2 s at 200 tx/s / 4 workers (the top of sweeps.yaml send_rates_tps and
+// workers — raise it if either grows), longer than the slowest commit below saturation (a timer-cut
+// block: BatchTimeout 2 s, configtx.yaml). Recorded in params, so it is part of the trace hash.
+const HEAD_GAP = 110;
+const HEAD_READ = new Set(['TRANSFER', 'DISPOSE']);
 
 function intParam(v, name, min) {
   const n = Number(v);
@@ -73,17 +84,23 @@ function normalize(p) {
       dispose_fraction: numParam(mix.dispose_fraction, 'mix.dispose_fraction'),
     },
     payloadBytes: intParam(p.payloadBytes, 'payloadBytes', 0),
+    headGap: HEAD_GAP,
   };
 }
 
 function generateTrace(input) {
   const P = normalize(input);
-  const hash = crypto.createHash('sha256').update(canonicalJSON(P), 'utf8').digest('hex');
   const perRoundTotal = P.cases * P.eventsPerCasePerRound;
   const S = perRoundTotal / P.workers;
   if (!Number.isInteger(S)) {
     throw new Error(`trace: cases*eventsPerCasePerRound/workers = ${perRoundTotal}/${P.workers} is not an integer`);
   }
+  // A round shorter than the gap (the E0 smoke trace: S = 60) cannot keep it; S/8 stays feasible there
+  // (smoke: 7 items = 5.6 s at 5 tx/s). Campaign rounds (S >= 280) keep HEAD_GAP.
+  if (S < P.headGap) P.headGap = Math.max(1, Math.floor(S / 8));
+  // The hash covers params only: an algorithm change that leaves params identical must add or bump a
+  // param, or experiment.py's ensure_trace keeps reusing the stale cached benchmark/traces/<hash>.json.
+  const hash = crypto.createHash('sha256').update(canonicalJSON(P), 'utf8').digest('hex');
   const L = P.rounds * S;
   const tw = P.mix.transfer_weight + P.mix.access_weight;
   const pTransfer = tw > 0 ? P.mix.transfer_weight / tw : 0;
@@ -132,14 +149,30 @@ function generateTrace(input) {
       return q;
     });
 
-    // Seeded interleave of lifecycles.
+    // Seeded interleave of lifecycles (rules b + e): pick among the lifecycles that are not
+    // cooling down, weighted by remaining ops; if all are cooling down, the one whose last head
+    // write is oldest goes (the least-close pair).
     const pos = new Array(owned.length).fill(0);
+    const lastHead = new Array(owned.length).fill(-Infinity); // seq index of the last CREATE/TRANSFER
     const custodian = owned.map((e) => e.custodian);
     const transfers = new Array(owned.length).fill(0);
     const active = owned.map((_, i) => i);
     const seq = [];
     while (active.length > 0) {
-      const k = Math.floor(rand() * active.length);
+      const n = seq.length;
+      const sliceStart = n - (n % S); // rounds run one after another: a pair only races inside one
+      const cooling = (i) => HEAD_READ.has(queues[i][pos[i]]) && lastHead[i] >= sliceStart
+        && n - lastHead[i] < P.headGap;
+      let total = 0;
+      for (const i of active) if (!cooling(i)) total += queues[i].length - pos[i];
+      let k;
+      if (total > 0) {
+        let u = rand() * total;
+        k = active.findIndex((i) => !cooling(i) && (u -= queues[i].length - pos[i]) < 0);
+      } else {
+        k = 0;
+        for (let a = 1; a < active.length; a += 1) if (lastHead[active[a]] < lastHead[active[k]]) k = a;
+      }
       const i = active[k];
       const e = owned[i];
       const op = queues[i][pos[i]];
@@ -159,6 +192,7 @@ function generateTrace(input) {
         detail = { reason: 'disposition' };
       }
       seq.push({ op, dataCase: e.dataCase, caseId: e.caseId, evidenceId: e.evidenceId, actor, detail });
+      if (op === 'CREATE' || op === 'TRANSFER') lastHead[i] = n;
       if (pos[i] === queues[i].length) {
         active[k] = active[active.length - 1];
         active.pop();
@@ -240,4 +274,4 @@ if (require.main === module) {
   try { main(); } catch (err) { process.stderr.write(`${err.message}\n`); process.exit(1); }
 }
 
-module.exports = { generateTrace, writeTrace };
+module.exports = { generateTrace, writeTrace, HEAD_GAP };

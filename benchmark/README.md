@@ -41,14 +41,16 @@ Q1). Node 18 or 20 (0.6.0 support window).
 ## Transaction trace — the determinism contract
 
 `trace/generate.js` is a pure function of `(seed, cases, channels, evidencePerCase,
-eventsPerCasePerRound, rounds, workers, mix, payloadBytes)`: same params → byte-identical file;
-different seed → different file. All four variants replay the **same** trace; only the write
+eventsPerCasePerRound, rounds, workers, mix, payloadBytes, headGap)`: same params →
+byte-identical file; different seed → different file. All four variants replay the **same** trace; only the write
 path differs (`mode`). Every param flag is required (`--cases` defaults to `--channels`) and a
-missing one throws; `experiment.py` passes them all from `sweeps.yaml`.
+missing one throws; `experiment.py` passes them all from `sweeps.yaml`. `headGap` is not a flag:
+it is the generator constant `HEAD_GAP` = 110, or `floor(S/8)` for a round shorter than that (the
+E0 smoke trace, `S` = 60: 7), recorded in `params` and so part of the hash.
 
 ```bash
 node trace/generate.js --cases 20 --channels 20 --evidence-per-case 20 \
-  --events-per-case-per-round 200 --rounds 5 --workers 4 --seed 20260922 --payload-bytes 256 \
+  --events-per-case-per-round 224 --rounds 5 --workers 4 --seed 20260922 --payload-bytes 256 \
   --transfer-weight 0.15 --access-weight 0.85 --dispose-fraction 0.5
 # -> writes traces/<hash>.json, prints the hash (recorded in run.json). --dry prints opCounts only.
 ```
@@ -57,11 +59,24 @@ File: `{version, hash, params, sliceSize, opCounts:{total, perRound[]}, workers:
 item = `{op: CREATE|TRANSFER|ACCESS|DISPOSE, dataCase, caseId, evidenceId, actor, detail}`.
 Rules: evidence `e` (global index) is owned by worker `e mod workers` and all its ops sit in that
 worker's sequence in lifecycle order CREATE → (TRANSFER|ACCESS)* → [DISPOSE]; each worker's
-sequence is a seeded interleave of its evidence lifecycles with exactly `rounds × S` items,
+sequence is a seeded interleave of its evidence lifecycles, weighted by remaining ops so they
+progress evenly (no dense single-evidence tail), with exactly `rounds × S` items,
 `S = cases × eventsPerCasePerRound / workers` (must be an integer — the generator refuses
-otherwise); round `k` replays items `[k·S, (k+1)·S)`. `caseId` is the channel routing key
-`case-NNN`, `NNN = ((dataCase−1) mod channels)+1`. DISPOSE ends `round(dispose_fraction × owned)`
-of each worker's evidence; TRANSFER/ACCESS are drawn by `transfer_weight : access_weight`.
+otherwise); round `k` replays items `[k·S, (k+1)·S)`. Within a round a head read
+(TRANSFER/DISPOSE) sits ≥ `headGap` items after the same evidence's previous head write
+(CREATE/TRANSFER): Caliper does not await submissions, so a closer pair can be endorsed before its
+predecessor commits (`MVCC_READ_CONFLICT` / "evidence not found" on the direct-write variants —
+a harness artefact, not a property of the design). Campaign traces keep ≥ `HEAD_GAP` = 110 items
+(2.2 s at 200 tx/s over 4 workers, above a timer-cut block's 2 s); a round shorter than that (the
+E0 smoke trace, 60 items per worker) keeps ≥ 7 (S/8; 5.6 s at 5 tx/s) and has no forced pair.
+When every active lifecycle is cooling down, the one with the oldest head write goes; for the
+campaign shapes (≥ 5 cases × 224 events/case/round) that happens only in a worker's last
+≤ `headGap` items (at most 72 measured); cells with ≤ 4 cases fall back earlier (CONTRACTS §12-22).
+`caseId` is the channel routing key `case-NNN`, `NNN = ((dataCase−1) mod channels)+1`. DISPOSE ends `round(dispose_fraction × owned)`
+of each worker's evidence; the weighted interleave ends every lifecycle near the end of the
+sequence, so all DISPOSEs fall in the last round (E3a and the ramp: the top send-rate level) —
+trace-based DISPOSE latency comes only from that round; the per-operation breakdown comes from
+`ops`. TRANSFER/ACCESS are drawn by `transfer_weight : access_weight`.
 CREATE's `detail.payload` is `payloadBytes` deterministic characters (`lib/payloads.filler`)
 whose SHA-256 becomes `storage.integrity_proof` — the synthetic evidence "file" never reaches
 the ledger, only its hash (CLAUDE.md: binaries are always off-chain).
@@ -144,7 +159,11 @@ Standard/Parallel fetch `GET /api/v1/evidence/:id/audit[?caseId=]` for every evi
 (verified = on-chain, no Merkle step); Anchoring/Parallel-Anchored fetch `…/audit?proofs=1`,
 recompute `leafHash(canonical(event))` per event, fold its sibling path (`audit/merkle.js`),
 read the anchored root once per `(scopeId, batchId)` via `GET /api/v1/anchor-roots/:scopeId/:batchId`
-(cached) and compare. Output `{variant, method, traceHash, cases:[{caseId, dataCase, evidence,
+(cached **per case**: each case pays its own root reads, so its time does not depend on which
+cases ran before it) and compare. One untimed pass over case 1's first evidence item (trail +
+root reads, results discarded) warms the connections and gateway paths before the first timed
+case. Output `{variant, method,
+traceHash, cases:[{caseId, dataCase, evidence,
 events, ms, verifiedEvents, failedEvents, rootReads}], summary:{msPerCase:{mean,sd,min,max},
 msPerEvent, okRate}}`. Host-side, via the gateway only — never Fabric directly. Any non-2xx
 gateway response is a thrown error (loud), a root mismatch or missing root is a counted failure.

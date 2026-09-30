@@ -1214,7 +1214,16 @@ class App:
 
 
 def main():
+    try:  # own taskbar identity: Windows then shows the window icon, not pythonw's (design brief §3.7)
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Gleipnir.Bench")
+    except Exception:  # noqa: BLE001 — not Windows
+        pass
     root = tk.Tk()
+    try:  # Tk's quill as the app icon (icons/extract-tk-icon.py, author's choice); `default=` covers every dialog
+        root.iconbitmap(default=os.path.join(ICON_DIR, "gleipnir-bench.ico"))
+    except tk.TclError:
+        pass
     try:
         ttk.Style().theme_use("vista")
     except tk.TclError:
