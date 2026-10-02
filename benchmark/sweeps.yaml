@@ -14,9 +14,9 @@ case_counts: [5, 10, 20, 30, 40, 50]              # E3b — all four variants (p
 # ---- calibrated constants carried forward (filled from results; "baseline", never "optimal") ----
 baseline:
   send_rate_tps: 100      # from E0 pilot (sub-saturation) → used by E1, E2, E3b, ops   [set from ramp 2026-10-01: no saturation up to the top level, half of it]
-  batch_size: 50          # from E1 (rule: docs/methodology/experiments.md §4) → E3, ops  [PLACEHOLDER until E1]
-  channels: 20            # the SET case count (= channels on parallel*, one per case): E2 MEDIAN → E1, E3a, ops, ramp, cell default  [PLACEHOLDER until E2]
-  channels_max: 50        # from E2: top of the healthy range → E3b upper bound          [PLACEHOLDER until E2]
+  batch_size: 50          # from E1 (rule: docs/methodology/experiments.md §4) → E3, ops  [set by hand 2026-10-02: §4.1 selects no level (E1 on-chain B/event steps 47–60 %); the authors chose 50 — total on+off-chain bytes within 0.2 % of the N=25 minimum]
+  channels: 20            # the SET case count (= channels on parallel*, one per case): E2 MEDIAN → E1, E3a, ops, ramp, cell default  [set from e2 2026-10-02]
+  channels_max: 50        # from E2: top of the healthy range → E3b upper bound          [set from e2 2026-10-02]
 
 # ---- controlled workload (identical across variants; recorded in every run.json) ----
 workload:
