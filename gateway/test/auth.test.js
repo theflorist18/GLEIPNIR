@@ -293,7 +293,7 @@ test('users store persists across reopen from the same dir', async () => {
   assert.equal(await b.seedAdmin({ username: 'other', password: 'x' }), null);
 });
 
-test('M18: lead is a valid user role, but admin routes stay admin-only', async (t) => {
+test('lead is a valid user role, but admin routes stay admin-only', async (t) => {
   const { deps } = await fakeDeps();
   const { server, url } = await listen(createApp(deps));
   t.after(() => server.close());
@@ -319,7 +319,7 @@ test('M18: lead is a valid user role, but admin routes stay admin-only', async (
   assert.equal(junk.status, 400);
 });
 
-test('M25: /users/directory — admin and lead sessions see active users only; investigator and service token 403', async (t) => {
+test('/users/directory — admin and lead sessions see active users only; investigator and service token 403', async (t) => {
   const { deps } = await fakeDeps();
   const { server, url } = await listen(createApp(deps));
   t.after(() => server.close());
@@ -334,7 +334,7 @@ test('M25: /users/directory — admin and lead sessions see active users only; i
   const dir = await fetch(`${url}/api/v1/users/directory`, { headers: asUser(lena) });
   assert.equal(dir.status, 200);
   const listed = await dir.json();
-  // ghost is deactivated; root is an ADMIN — above a lead's access, hidden (M25b)
+  // ghost is deactivated; root is an admin — above a lead's access, hidden
   assert.deepEqual(listed.map((u) => u.username).sort(), ['ivy', 'lena']);
   assert.ok(listed.every((u) => u.passwordHash === undefined));
 
@@ -346,10 +346,10 @@ test('M25: /users/directory — admin and lead sessions see active users only; i
   assert.equal((await fetch(`${url}/api/v1/users/directory`, { headers: asUser('secret-token') })).status, 403);
 });
 
-// N1 (OWASP A02/A07): the service-token comparison is constant-time. A correct
+// OWASP A02/A07: the service-token comparison is constant-time. A correct
 // token still authenticates and a near-miss is refused — equal, same-length-
 // differs, and length-mismatch (a raw timingSafeEqual would throw -> 500).
-test('N1: service token still authenticates after the constant-time swap; near-miss -> 401', async (t) => {
+test('service token authenticates under the constant-time comparison; near-miss -> 401', async (t) => {
   const { deps } = await fakeDeps();
   const { server, url } = await listen(createApp(deps));
   t.after(() => server.close());
@@ -358,9 +358,9 @@ test('N1: service token still authenticates after the constant-time swap; near-m
   assert.equal((await fetch(`${url}/api/v1/evidence/ev-1/audit`, { headers: asUser('secret-token-extra') })).status, 401);
 });
 
-// N3 (OWASP A07): a sliding idle timeout ends an inactive session before its
+// OWASP A07: a sliding idle timeout ends an inactive session before its
 // absolute TTL; each authenticated read refreshes the idle window.
-test('N3: idle timeout expires an inactive token; activity slides the window', async () => {
+test('idle timeout expires an inactive token; activity slides the window', async () => {
   const s = makeSessions({ ttlSeconds: 3600, idleTtlSeconds: 0.15 }); // 150 ms idle window
   const tok = s.create('usr-1');
   assert.equal(s.get(tok)?.userId, 'usr-1');            // fresh
@@ -372,9 +372,9 @@ test('N3: idle timeout expires an inactive token; activity slides the window', a
   assert.equal(s.get(tok), null);                        // idle > 150 ms -> expired
 });
 
-// N4 (OWASP A09): security-relevant failures are logged as structured lines,
-// and a token/password is NEVER logged.
-test('N4: auth/authz failures emit structured security events; no secrets leak', async (t) => {
+// OWASP A09: security-relevant failures are logged as structured lines,
+// and a token/password is never logged.
+test('auth/authz failures emit structured security events; no secrets leak', async (t) => {
   const lines = [];
   const { deps } = await fakeDeps();
   deps.securityLog = makeSecurityLog({ sink: { warn: (s) => lines.push(s) } });
@@ -398,7 +398,7 @@ test('N4: auth/authz failures emit structured security events; no secrets leak',
   assert.doesNotMatch(joined, /secret-token/);           // the service token value never logged
 });
 
-test('N4: successful auth emits NO security line (service-token hot path stays quiet)', async (t) => {
+test('successful auth emits NO security line (service-token hot path stays quiet)', async (t) => {
   const lines = [];
   const { deps } = await fakeDeps();
   deps.securityLog = makeSecurityLog({ sink: { warn: (s) => lines.push(s) } });
@@ -410,12 +410,12 @@ test('N4: successful auth emits NO security line (service-token hot path stays q
   assert.equal(lines.length, 0, 'successful auth must not emit security events');
 });
 
-// ---- Chunk 4 security fixes ----
+// ---- authorization and session hardening ----
 
-// S1: /internal/anchor-root is service-principal only. Global authenticate
-// alone admitted any user session; an investigator (or anyone with a session)
-// could commit or squat Merkle roots on coc-main.
-test('S1: /internal/anchor-root requires the service principal', async (t) => {
+// /internal/anchor-root is service-principal only. Global authenticate alone
+// would admit any user session, letting an investigator (or anyone with a
+// session) commit or squat Merkle roots on coc-main.
+test('/internal/anchor-root requires the service principal', async (t) => {
   const { deps, submits } = await fakeDeps({ variant: 'anchoring' });
   const { server, url } = await listen(createApp(deps));
   t.after(() => server.close());
@@ -444,9 +444,9 @@ test('S1: /internal/anchor-root requires the service principal', async (t) => {
   assert.equal((await fetch(`${url}/internal/anchor-root/shared/b1`, { headers: asUser('secret-token') })).status, 200);
 });
 
-// S5: an admin password reset invalidates the target's live sessions, so a
+// An admin password reset invalidates the target's live sessions, so a
 // stolen token cannot outlive the response to a compromise.
-test('S5: password reset invalidates the target user\'s live sessions', async (t) => {
+test('password reset invalidates the target user\'s live sessions', async (t) => {
   const { deps } = await fakeDeps();
   const { server, url } = await listen(createApp(deps));
   t.after(() => server.close());
@@ -466,10 +466,10 @@ test('S5: password reset invalidates the target user\'s live sessions', async (t
   assert.equal((await fetch(`${url}/api/v1/auth/me`, { headers: asUser(ivyToken) })).status, 401);
 });
 
-// S7: with trust proxy set, the login throttle keys on the real client IP
+// With trust proxy set, the login throttle keys on the real client IP
 // (X-Forwarded-For), so locking one client out does not lock a named account
 // out for everyone.
-test('S7: login throttle keys per client IP, not globally per username', async (t) => {
+test('login throttle keys per client IP, not globally per username', async (t) => {
   const { deps } = await fakeDeps({ loginMaxAttempts: 3, loginWindowSeconds: 60 });
   const { server, url } = await listen(createApp(deps));
   t.after(() => server.close());
@@ -496,9 +496,9 @@ test('S7: login throttle keys per client IP, not globally per username', async (
   assert.equal(ok.status, 200);
 });
 
-// S17: the auto-logging read routes are rate-limited per user session (each is
+// The auto-logging read routes are rate-limited per user session (each is
 // an on-chain AccessLog write); the service token is exempt.
-test('S17: auto-log read routes are rate-limited per session, service token exempt', async (t) => {
+test('auto-log read routes are rate-limited per session, service token exempt', async (t) => {
   const { deps } = await fakeDeps({ autoLogMaxPerWindow: 3, autoLogWindowSeconds: 60 });
   const { server, url } = await listen(createApp(deps));
   t.after(() => server.close());

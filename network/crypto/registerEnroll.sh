@@ -60,7 +60,7 @@ normalize_client_key() {
   local msp="$1" key
   # Re-enrollment ADDS a new hash-named key beside the old one(s); the stale
   # priv_sk copy and alphabetical order both mislead. Remove the old copy and
-  # pair the NEWEST real key with the (overwritten) cert (audit F47).
+  # pair the newest real key with the (overwritten) cert.
   rm -f "${msp}/keystore/priv_sk"
   key="$(ls -t "${msp}/keystore/" | head -1)"
   cp "${msp}/keystore/${key}" "${msp}/keystore/priv_sk"
@@ -123,8 +123,7 @@ create_peer_org() {
   # enrollment above already created ${org_root}/msp/cacerts, so the pem must
   # be copied flat: `cp -r` would nest a second cacerts/ inside it and the
   # two `ls` entries then corrupt every NodeOU config.yaml with an embedded
-  # newline — peers fail YAML parsing, orderers panic in loadLocalMSP
-  # (audit F72, first live bring-up).
+  # newline: peers fail YAML parsing, orderers panic in loadLocalMSP.
   mkdir -p "${org_root}/msp/cacerts"
   cp "${peer_dir}/msp/cacerts/"* "${org_root}/msp/cacerts/"
   mkdir -p "${org_root}/msp/tlscacerts"
@@ -178,7 +177,7 @@ create_orderer_org() {
     enroll_node "orderer${i}" "orderer${i}pw" "${host}" "${odir}"
 
     if [ "${i}" = "0" ]; then
-      # Flat copy for the same reason as create_peer_org (audit F72).
+      # Flat copy for the same reason as in create_peer_org.
       mkdir -p "${org_root}/msp/cacerts"
       cp "${odir}/msp/cacerts/"* "${org_root}/msp/cacerts/"
       cp "${odir}/tls/tlscacerts/"* "${org_root}/msp/tlscacerts/tlsca.example.com-cert.pem"

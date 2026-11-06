@@ -2,8 +2,8 @@
 # The peer never compiles this chaincode; it runs here as its own gRPC service
 # and the peer dials it via the ccaas external builder (docs/CONTRACTS.md §3).
 #
-# Build honors the Go 1.25.5 pin exactly (CLAUDE.md), which is WHY ccaas is used:
-# the peer's in-image fabric-ccenv:2.5 toolchain is a different Go version
+# The chaincode is pinned to Go 1.25.5, which is why ccaas is used: the peer's
+# fabric-ccenv:2.5 image builds with a different Go version
 # (docs/research/fabric-2.5.md §2).
 FROM golang:1.25.5 AS build
 WORKDIR /src

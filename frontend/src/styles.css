@@ -1,9 +1,7 @@
-/* GLEIPNIR evidence library — Claude Design handoff (Web Screens 01–05).
-   All colours come from tokens.css; the legacy class names below are kept so
-   every page picks up the new look. */
+/* GLEIPNIR evidence library styles. All colours come from tokens.css. */
 @import './tokens.css';
 
-/* Local tokens the handoff draws without naming. */
+/* Local tokens not defined in tokens.css. */
 :root {
   color-scheme: light;
   --row-line: var(--color-neutral-200);
@@ -217,13 +215,13 @@ input[type=checkbox], input[type=radio] { accent-color: var(--color-brand-primar
 .chip.active, .chip.active:hover:not(:disabled) { background: var(--color-brand-primary-tint); color: var(--color-brand-primary); border-color: var(--color-brand-primary); }
 .chip-x { padding: 0 0 0 6px; font-size: .9em; border-radius: var(--radius-pill); }
 
-/* inline alerts (web-alert-inline): info / error tones */
+/* inline alerts: info / error tones */
 .alert { display: flex; gap: 8px; align-items: flex-start; padding: 10px 14px; border-radius: var(--radius-md); font-size: 12.5px; line-height: 1.4; }
 .alert > .icon { margin-top: 1px; }
 .alert-info { background: var(--color-info-tint); color: var(--color-info); }
 .alert-error { background: var(--color-error-tint); color: var(--color-error); }
 
-/* ---- login (screen 01) ---- */
+/* ---- login ---- */
 .login-wrap { --ground: var(--color-surface-page); min-height: 100vh; position: relative; overflow: hidden; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; padding: 24px 16px; }
 .login-backdrop { position: absolute; opacity: .06; pointer-events: none; }
 .login-backdrop.a { left: -220px; top: -260px; color: var(--color-brand-accent); }
@@ -240,7 +238,7 @@ input[type=checkbox], input[type=radio] { accent-color: var(--color-brand-primar
 .login-live:empty { margin-top: -18px; } /* keep the live region mounted without its flex gap */
 .login-foot { position: relative; font-size: 12px; color: var(--color-text-muted); margin: 0; text-align: center; }
 
-/* ---- tabs, stepper, modal, timeline (M21 UI kit) ---- */
+/* ---- tabs, stepper, modal, timeline (components/ui) ---- */
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--color-border-subtle); margin-bottom: 14px; flex-wrap: wrap; }
 .tab { background: transparent; color: var(--color-text-secondary); border: 0; border-bottom: 2px solid transparent; border-radius: 0; height: auto; padding: 12px 14px 10px; font: 400 13px var(--font-body); margin-bottom: -1px; }
 .tab:hover:not(:disabled) { background: transparent; color: var(--color-text-primary); }
@@ -289,7 +287,7 @@ input[type=checkbox], input[type=radio] { accent-color: var(--color-brand-primar
 .count-badge { font-size: 11px; padding: 0 7px; border-radius: var(--radius-pill); background: var(--color-surface-sunken); color: var(--color-text-secondary); font-variant-numeric: tabular-nums; }
 .tl-detail { font-size: 12.5px; color: var(--color-text-muted); }
 
-/* ---- evidence detail (screen 03) ---- */
+/* ---- evidence detail ---- */
 .breadcrumb { font-size: 12px; color: var(--color-text-muted); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .ev-head { display: flex; gap: 14px; align-items: flex-start; }
 .file-tile { width: 48px; height: 48px; flex: none; border-radius: var(--radius-md); background: var(--color-surface-panel); display: grid; place-items: center; color: var(--color-text-secondary); }
@@ -346,7 +344,7 @@ input[type=checkbox], input[type=radio] { accent-color: var(--color-brand-primar
 .notes { list-style: none; margin: 0 0 12px; padding: 0; }
 .note { border-radius: var(--radius-md); background: var(--color-surface-sunken); padding: 10px 14px; margin-bottom: 8px; }
 
-/* ---- ingest (screen 04) ---- */
+/* ---- ingest ---- */
 .wizard { width: 560px; max-width: 100%; margin: 4px auto 0; border-radius: var(--radius-card); padding: 28px; display: flex; flex-direction: column; gap: 22px; }
 .wizard .form label:last-child { margin-bottom: 0; }
 .wizard-actions { display: flex; justify-content: space-between; gap: 8px; }

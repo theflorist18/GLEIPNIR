@@ -16,7 +16,7 @@ const OP_COLOR: Record<Op, string> = {
 export interface TrailRow {
   key: string;
   op: Op;
-  legacy: boolean; // 'REMOVE' — the pre-M26 tag for DISPOSE on older ledgers
+  legacy: boolean; // 'REMOVE' — the older tag for DISPOSE, still on existing ledgers
   actor: string;
   detail: string;
   firstTs: string;
@@ -51,10 +51,9 @@ export function trailRows(events: CoCEvent[], collapseViews: boolean): TrailRow[
   return rows;
 }
 
-// The chain-of-custody trail as a vertical timeline (M21; Claude Design
-// screen 03): op-coloured dots, the op-specific detail spelled out, UTC
-// timestamps right-aligned with the exact ISO value in the tooltip.
-// Presentational only; the data path (GetAuditTrail) is unchanged.
+// The chain-of-custody trail as a vertical timeline: op-coloured dots, the
+// op-specific detail spelled out, UTC timestamps right-aligned with the exact
+// ISO value in the tooltip. Presentational only; data comes from GetAuditTrail.
 export function AuditTrailTimeline({ events, collapseViews = false }: { events: CoCEvent[]; collapseViews?: boolean }) {
   if (events.length === 0) return <p className="muted">No audit events.</p>;
   return (
@@ -71,7 +70,7 @@ export function AuditTrailTimeline({ events, collapseViews = false }: { events: 
                 <span className={`op op-${r.op.toLowerCase()}`}>{r.op}</span>
                 <span className="actor">{r.actor}</span>
                 {r.count > 1 && <span className="count-badge" title={`${r.count} consecutive views: ${range}`}>×{r.count}</span>}
-                {r.legacy && <span className="badge tone-muted" title="Written before the M26 DisposeEvidence rename">legacy: REMOVE</span>}
+                {r.legacy && <span className="badge tone-muted" title="Recorded before RemoveEvidence was renamed DisposeEvidence">legacy: REMOVE</span>}
                 <span className="ts" title={range}>{formatTs(r.ts)}</span>
               </div>
               {r.detail && <div className="tl-detail">{r.detail}</div>}

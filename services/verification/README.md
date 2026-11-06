@@ -3,8 +3,8 @@
 **Responsibility:** measure verification/audit latency — fetch an event's receipt →
 recompute the leaf from the event copy and fold the O(log₂N) Merkle branch → verify against
 the anchored root. Used by the **Anchoring** and **Parallel-Anchored** variants. This is a
-**first-class, required metric** (the numerator of the latency-vs-storage tradeoff, thesis
-RQ2).
+**first-class, required metric**: the latency side of the anchored variants'
+latency-vs-storage tradeoff.
 
 Port **4004**. Node 20, Express. `src/merkle.js` is byte-for-byte identical to the
 merkle-batcher (docs/CONTRACTS.md §4; both test suites assert it).
@@ -20,7 +20,7 @@ Timing uses `process.hrtime.bigint()`. Steps:
 1. **fetchMs** — GET receipt from `RECEIPT_STORE_URL` (headers + body + JSON parse: the body
    is the sibling path, whose size is the N-dependent quantity).
 2. **recomputeMs** — when the receipt carries `event` (the CoC event copy written by the
-   batcher since the supervisor brief 2026-09-22), the leaf is **recomputed** as SHA-256 of
+   batcher), the leaf is **recomputed** as SHA-256 of
    the canonical event (`leafSource:"event"`); otherwise the stored `leafHash` is used
    (`leafSource:"receipt"`, legacy receipts). Either way the leaf is folded up `siblingPath`
    to the implied root. The leaf hashing is inside this step: it is part of the audit cost.
@@ -44,7 +44,7 @@ Env: `PORT=4004`, `VARIANT`, `RECEIPT_STORE_URL`, `GATEWAY_URL`, `ANCHOR_CLIENT_
 
 ## Does NOT
 
-- Verify signatures or schema — deliberately **off** the timed path, so the measurement
+- Verify signatures or schema — kept **off** the timed path, so the measurement
   isolates Merkle-verification cost (not signature/schema-validation cost). The receipt
   shape check (`leafHash` hex-64, well-formed `siblingPath`) runs before the timed steps.
 - Trust the stored `leafHash` when an event copy is present — a tampered `event` in the
@@ -65,7 +65,7 @@ Env: `PORT=4004`, `VARIANT`, `RECEIPT_STORE_URL`, `GATEWAY_URL`, `ANCHOR_CLIENT_
   service stays up.
 - `502 {ok:false, reason:"anchor-read-error" | "receipt-store-error"}` — upstream unreachable.
 - **metrics sink unwritable** — appends are fire-and-forget and ignored; verification still
-  answers (only the RQ2 log is empty).
+  answers (only the per-request step log is empty).
 
 ## Test
 

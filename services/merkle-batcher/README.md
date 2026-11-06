@@ -4,7 +4,7 @@
 boundary, build a SHA-256 Merkle tree, persist one receipt per event (to the receipt-store)
 and submit the single root for on-chain commit. Used by the **Anchoring** and
 **Parallel-Anchored** variants. Its per-batch timestamps are the source of the
-**anchoring delay** metric (supervisor brief 2026-09-22).
+**anchoring delay** metric (docs/methodology/experiments.md).
 
 Port **4001**. Node 20, Express. The Merkle primitives (`src/merkle.js`) are byte-for-byte
 identical to the verification service and match docs/CONTRACTS.md §4 (canonical JSON,

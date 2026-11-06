@@ -110,7 +110,7 @@ test('anchoring boundary: N events -> receipts stored, one root submitted, recei
   // Boundary was triggered by the 3rd enqueue; flush awaits in-flight work.
   await fetch(`${batcher.url}/flush`, { method: 'POST' });
 
-  // Exactly one root submitted for the batch, bearer-authed (F23).
+  // Exactly one root submitted for the batch, bearer-authed.
   assert.equal(rootCalls.length, 1);
   assert.equal(authHeaders[0], 'Bearer test-token');
   const expectedRoot = buildTree(events.map((e) => leafHash(e))).root;
@@ -119,7 +119,7 @@ test('anchoring boundary: N events -> receipts stored, one root submitted, recei
   assert.equal(rootCalls[0].meta.leafCount, 3);
 
   // Three receipts stored, each carrying the committed txId, a valid path,
-  // and (brief 2026-09-22 §6) the evidenceId + the event body as enqueued.
+  // and the evidenceId + the event body as enqueued.
   assert.equal(receipts.size, 3);
   for (let i = 0; i < 3; i += 1) {
     const r = receipts.get(`evt-${i}`);

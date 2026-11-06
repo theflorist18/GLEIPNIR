@@ -14,10 +14,10 @@ function safeEqual(a, b) {
   return crypto.timingSafeEqual(ah, bh);
 }
 
-// Bearer authentication (M12). Two kinds of principal:
+// Bearer authentication. Two kinds of principal:
 //
-//   - service: the static GLEIPNIR_TOKEN. Contract-unchanged (docs/CONTRACTS.md
-//     §6): it authenticates EVERY route after /healthz, internal routes
+//   - service: the static GLEIPNIR_TOKEN (docs/CONTRACTS.md §6). It
+//     authenticates every route after /healthz, internal routes
 //     included — merkle-batcher, verification, Caliper's REST connector, and
 //     the smoke scripts all use it. req.principal = { kind: 'service' }.
 //   - user: an opaque session token from POST /api/v1/auth/login.
@@ -26,7 +26,7 @@ function safeEqual(a, b) {
 //     change takes effect immediately, not at next login.
 //
 // requireRole gates admin-only routes (user management, case administration):
-// the service token is NEVER sufficient there.
+// the service token is never sufficient there.
 
 function bearerOf(req) {
   const auth = req.get('authorization') || '';
@@ -75,7 +75,7 @@ function makeAuth({ token, sessions, users, securityLog: log }) {
 
   // Gate for gateway-internal routes that belong to the off-chain machinery
   // (the batcher's anchor-root sink, the verification service). The contract
-  // (docs/CONTRACTS.md §6) puts these on the SERVICE-token path — a user
+  // (docs/CONTRACTS.md §6) puts these on the service-token path — a user
   // session, even an admin's, must not be able to commit anchor roots. This is
   // the inverse of requireRole: only the service principal passes.
   function requireService(req, res, next) {

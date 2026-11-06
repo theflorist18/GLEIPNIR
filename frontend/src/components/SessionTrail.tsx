@@ -5,7 +5,7 @@ import type { VerifyState } from './MerkleBadge';
 import { Icon } from './ui/Icon';
 
 // One write this session, as returned by the gateway. Merkle verification is
-// keyed by these eventIds (F33/F49): in batched variants CoC events live
+// keyed by these eventIds: in batched variants CoC events live
 // off-chain (receipts + anchored roots), so write responses captured
 // client-side are the only honest verify targets.
 export interface SessionEvent {
@@ -15,7 +15,7 @@ export interface SessionEvent {
   batched?: boolean;
 }
 
-// Ported from demo.tsx (M14): the this-session event list with per-event
+// The this-session event list with per-event
 // verify buttons for the Anchoring variants. A dashed sub-card, because these
 // rows are not ledger rows; each Verify goes default → busy → result.
 export function SessionTrail({ events, anchoring, onVerify }: {

@@ -2,19 +2,18 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { GatewayClient } from '../api';
 import type { User } from '../types';
 
-// Session state for the whole SPA (M14). The opaque session token from
+// Session state for the whole SPA. The opaque session token from
 // POST /auth/login is kept in sessionStorage so a refresh and deep-link survive
-// but the credential dies with the tab and is not shared across windows (S13);
+// but the credential dies with the tab and is not shared across windows;
 // any 401 from the gateway drops the session (gateway restarts wipe sessions
 // server-side, so the client must treat them as disposable). The GatewayClient
-// lives here — it needs the token getter — and replaces the client settings.tsx
-// used to own when auth was a hand-typed static token.
+// lives here because it needs the token getter.
 //
 // sessionStorage over localStorage narrows the XSS/shared-workstation exposure
-// of a role-carrying bearer token; the token is never an HttpOnly cookie by
-// design (the gateway is header-authenticated per CONTRACTS §6, and a cookie
-// would add CSRF surface). One-time migration clears any token a prior build
-// left in localStorage.
+// of a role-carrying bearer token. The token is not an HttpOnly cookie: the
+// gateway is header-authenticated (docs/CONTRACTS.md §6), and a cookie would
+// add CSRF surface. The removeItem below clears any token an older build left
+// in localStorage.
 const TOKEN_KEY = 'gleipnir.session';
 try { localStorage.removeItem(TOKEN_KEY); } catch { /* storage may be unavailable */ }
 

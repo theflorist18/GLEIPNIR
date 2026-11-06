@@ -1,7 +1,7 @@
 import { Icon, type IconName } from './Icon';
 
-// Horizontal progress strip for multi-step flows (M21/M22; Claude Design
-// screen 04). `current` is a 0-based index into `steps`. Done = success check,
+// Horizontal progress strip for multi-step flows such as the ingest wizard.
+// `current` is a 0-based index into `steps`. Done = success check,
 // active = terracotta ring with the step's icon (or number), upcoming = the
 // number; `error` turns the active dot to its error state.
 export function Stepper({ steps, current, icons, error = false }: {

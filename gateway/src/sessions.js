@@ -1,18 +1,17 @@
 'use strict';
 
-// Opaque bearer-session store (M12). Tokens are 32 random bytes (hex) with an
+// Opaque bearer-session store. Tokens are 32 random bytes (hex) with an
 // absolute TTL — not JWTs: only the gateway ever verifies them, so stateless
 // signatures buy nothing. In-memory by design: a gateway restart logs everyone
-// out, which is acceptable for a single-host thesis deployment and keeps the
+// out, which is acceptable for a single-host research deployment and keeps the
 // store trivially correct. The static GLEIPNIR_TOKEN service path does not go
 // through this store at all (see auth.js).
 //
-// A session dies at the EARLIER of two clocks (OWASP A07 / N3): an absolute
-// expiry set at login (a stolen token can't live forever) and a SLIDING idle
+// A session dies at the earlier of two clocks (OWASP A07): an absolute
+// expiry set at login (a stolen token can't live forever) and a sliding idle
 // expiry refreshed on each authenticated request (an abandoned token on an
-// unattended terminal stops working after a period of inactivity). Before N3
-// there was only the absolute clock, so a token left idle stayed valid for the
-// full 8h. Purely additive: the service-token path never reaches this store.
+// unattended terminal stops working after a period of inactivity, default
+// 30 min, instead of staying valid for the whole absolute TTL, default 8 h).
 
 const crypto = require('node:crypto');
 

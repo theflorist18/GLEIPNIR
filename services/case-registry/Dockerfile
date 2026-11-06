@@ -1,13 +1,12 @@
 FROM node:20.19-slim
-# Deliberate deviation from the node:20.19-alpine convention used by every
-# other service: better-sqlite3 v12 ships NO prebuilt binary for Node 20
-# (ABI 115), so the native module is compiled from source at image build —
-# Debian slim gives a glibc toolchain that node-gyp supports cleanly. The
-# toolchain is installed and purged in the SAME layer so the runtime image
-# stays lean. Documented in this service's README.
+# Debian slim instead of the node:20.19-alpine base the other services use:
+# better-sqlite3 v12 ships no prebuilt binary for Node 20 (ABI 115), so the
+# native module is compiled at image build, and node-gyp works cleanly with
+# the glibc toolchain. The toolchain is installed and purged in the same layer
+# to keep the runtime image small. See this service's README.
 WORKDIR /app
-# Lockfile-exact install: the image must be byte-reproducible from the cited
-# commit (audit F58) — npm ci fails loudly on lockfile drift, never re-resolves.
+# Lockfile-exact install so the image is reproducible from a given commit:
+# npm ci fails on lockfile drift instead of re-resolving dependencies.
 COPY package.json package-lock.json ./
 RUN apt-get update \
  && apt-get install -y --no-install-recommends python3 make g++ \

@@ -1,6 +1,6 @@
 'use strict';
 
-// CONTRACTS §4: audit/merkle.js is a byte-identical copy of the services'
+// docs/CONTRACTS.md §4: audit/merkle.js is a byte-identical copy of the services'
 // merkle.js (itself pinned identical between merkle-batcher and verification).
 // Drift here would make reconstruct.js "verify" against a different hash
 // function than the one that produced the receipts.

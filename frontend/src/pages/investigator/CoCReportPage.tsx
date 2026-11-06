@@ -9,9 +9,9 @@ import { CASE_ROLE_LABELS } from '../../roles';
 import { AuditTrailTimeline } from '../../components/AuditTrailTimeline';
 import type { CocReport } from '../../types';
 
-// M24: the court-presentation Chain-of-Custody report. Rendered OUTSIDE the
+// The court-presentation Chain-of-Custody report. Rendered outside the
 // app shell (no nav chrome) and print-optimized — the browser's print-to-PDF
-// is the PDF path (no pdfkit dependency, per the approved plan). Fetching
+// is the PDF path, so no server-side PDF library is needed. Fetching
 // the report auto-logs one ACCESS('coc-report') per exhibit server-side, so
 // generating it is itself part of the trail.
 export function CoCReportPage() {

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""GLEIPNIR metrics collector (docs/CONTRACTS.md §10, §11; supervisor brief 2026-09-22 §9).
+"""GLEIPNIR metrics collector (docs/CONTRACTS.md §10, §11).
 
   collect.py <run-dir> [--baseline <standard-run-dir>]
   collect.py --selftest
@@ -11,7 +11,7 @@ tx-w*.jsonl}, checkpoints.jsonl, anchoring.json, audit.json — and writes
 manifest.json (`status: complete`), merging INTO the seeded run.json fields
 (identity and provenance come only from run.json — experiment.py is their one writer).
 
-Round table (audit F48): Caliper prints every round twice — per round and in
+Round table: Caliper prints every round twice — per round and in
 the final `### All test results ###` table. Only rows AFTER the LAST marker
 are parsed. The `### docker resource stats ###` table printed per round is
 parsed by header name (Memory(max)/Memory(avg) -> MB, CPU% -> %, traffic/disc ->
@@ -24,12 +24,12 @@ Per-transaction JSONL (written by the workloads from Caliper's own TxStatus
 timestamps) gives p50/p95/p99 latency, measured send rate, failure classes and
 the per-operation split — none of which the round summary can provide.
 
-Storage (audit F9/F12/F70): per-channel block store from the hosting peer (org1
+Storage: per-channel block store from the hosting peer (org1
 for app channels, the anchor peer for anchor-main), world state once per
 container, receipt store separately. bytes/event = OLS slope over the
 checkpoint series (>=3 points) with the t0->tN delta as cross-check. Compression
-vs the Standard baseline = reduction in on-chain bytes/event — NEVER 1/N of
-total ledger size (CLAUDE.md metrics contract).
+vs the Standard baseline = reduction in on-chain bytes/event, never 1/N of
+total ledger size (docs/CONTRACTS.md §10).
 """
 import argparse
 import glob
@@ -243,7 +243,7 @@ def load_txlog(round_dir):
 def is_timed(rec):
     """Untimed records (`timed: false`) are the pool/verify seeding — real ledger
     writes that were never measured. They belong in the storage denominator and
-    in NO timing/throughput/failure statistic. Pre-M26 logs have no field."""
+    in no timing/throughput/failure statistic. Older logs without the field count as timed."""
     return rec.get("timed") is not False
 
 

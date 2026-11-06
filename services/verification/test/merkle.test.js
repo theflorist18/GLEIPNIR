@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { canonicalJSON, leafHash, interiorHash, computeRoot, verifyPath } = require('../src/merkle');
 
-// Normative vectors from docs/CONTRACTS.md §4 — MUST match the merkle-batcher.
+// Normative vectors from docs/CONTRACTS.md §4; must match the merkle-batcher.
 const V1_ROOT = '015abd7f5cc57a2dd94b7590f04ad8084273905ee33ec5cebeae62276a97f862';
 const V2 = {
   L0: 'e9f74e715a1806aa651489dcf176e77013b3c851dbc114cc9c24f2fe9d411d65',
@@ -16,8 +16,8 @@ const V2 = {
   ROOT: 'c859dbaf0c89a0c3d8acd14558d491171dd4381073d79935182301300d296d2f',
 };
 
-// CONTRACTS §4: the two merkle.js copies MUST be byte-identical. This is the
-// enforcement mechanism (audit F5) — semantic drift starts as byte drift.
+// docs/CONTRACTS.md §4: the two merkle.js copies must be byte-identical. This
+// test enforces it; semantic drift starts as byte drift.
 test('merkle.js is byte-identical to the merkle-batcher copy', () => {
   const here = fs.readFileSync(path.join(__dirname, '..', 'src', 'merkle.js'));
   const other = fs.readFileSync(

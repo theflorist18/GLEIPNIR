@@ -1,17 +1,16 @@
 'use strict';
 
-// GLEIPNIR case registry (M13a). Owns the OFF-CHAIN Case entity (id, roster of
-// participants) and the evidence search read-model. Two deliberate design
-// points, stated up front:
+// GLEIPNIR case registry. Owns the off-chain Case entity (id, roster of
+// participants) and the evidence search read-model. Two design points:
 //
-//   1. `evidence_index` is a READ-MODEL / CACHE, not a source of truth. The
+//   1. `evidence_index` is a read-model / cache, not a source of truth. The
 //      ledger stays authoritative for evidence status and custodian; a stale
 //      row here is a display glitch, never an integrity problem.
-//   2. Case-evidence linkage is off-chain ONLY. Nothing in this service
+//   2. Case-evidence linkage is off-chain only. Nothing in this service
 //      touches Fabric, the Codex-Entry schema, or the chaincode. Case ids are
-//      `CASE-<uuid>` — deliberately disjoint from the Parallel variants'
-//      channel routing key (`case-NNN`, gateway variantRouter CASE_RE), so the
-//      two "case" concepts can never collide.
+//      `CASE-<uuid>`, disjoint from the Parallel variants' channel routing key
+//      (`case-NNN`, gateway variantRouter CASE_RE), so the two "case" concepts
+//      can never collide.
 //
 // Internal-only service: reached via the gateway (which enforces who may ask),
 // never by the frontend. Every route after /healthz requires the shared
@@ -32,20 +31,20 @@ function safeEqual(a, b) {
   return crypto.timingSafeEqual(ah, bh);
 }
 
-// Same charset contract as the receipt store's eventId guard (CONTRACTS §6);
-// applied to ids that reach SQL params or URLs.
+// Same charset as the receipt store's eventId guard (no path separators or
+// URL-special characters); applied to ids that reach SQL params or URLs.
 const SAFE_ID = /^[A-Za-z0-9._:-]+$/;
 const CASE_STATUSES = ['OPEN', 'CLOSED', 'ARCHIVED'];
-// Terminal evidence status as synced from the ledger: 'DISPOSED' since M26
-// (DisposeEvidence); 'REMOVED' is the legacy value on rows synced before the
-// rename and means the same thing.
+// Terminal evidence status as synced from the ledger: 'DISPOSED'
+// (DisposeEvidence). 'REMOVED' is an older value still found on rows synced
+// before the operation was renamed, and means the same thing.
 const isDisposed = (status) => status === 'DISPOSED' || status === 'REMOVED';
-// M20: single evidence flag (or null). A deliberate enum, not free-form tags.
+// Single evidence flag (or null): a fixed enum, not free-form tags.
 const EVIDENCE_FLAGS = ['HIGH_PRIORITY', 'PROCESSED', 'NEEDS_LEAD_REVIEW'];
-// M18 (CONTRACTS §12-8): 'lead' joined the per-case ladder — leads manage the
+// Per-case role ladder (docs/CONTRACTS.md §12-8): a 'lead' manages the
 // roster/config of cases where they hold this role (enforced by the gateway).
 const CASE_ROLES = ['viewer', 'contributor', 'lead'];
-// M25: every new case starts with a general file-type taxonomy. These are
+// Every new case starts with a general file-type taxonomy. These are
 // ordinary per-case category rows — the lead can rename or delete them (delete
 // still refuses when referenced) and add custom ones; nothing is hard-coded
 // downstream of creation.
@@ -96,7 +95,7 @@ function openDb(dataDir) {
       uploaded_at       TEXT,
       status            TEXT NOT NULL DEFAULT 'ACTIVE',
       last_synced_at    TEXT,
-      -- M19 forensic ingest metadata + M20 flag: off-chain only, nullable, validated in code
+      -- forensic ingest metadata + examiner flag: off-chain only, nullable, validated in code
       label             TEXT,
       category_id       TEXT,
       seized_at         TEXT,
@@ -139,7 +138,7 @@ function openDb(dataDir) {
 }
 
 // Row -> wire shape (camelCase; docs/CONTRACTS.md pins these). my_role is
-// present only on participant-filtered listings (M18: `myRoleInCase`).
+// present only on participant-filtered listings (`myRoleInCase`).
 const caseWire = (r) => r && ({
   id: r.id, name: r.name, description: r.description, status: r.status,
   createdBy: r.created_by, createdAt: r.created_at, updatedAt: r.updated_at,
@@ -167,7 +166,7 @@ const categoryWire = (r) => r && ({
 // LIKE-escape so a search term containing % or _ matches literally.
 const likeOf = (q) => `%${String(q).replace(/([\\%_])/g, '\\$1')}%`;
 
-const LIST_LIMIT = 500; // S19: every list/search result set is capped (the activity feed caps its own)
+const LIST_LIMIT = 500; // caps every list/search result set (the activity feed caps its own)
 
 function createApp(overrides) {
   const cfg = { ...loadConfig(), ...(overrides || {}) };
@@ -179,16 +178,14 @@ function createApp(overrides) {
 
   app.get('/healthz', (_req, res) => res.json({ ok: true }));
 
-  // Shared-secret guard: this service trusts only the gateway. Constant-time
-  // compare (OWASP A02) — hash both sides to a fixed length so timingSafeEqual
-  // never throws on a length mismatch and the check can't leak the token by
-  // timing.
+  // Shared-secret guard: this service trusts only the gateway (constant-time
+  // compare, see safeEqual).
   app.use((req, res, next) => {
     if (!safeEqual(req.get('x-gleipnir-internal-token'), cfg.internalToken)) {
       return res.status(401).json({ error: 'unauthorized' });
     }
-    // M25b: the acting username, attributed by the GATEWAY (session-derived,
-    // never client-supplied on user sessions). Empty for service-token calls.
+    // The acting username, attributed by the gateway (session-derived, never
+    // client-supplied on user sessions). Empty for service-token calls.
     req.actor = req.get('x-gleipnir-actor') || '';
     return next();
   });
@@ -200,12 +197,12 @@ function createApp(overrides) {
   const getEvidence = db.prepare('SELECT * FROM evidence_index WHERE evidence_id = ?');
   const getParticipant = db.prepare('SELECT * FROM case_participants WHERE case_id = ? AND user_id = ?');
 
-  // ---- case audit log (M25b) ----
-  // Append-only, one row per management action, written in the SAME
-  // transaction as the mutation it records. This is the library's own log —
-  // evidence ACCESS (view/download/export) stays on-chain per evidence (the
-  // thesis's CoC trail); duplicating it here would create a second source of
-  // truth. No update/delete routes exist: immutable-by-API, like notes.
+  // ---- case audit log ----
+  // Append-only, one row per management action, written in the same
+  // transaction as the mutation it records. This is the library's own log;
+  // evidence access (view/download/export) stays on-chain per evidence (the
+  // chain-of-custody trail), and duplicating it here would create a second
+  // source of truth. No update/delete routes exist: immutable by API, like notes.
   const insertAudit = db.prepare(`INSERT INTO case_audit_log (id, case_id, ts, actor, type, evidence_id, target, detail)
     VALUES (@id, @case_id, @ts, @actor, @type, @evidence_id, @target, @detail)`);
   function audit(caseId, type, { actor = '', evidenceId = null, target = null, detail = null, ts = null } = {}) {
@@ -322,9 +319,9 @@ function createApp(overrides) {
     res.status(201).json(participantWire(p));
   });
 
-  // M25: change a participant's case role in place (the alternative was a
-  // remove+re-add dance that briefly dropped access). Policy (who may call,
-  // last-lead demotion, global-lead targets) lives in the gateway.
+  // Change a participant's case role in place (a remove + re-add would
+  // briefly drop access). Policy (who may call, last-lead demotion,
+  // global-lead targets) lives in the gateway.
   app.patch('/cases/:caseId/participants/:userId', (req, res) => {
     const p = getParticipant.get(req.params.caseId, req.params.userId);
     if (!p) return notFound(res, 'participant not found');
@@ -349,8 +346,8 @@ function createApp(overrides) {
     res.status(204).end();
   });
 
-  // ---- evidence categories (M19): per-case taxonomy, lead-managed via the
-  // gateway. Deleting a category referenced by evidence is refused (409) —
+  // ---- evidence categories: per-case taxonomy, lead-managed via the
+  // gateway. Deleting a category referenced by evidence is refused (409), so
   // forensic metadata never silently disappears.
   const getCategory = db.prepare('SELECT * FROM evidence_categories WHERE id = ?');
 
@@ -420,7 +417,7 @@ function createApp(overrides) {
   });
 
   app.delete('/cases/:caseId/evidence/:evidenceId', (req, res) => {
-    // Uncategorizing also clears the case-scoped category (M19): a category
+    // Uncategorizing also clears the case-scoped category: a category
     // belongs to the case the evidence is leaving.
     const ev = getEvidence.get(req.params.evidenceId);
     if (!ev || ev.case_id !== req.params.caseId) return notFound(res, 'evidence not found in this case');
@@ -432,8 +429,8 @@ function createApp(overrides) {
     res.status(204).end();
   });
 
-  // M19 metadata fields (all optional, off-chain only): string sets, null
-  // clears. categoryId must reference a category of the evidence's own case.
+  // Forensic ingest metadata (all optional, off-chain only): a string sets,
+  // null clears. categoryId must reference a category of the evidence's own case.
   const META_FIELDS = [
     ['label', 'label'],
     ['seizedAt', 'seized_at'],
@@ -530,7 +527,7 @@ function createApp(overrides) {
   });
 
   // Cache sync + metadata updates: the chain stays authoritative for status
-  // (the gateway PATCHes it after on-chain writes, e.g. REMOVE); the M19
+  // (the gateway PATCHes it after on-chain writes, e.g. DisposeEvidence); the
   // metadata fields are library-owned and validated here.
   app.patch('/evidence-index/:evidenceId', (req, res) => {
     const row = getEvidence.get(req.params.evidenceId);
@@ -576,8 +573,8 @@ function createApp(overrides) {
     return res.json(evidenceWire(row));
   });
 
-  // ---- examiner notes (M20): append-only by design. There are NO update or
-  // delete routes — a note, once written, is immutable through this API.
+  // ---- examiner notes: append-only. There are no update or delete routes;
+  // a note, once written, is immutable through this API.
   app.post('/evidence-index/:evidenceId/notes', (req, res) => {
     const ev = getEvidence.get(req.params.evidenceId);
     if (!ev) return notFound(res, 'evidence not found in index');
@@ -599,10 +596,9 @@ function createApp(overrides) {
     res.json(db.prepare('SELECT * FROM evidence_notes WHERE evidence_id = ? ORDER BY created_at, id').all(req.params.evidenceId).map(noteWire));
   });
 
-  // ---- case activity feed. M20 synthesized this from timestamped rows;
-  // M25b reads the persistent append-only case_audit_log instead, so events
-  // with no surviving row (participant removals, category deletes, role
-  // changes) finally appear — and history survives the source rows changing.
+  // ---- case activity feed, read from the append-only case_audit_log, so
+  // events with no surviving source row (participant removals, category
+  // deletes, role changes) still appear and history survives later edits.
   const auditWire = (r) => ({
     id: r.id, type: r.type, ts: r.ts, actor: r.actor || undefined,
     ...(r.evidence_id ? { evidenceId: r.evidence_id } : {}),
@@ -621,7 +617,7 @@ function createApp(overrides) {
   // ---- authz pre-flight (the gateway's per-evidence gate for user sessions) ----
   // Decision matrix: participant of the evidence's case -> allowed (with the
   // case role); uncategorized evidence -> uploader only; unknown -> denied.
-  // Admin short-circuits happen in the GATEWAY (it never calls this for admins
+  // Admin short-circuits happen in the gateway (it never calls this for admins
   // or the service token).
   app.get('/internal/authz', (req, res) => {
     const { userId, evidenceId } = req.query;

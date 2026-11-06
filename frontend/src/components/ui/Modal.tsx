@@ -1,12 +1,11 @@
 import { useEffect, useId, useRef } from 'react';
 import type { ReactNode } from 'react';
 
-// Minimal overlay dialog in the card idiom (M21): Escape and overlay-click
-// close it; the panel stops click propagation. Deliberately no portal or
-// focus-TRAP machinery — simple and usable beats clever (ARCHITECTURE §5).
-// It does, however, move focus into the dialog on open and restore it to the
-// opener on close, and links its title via aria-labelledby, so keyboard and
-// screen-reader users are not stranded (a11y, not a trap).
+// Minimal overlay dialog in the card idiom: Escape and overlay-click close it;
+// the panel stops click propagation. No portal and no focus trap, to keep it
+// simple. It does move focus into the dialog on open, restore it to the opener
+// on close, and link its title via aria-labelledby, so keyboard and
+// screen-reader users are not stranded.
 export function Modal({ title, onClose, children }: { title: ReactNode; onClose: () => void; children: ReactNode }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const titleId = useId();

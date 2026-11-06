@@ -1,6 +1,6 @@
 'use strict';
 
-// M13c integration suite: the gateway wired to the REAL case-registry and
+// Integration suite: the gateway wired to the real case-registry and
 // evidence-store apps (in-process, tmp dirs, public createApp exports) with a
 // fake Fabric that replays an audit trail. This is the wire-contract test for
 // upload -> on-chain head -> read-model, per-case authz, and the synchronous
@@ -282,7 +282,7 @@ test('evidence search scoping and DISPOSE status sync', SKIP, async (t) => {
   assert.equal(row.status, 'DISPOSED');
 });
 
-test('M15: the auto-log is synchronous — a failed log write fails the view, and no event is half-recorded', SKIP, async (t) => {
+test('the auto-log is synchronous — a failed log write fails the view, and no event is half-recorded', SKIP, async (t) => {
   const s = await bootStack(t);
   await s.upload('ivy', Buffer.from('sync-proof'), { evidenceId: 'ev-sync' });
   assert.equal(await s.auditLen('ivy', 'ev-sync'), 1);
@@ -299,7 +299,7 @@ test('M15: the auto-log is synchronous — a failed log write fails the view, an
   assert.equal(await s.auditLen('ivy', 'ev-sync'), 2);
 });
 
-test('M15: audit-trail reads and searches are never auto-logged', SKIP, async (t) => {
+test('audit-trail reads and searches are never auto-logged', SKIP, async (t) => {
   const s = await bootStack(t);
   await s.upload('ivy', Buffer.from('quiet'), { evidenceId: 'ev-quiet' });
 
@@ -327,7 +327,7 @@ test('ingest directly into a case: contributor yes, viewer 403, non-participant 
   assert.equal((await s.upload('ivy', Buffer.from('nope'), { caseId: c2.id })).status, 404);
 });
 
-test('M18: leads create and own cases; investigators cannot; lead manages only their own roster', SKIP, async (t) => {
+test('leads create and own cases; investigators cannot; lead manages only their own roster', SKIP, async (t) => {
   const s = await bootStack(t);
 
   // A lead creates a case and lands on its roster as case lead.
@@ -371,7 +371,7 @@ test('M18: leads create and own cases; investigators cannot; lead manages only t
   assert.equal((await fetch(`${s.url}/api/v1/cases`, { method: 'POST', headers: s.asJson('root'), body: JSON.stringify({ name: 'bad hand', leadUserId: 'ivy' }) })).status, 400);
 });
 
-test('M18: admins read metadata and trails everywhere but blob content only as a participant', SKIP, async (t) => {
+test('admins read metadata and trails everywhere but blob content only as a participant', SKIP, async (t) => {
   const s = await bootStack(t);
 
   // Build a case root does NOT participate in, with one exhibit.
@@ -394,7 +394,7 @@ test('M18: admins read metadata and trails everywhere but blob content only as a
   assert.equal((await fetch(`${s.url}/api/v1/evidence/ev-sealed/download`, { headers: s.as('root') })).status, 200);
 });
 
-test('M25: role ladder — dispose is lead-only; participant role PATCH policy', SKIP, async (t) => {
+test('role ladder — dispose is lead-only; participant role PATCH policy', SKIP, async (t) => {
   const s = await bootStack(t);
   const c = await (await fetch(`${s.url}/api/v1/cases`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ name: 'ladder' }) })).json();
   await fetch(`${s.url}/api/v1/cases/${c.id}/participants`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ userId: 'ivy', roleInCase: 'contributor' }) });
@@ -424,7 +424,7 @@ test('M25: role ladder — dispose is lead-only; participant role PATCH policy',
   assert.equal((await patchRole('root', 'lena', 'contributor')).status, 200);
 });
 
-test('M19: category management is lead-gated; reading follows case visibility', SKIP, async (t) => {
+test('category management is lead-gated; reading follows case visibility', SKIP, async (t) => {
   const s = await bootStack(t);
   const c = await (await fetch(`${s.url}/api/v1/cases`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ name: 'taxonomy' }) })).json();
   await fetch(`${s.url}/api/v1/cases/${c.id}/participants`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ userId: 'ivy', roleInCase: 'contributor' }) });
@@ -437,12 +437,12 @@ test('M19: category management is lead-gated; reading follows case visibility', 
   assert.equal((await fetch(`${s.url}/api/v1/cases/${c.id}/categories`, { method: 'POST', headers: s.asJson('ivy'), body: JSON.stringify({ name: 'Nope' }) })).status, 403);
   assert.equal((await fetch(`${s.url}/api/v1/cases/${c.id}/categories`, { headers: s.as('mallory') })).status, 404);
 
-  // Participants and admins list them (M25: alongside the seeded presets).
+  // Participants and admins list them (alongside the seeded presets).
   assert.ok((await (await fetch(`${s.url}/api/v1/cases/${c.id}/categories`, { headers: s.as('ivy') })).json()).map((x) => x.name).includes('Mobile Devices'));
   assert.equal((await fetch(`${s.url}/api/v1/cases/${c.id}/categories`, { headers: s.as('root') })).status, 200);
 });
 
-test('M19: ingest carries forensic metadata to the read-model; the on-chain head is untouched', SKIP, async (t) => {
+test('ingest carries forensic metadata to the read-model; the on-chain head is untouched', SKIP, async (t) => {
   const s = await bootStack(t);
   const c = await (await fetch(`${s.url}/api/v1/cases`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ name: 'meta case' }) })).json();
   await fetch(`${s.url}/api/v1/cases/${c.id}/participants`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ userId: 'ivy', roleInCase: 'contributor' }) });
@@ -476,7 +476,7 @@ test('M19: ingest carries forensic metadata to the read-model; the on-chain head
   assert.equal((await s.upload('ivy', Buffer.from('x'), { evidenceId: 'ev-badcat', caseId: other.id })).status, 201);
 });
 
-test('M19: evidence details PATCH is write-gated; viewers cannot, contributors and admins can', SKIP, async (t) => {
+test('evidence details PATCH is write-gated; viewers cannot, contributors and admins can', SKIP, async (t) => {
   const s = await bootStack(t);
   const c = await (await fetch(`${s.url}/api/v1/cases`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ name: 'details' }) })).json();
   await fetch(`${s.url}/api/v1/cases/${c.id}/participants`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ userId: 'ivy', roleInCase: 'contributor' }) });
@@ -494,7 +494,7 @@ test('M19: evidence details PATCH is write-gated; viewers cannot, contributors a
   assert.equal(await s.auditLen('ivy', 'ev-details'), 1); // CREATE only
 });
 
-test('M20: notes follow read/write gates; sessions stamp the author; nothing auto-logs', SKIP, async (t) => {
+test('notes follow read/write gates; sessions stamp the author; nothing auto-logs', SKIP, async (t) => {
   const s = await bootStack(t);
   const c = await (await fetch(`${s.url}/api/v1/cases`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ name: 'notes case' }) })).json();
   await fetch(`${s.url}/api/v1/cases/${c.id}/participants`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ userId: 'ivy', roleInCase: 'contributor' }) });
@@ -531,7 +531,7 @@ test('M20: notes follow read/write gates; sessions stamp the author; nothing aut
   assert.equal(await s.auditLen('ivy', 'ev-notes'), 1);
 });
 
-test('M20: the case activity feed follows case visibility and reflects the collaboration', SKIP, async (t) => {
+test('the case activity feed follows case visibility and reflects the collaboration', SKIP, async (t) => {
   const s = await bootStack(t);
   const c = await (await fetch(`${s.url}/api/v1/cases`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ name: 'feed case' }) })).json();
   await fetch(`${s.url}/api/v1/cases/${c.id}/participants`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ userId: 'ivy', roleInCase: 'contributor' }) });
@@ -547,7 +547,7 @@ test('M20: the case activity feed follows case visibility and reflects the colla
   assert.equal((await fetch(`${s.url}/api/v1/cases/${c.id}/activity`, { headers: s.as('root') })).status, 200);
   assert.equal((await fetch(`${s.url}/api/v1/cases/${c.id}/activity`, { headers: s.as('mallory') })).status, 404);
 
-  // M25b: management actions are audited persistently with the SESSION actor —
+  // Management actions are audited persistently with the session actor —
   // a removal leaves a log row even though the participant row is gone.
   await fetch(`${s.url}/api/v1/cases/${c.id}/participants/ivy`, { method: 'PATCH', headers: s.asJson('lena'), body: JSON.stringify({ roleInCase: 'viewer' }) });
   await fetch(`${s.url}/api/v1/cases/${c.id}/participants/ivy`, { method: 'DELETE', headers: s.as('lena') });
@@ -560,10 +560,10 @@ test('M20: the case activity feed follows case visibility and reflects the colla
   assert.equal(removedEvt.target, 'ivy');
 });
 
-// S4: ensureCaseLead re-checks the caller's CURRENT global role, not just the
+// ensureCaseLead re-checks the caller's current global role, not just the
 // stale case-role row. A user demoted from global 'lead' to 'investigator'
 // loses case-lead powers immediately, even where a lead participant row remains.
-test('S4: a demoted lead loses case-lead powers even with a stale lead row', async (t) => {
+test('a demoted lead loses case-lead powers even with a stale lead row', async (t) => {
   const s = await bootStack(t);
   const c = await (await fetch(`${s.url}/api/v1/cases`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ name: 'demotion case' }) })).json();
   // lena is the case lead and can manage the roster
@@ -579,10 +579,10 @@ test('S4: a demoted lead loses case-lead powers even with a stale lead row', asy
   assert.equal((await fetch(`${s.url}/api/v1/cases/${c.id}/participants`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ userId: 'mallory', roleInCase: 'viewer' }) })).status, 403);
 });
 
-// S14: a case lead cannot pull an admin account onto their roster (mirror of
-// the directory rule; participation is what unlocks the §12-8 blob-content
+// A case lead cannot pull an admin account onto their roster (mirror of the
+// directory rule; participation is what unlocks the docs/CONTRACTS.md §12-8 blob-content
 // check). Admins may still add anyone.
-test('S14: a lead cannot add or promote an admin on a case roster; an admin can', async (t) => {
+test('a lead cannot add or promote an admin on a case roster; an admin can', async (t) => {
   const s = await bootStack(t);
   const c = await (await fetch(`${s.url}/api/v1/cases`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ name: 'roster case' }) })).json();
   // 'root' is the seeded admin
@@ -593,12 +593,12 @@ test('S14: a lead cannot add or promote an admin on a case roster; an admin can'
   assert.equal((await fetch(`${s.url}/api/v1/cases/${c.id}/participants`, { method: 'POST', headers: s.asJson('root'), body: JSON.stringify({ userId: 'ivy', roleInCase: 'contributor' }) })).status, 201);
 });
 
-// B1: a Unicode evidence filename survives ingest intact. busboy latin1-decodes
-// the multipart filename to mojibake; the gateway recovers it and transports it
-// to evidence-store in a percent-encoded header, so the read-model row shows the
-// TRUE name (not "è¨¼æ ...") — and the ingest does not 502 on a header-encoding
-// throw.
-test('B1: a Unicode evidence filename is stored intact, not mojibake', SKIP, async (t) => {
+// A Unicode evidence filename survives ingest intact. busboy's latin1 default
+// would decode the multipart filename to mojibake; the gateway parses it as
+// UTF-8 and transports it to evidence-store in a percent-encoded header, so the
+// read-model row shows the true name (not "è¨¼æ ...") and the ingest does not
+// 502 on a header-encoding throw.
+test('a Unicode evidence filename is stored intact, not mojibake', SKIP, async (t) => {
   const s = await bootStack(t);
   const name = '証拠 file.pdf';
   const up = await s.upload('ivy', Buffer.from('unicode exhibit'), { evidenceId: 'ev-uni' }, name, 'application/pdf');
@@ -609,11 +609,11 @@ test('B1: a Unicode evidence filename is stored intact, not mojibake', SKIP, asy
   assert.equal(row.originalFilename, name);
 });
 
-// S20: the declared multipart mimetype is attacker-controlled and drives the
+// The declared multipart mimetype is attacker-controlled and drives the
 // SPA's render decision (application/pdf -> sandboxed iframe). A non-PDF
 // masquerading as application/pdf is stored/indexed as application/octet-stream
 // (download-only) via server-side magic-byte sniffing; a real PDF keeps its type.
-test('S20: a non-PDF declared application/pdf is downgraded to octet-stream', async (t) => {
+test('a non-PDF declared application/pdf is downgraded to octet-stream', async (t) => {
   const s = await bootStack(t);
   await s.upload('ivy', Buffer.from('<html>not a pdf</html>'), { evidenceId: 'ev-fakepdf' }, 'evil.pdf', 'application/pdf');
   await s.upload('ivy', Buffer.from('%PDF-1.4\n%real pdf bytes'), { evidenceId: 'ev-realpdf' }, 'ok.pdf', 'application/pdf');
@@ -626,12 +626,12 @@ test('S20: a non-PDF declared application/pdf is downgraded to octet-stream', as
 });
 
 // Regression: both of these reach the registry through PATCH /evidence-index/:id,
-// whose audit rows take the actor from the X-Gleipnir-Actor header. They were the
-// only mutating registry calls that omitted the opts argument, so the flag and
-// details events landed in the persistent case audit log with an EMPTY actor —
-// an unattributed entry in a chain-of-custody log (CONTRACTS §6: under a user
-// session the audit actor is ALWAYS the authenticated username).
-test('M25b: flag and details changes are actor-attributed in the case audit log', SKIP, async (t) => {
+// whose audit rows take the actor from the X-Gleipnir-Actor header. Without the
+// opts.actor argument the flag and details events land in the persistent case
+// audit log with an empty actor — an unattributed entry in a chain-of-custody
+// log (docs/CONTRACTS.md §6: under a user session the audit actor is always the
+// authenticated username).
+test('flag and details changes are actor-attributed in the case audit log', SKIP, async (t) => {
   const s = await bootStack(t);
   const c = await (await fetch(`${s.url}/api/v1/cases`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ name: 'attribution case' }) })).json();
   await fetch(`${s.url}/api/v1/cases/${c.id}/participants`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ userId: 'ivy', roleInCase: 'contributor' }) });
@@ -659,7 +659,7 @@ test('M25b: flag and details changes are actor-attributed in the case audit log'
   assert.ok(!svcFlag.actor, `service path must not stamp a user actor, got ${svcFlag.actor}`);
 });
 
-test('M24: per-case CoC report — json + csv shapes, authz, and exactly one ACCESS per evidence for sessions', SKIP, async (t) => {
+test('per-case CoC report — json + csv shapes, authz, and exactly one ACCESS per evidence for sessions', SKIP, async (t) => {
   const s = await bootStack(t);
   const c = await (await fetch(`${s.url}/api/v1/cases`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ name: 'court case' }) })).json();
   await fetch(`${s.url}/api/v1/cases/${c.id}/participants`, { method: 'POST', headers: s.asJson('lena'), body: JSON.stringify({ userId: 'ivy', roleInCase: 'contributor' }) });

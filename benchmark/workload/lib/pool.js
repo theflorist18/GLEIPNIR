@@ -2,11 +2,11 @@
 
 // Untimed pool seeding shared by the pool workloads (transfer / access /
 // dispose / read): each worker creates `size` evidence items through the
-// round's OWN connector (the real write path, never measured) and gets back
+// round's own connector (the real write path, never measured) and gets back
 // [{id, caseId}] for its timed phase to target. Every later op hits
-// the SAME case its evidence was created on (custody heads live per channel).
+// the same case its evidence was created on (custody heads live per channel).
 //
-// The seeds ARE ledger writes, so each one is recorded in the per-transaction
+// The seeds are ledger writes, so each one is recorded in the per-transaction
 // log with `timed: false`: collect.py counts them in the storage
 // bytes-per-event denominator and excludes them from every timing statistic.
 

@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# GLEIPNIR evidence-library smoke test (M16) — Standard variant end-to-end via
-# the gateway REST API, exercising the M12–M15 feature set: login + roles,
-# case registry, multipart ingest into the evidence store, search, per-case
-# authz, and the synchronous auto-AccessLog on view/download/export.
-# Exits nonzero on any assertion failure.
-# Labelled 'smoke' — functional correctness only, never a scalability datapoint.
+# GLEIPNIR evidence-library smoke test: Standard variant end-to-end via the
+# gateway REST API: login + admin/lead/investigator roles, case registry and
+# per-case access lists, multipart ingest into the evidence store with forensic
+# metadata and categories, search, examiner notes/flags and the activity feed,
+# the per-case CoC report, and the synchronous auto-AccessLog on
+# view/download/export. Exits nonzero on any assertion failure.
+# Labelled 'smoke': functional correctness only, never a scalability datapoint.
 #
 # Prereq: up.sh --variant standard; curl + jq + sha256sum on PATH.
 #         ADMIN_USERNAME/ADMIN_PASSWORD must match the gateway's seed
@@ -116,7 +117,7 @@ TRAIL="$(curl -fsS "${AUTH_IVY[@]}" "${GATEWAY}/api/v1/evidence/${EV}/audit")"
 [ "$(echo "${TRAIL}" | jq '[.[] | select(.op=="CREATE")] | length')" = "1" ] || fail "expected exactly 1 CREATE"
 [ "$(echo "${TRAIL}" | jq '[.[] | select(.op=="ACCESS")] | length')" = "3" ] || fail "expected exactly 3 ACCESS"
 
-echo "[smoke-library] 12) M18: lead creates + owns a case; investigator cannot create"
+echo "[smoke-library] 12) lead creates + owns a case; investigator cannot create"
 LENA="lena-${TS}"
 curl -fsS "${AUTH_ADMIN[@]}" -X POST "${GATEWAY}/api/v1/admin/users" \
   -d "{\"username\":\"${LENA}\",\"password\":\"lena-pw\",\"role\":\"lead\"}" >/dev/null
@@ -131,19 +132,19 @@ MY_ROLE="$(curl -fsS "${AUTH_LENA[@]}" "${GATEWAY}/api/v1/cases/${LEAD_CASE_ID}"
 [ "$(code_of "${IVY_TOKEN}" POST "${GATEWAY}/api/v1/cases" '{"name":"nope"}')" = "403" ] \
   || fail "investigator case create not 403"
 
-echo "[smoke-library] 13) M18: lead manages their roster; only their own"
+echo "[smoke-library] 13) lead manages their roster; only their own"
 curl -fsS "${AUTH_LENA[@]}" -X POST "${GATEWAY}/api/v1/cases/${LEAD_CASE_ID}/participants" \
   -d "{\"userId\":\"${IVY}\",\"roleInCase\":\"contributor\"}" >/dev/null
 [ "$(code_of "${LENA_TOKEN}" POST "${GATEWAY}/api/v1/cases/${CASE_ID}/participants" \
   "{\"userId\":\"${MALLORY}\"}")" = "404" ] || fail "lead touching a foreign roster not 404"
 
-echo "[smoke-library] 14) M18: admin reads metadata/trails but not blob content off-case"
+echo "[smoke-library] 14) admin reads metadata/trails but not blob content off-case"
 [ "$(code_of "${ADMIN_TOKEN}" GET "${GATEWAY}/api/v1/evidence/${EV}")" = "200" ] || fail "admin view not 200"
 [ "$(code_of "${ADMIN_TOKEN}" GET "${GATEWAY}/api/v1/evidence/${EV}/audit")" = "200" ] || fail "admin audit not 200"
 [ "$(code_of "${ADMIN_TOKEN}" GET "${GATEWAY}/api/v1/evidence/${EV}/download")" = "403" ] \
   || fail "admin download of a non-participant case not 403"
 
-echo "[smoke-library] 15) M19: lead creates a category; ingest carries forensic metadata"
+echo "[smoke-library] 15) lead creates a category; ingest carries forensic metadata"
 CAT_ID="$(curl -fsS "${AUTH_LENA[@]}" -X POST "${GATEWAY}/api/v1/cases/${LEAD_CASE_ID}/categories" \
   -d '{"name":"Physical Media"}' | jq -r '.id')"
 case "${CAT_ID}" in cat-*) ;; *) fail "category create: '${CAT_ID}'" ;; esac
@@ -159,7 +160,7 @@ META_ROW="$(curl -fsS "${AUTH_IVY[@]}" "${GATEWAY}/api/v1/cases/${LEAD_CASE_ID}"
 [ "$(echo "${META_ROW}" | jq -r '.categoryId')" = "${CAT_ID}" ] || fail "metadata categoryId: ${META_ROW}"
 [ "$(echo "${META_ROW}" | jq -r '.seizedAt')" = "2026-07-15T09:30:00Z" ] || fail "metadata seizedAt: ${META_ROW}"
 
-echo "[smoke-library] 16) M20: examiner note, flag, and the case activity feed"
+echo "[smoke-library] 16) examiner note, flag, and the case activity feed"
 NOTE_ID="$(curl -fsS "${AUTH_IVY[@]}" -H 'content-type: application/json' \
   -X POST "${GATEWAY}/api/v1/evidence/${EV2}/notes" \
   -d '{"body":"smoke examiner note"}' | jq -r '.id')"
@@ -173,7 +174,7 @@ ACTIVITY="$(curl -fsS "${AUTH_IVY[@]}" "${GATEWAY}/api/v1/cases/${LEAD_CASE_ID}/
 [ "$(echo "${ACTIVITY}" | jq 'length')" -ge 4 ] || fail "activity feed too short: ${ACTIVITY}"
 echo "${ACTIVITY}" | jq -e '[.[] | select(.type=="NOTE_ADDED")] | length >= 1' >/dev/null || fail "activity missing NOTE_ADDED"
 
-echo "[smoke-library] 17) M24: per-case CoC report (json + csv) — runs LAST: it appends one ACCESS per exhibit"
+echo "[smoke-library] 17) per-case CoC report (json + csv) — runs LAST: it appends one ACCESS per exhibit"
 REPORT="$(curl -fsS "${AUTH_IVY[@]}" "${GATEWAY}/api/v1/cases/${LEAD_CASE_ID}/coc-report")"
 [ "$(echo "${REPORT}" | jq -r '.caseId')" = "${LEAD_CASE_ID}" ] || fail "coc-report caseId: ${REPORT}"
 echo "${REPORT}" | jq -e '.evidence[0].auditTrail | length >= 1' >/dev/null || fail "coc-report missing trails"

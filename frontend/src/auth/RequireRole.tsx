@@ -4,7 +4,7 @@ import { useAuth } from './AuthContext';
 import type { Role } from '../types';
 
 // Route guard for role-gated pages (the server enforces the same rule — this
-// is UX, not security). Accepts a set of roles since M18's 3-tier model has
+// is UX, not security). Accepts a set of roles because the 3-tier model has
 // pages shared between tiers (e.g. lead + admin).
 export function RequireRole({ roles, children }: { roles: Role[]; children: ReactNode }) {
   const { user } = useAuth();

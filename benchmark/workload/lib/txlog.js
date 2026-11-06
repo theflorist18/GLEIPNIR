@@ -1,6 +1,6 @@
 'use strict';
 
-// Per-transaction JSONL capture (brief §4) — the source of p95 latency, success/
+// Per-transaction JSONL capture — the source of p95 latency, success/
 // failure counts and failure classes (orchestration/collect.py).
 //
 // Env GLEIPNIR_TXLOG_DIR (set by the orchestrator per round); absent → every
@@ -10,18 +10,18 @@
 // taken from Caliper's own TxStatus (GetTimeCreate/GetTimeFinal/IsCommitted/
 // GetErrMsg) — the same timestamps behind Caliper's min/avg/max.
 //
-// `timed: false` marks a write the round performed but did NOT measure — the
+// `timed: false` marks a write the round performed but did not measure — the
 // untimed pool seeding of the pool workloads and verify.js. Those writes still
 // land in the block store, so collect.py counts them in the storage
 // bytes-per-event denominator while excluding them from every latency /
-// throughput / failure statistic. Without them an `ops` run divides the bytes
-// of ~10x more ledger events by the timed count alone (finding: storage
-// inflated 5-10x).
+// throughput / failure statistic. Without them an `ops` run would divide the
+// bytes of ~10x more ledger events by the timed count alone, inflating storage
+// per event 5-10x.
 //
 // Never on the timed path: log() only pushes a string; a short unref'd timer
 // flushes with fs.appendFile (threadpool, off the event loop). Whatever is
 // still pending at exit is written synchronously from the 'exit' hook.
-// ponytail: a chunk in flight during a hard process.exit() may be lost; the
+// Known limit: a chunk in flight during a hard process.exit() may be lost; the
 // worker normally exits naturally (pending fs ops keep the loop alive).
 
 const fs = require('node:fs');

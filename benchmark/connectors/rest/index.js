@@ -12,8 +12,8 @@
 // getWorkerIndex/prepareWorkerArguments/sendRequests(fan-out); we implement
 // _sendSingleRequest, returning a timed TxStatus (start + final time + status).
 //
-// IMPORTANT: latency/throughput from this connector reflect the BFF path (enqueue
-// or verify), NOT the raw peer-gateway path — keep its results labelled distinctly
+// Latency/throughput from this connector reflect the BFF path (enqueue or
+// verify), not the raw peer-gateway path; keep its results labelled distinctly
 // from the fabric-connector results (see benchmark/README.md).
 
 const { ConnectorBase, TxStatus } = require('@hyperledger/caliper-core');
@@ -63,7 +63,7 @@ class RestGatewayConnector extends ConnectorBase {
     }
     // No extra time stamping here: SetStatusSuccess()/SetStatusFail() record
     // time_final themselves; TxStatus has no SetTimeFinal in Caliper 0.6.0
-    // (calling it threw and aborted every rest-mode round — audit F45).
+    // (calling it throws and aborts every rest-mode round).
     return status;
   }
 }

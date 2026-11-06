@@ -14,7 +14,7 @@ describe('trailRows — collapsing consecutive views', () => {
     ev('ACCESS', 'lena', 'view', '2026-09-24T08:04:00Z'), // other actor: new run
     ev('ACCESS', 'lena', 'download', '2026-09-24T08:05:00Z'), // not a view: never folded
     ev('ACCESS', 'lena', 'view', '2026-09-24T08:06:00Z'),
-    ev('REMOVE', 'lena', null, '2026-09-24T08:07:00Z'), // pre-M26 tag
+    ev('REMOVE', 'lena', null, '2026-09-24T08:07:00Z'), // older tag for DISPOSE
   ];
 
   it('folds same-actor view runs into one row with a count and the first → last range', () => {

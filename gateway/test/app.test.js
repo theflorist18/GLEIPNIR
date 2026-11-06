@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const http = require('node:http');
 const { createApp } = require('../src/app');
 
-// One off-chain receipt (M26) for ev-1: the CoC event plus its Merkle witness.
+// One off-chain receipt for ev-1: the CoC event plus its Merkle witness.
 const RECEIPT = {
   eventId: 'evt-1', evidenceId: 'ev-1',
   event: { eventId: 'evt-1', evidenceId: 'ev-1', caseId: 'shared', op: 'CREATE', actor: 'alice', detail: { storage: { protocol: 'file' } }, ts: 't1' },
@@ -67,7 +67,7 @@ test('healthz is unauthenticated', async (t) => {
   assert.equal((await r.json()).ok, true);
 });
 
-test('N2: gateway origin sets security headers on every response (incl. healthz)', async (t) => {
+test('gateway origin sets security headers on every response (incl. healthz)', async (t) => {
   const { deps } = fakeDeps();
   const { server, url } = await listen(createApp(deps));
   t.after(() => server.close());
@@ -78,7 +78,7 @@ test('N2: gateway origin sets security headers on every response (incl. healthz)
   assert.match(r.headers.get('content-security-policy') || '', /default-src 'none'/);
 });
 
-test('N6: malformed JSON body -> generic 400, no stack/paths leaked', async (t) => {
+test('malformed JSON body -> generic 400, no stack/paths leaked', async (t) => {
   const { deps } = fakeDeps();
   const { server, url } = await listen(createApp(deps));
   t.after(() => server.close());
@@ -146,7 +146,7 @@ test('POST /api/v1/evidence (anchoring) enqueues instead of submitting -> 202', 
   assert.equal(submits.length, 0);
 });
 
-// ---- M26: off-chain reads on the batched variants + anchor-root reads ----
+// ---- off-chain reads on the batched variants + anchor-root reads ----
 
 const AUTH = { authorization: 'Bearer secret-token' };
 

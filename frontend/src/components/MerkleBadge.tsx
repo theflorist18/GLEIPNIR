@@ -5,7 +5,7 @@ import { Icon } from './ui/Icon';
 // 'notyet' (receipt/root not anchored yet — NOT a tamper signal), or a result.
 export type VerifyState = 'na' | 'pending' | 'notyet' | VerifyResult;
 
-// Promoted from demo.tsx (M14); Claude Design states: VERIFIED (success),
+// Visual states: VERIFIED (success),
 // MISMATCH (the only red), not yet anchored (warning clock), N/A (dashed).
 export function MerkleBadge({ state }: { state: VerifyState }) {
   if (state === 'na') {
@@ -28,7 +28,7 @@ export function MerkleBadge({ state }: { state: VerifyState }) {
   );
 }
 
-// Inline verify-steps breakdown (web-popover-verify-steps): fetch event →
+// Inline verify-steps breakdown: fetch event →
 // recompute Merkle branch → compare root, when the verifier reports them.
 export function VerifySteps({ steps }: { steps: NonNullable<VerifyResult['steps']> }) {
   const parts = [steps.fetchMs, steps.recomputeMs, steps.compareRootMs].map((v) => v ?? 0);

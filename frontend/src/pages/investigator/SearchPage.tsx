@@ -5,7 +5,7 @@ import { useErr } from '../../hooks/useErr';
 import type { CaseSummary, EvidenceIndexRow } from '../../types';
 import { StatusPill } from '../../components/ui/Chips';
 
-// Search (M15 surface, M14 page): evidence-index and case search, both scoped
+// Search: evidence-index and case search, both scoped
 // server-side to the caller's participant cases (admins see everything).
 export function SearchPage() {
   const { client } = useAuth();

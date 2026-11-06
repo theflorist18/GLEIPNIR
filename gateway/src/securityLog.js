@@ -1,15 +1,15 @@
 'use strict';
 
-// Security-event logging (OWASP A09 / N4). Emits ONE structured stdout line per
+// Security-event logging (OWASP A09). Emits one structured stderr line per
 // security-relevant event — authentication failures, authorization denials, and
 // login lockouts — so an operator can see attacks that the on-chain audit trail
-// (which records only SUCCESSFUL evidence writes) never captures.
+// (which records only successful evidence writes) never captures.
 //
 // Design constraints:
-//   - Only FAILURES are logged. A successful request emits nothing, so the
+//   - Only failures are logged. A successful request emits nothing, so the
 //     service-token benchmark hot path is untouched (no flood, no added latency).
-//   - NEVER log a token, password, session id, or evidence content. Only the
-//     event type, a coarse reason, the actor's USERNAME (already public), method,
+//   - Never log a token, password, session id, or evidence content. Only the
+//     event type, a coarse reason, the actor's username (already public), method,
 //     path, and client ip.
 //   - No request-logging middleware; this is a targeted security channel.
 //

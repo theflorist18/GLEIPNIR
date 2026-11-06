@@ -1,9 +1,9 @@
 'use strict';
 
-// read workload — the READ-ONLY operations reported in the separate reads
-// table (brief §1 Q7): fn = ReadEvidence | GetAuditTrail. Reads cut no block,
-// so their latency is not comparable with write latency — never mix the tables.
-// Each worker seeds a pool of `pool` evidence items (NOT timed, via lib/pool),
+// read workload — the read-only operations reported in the separate reads
+// table: fn = ReadEvidence | GetAuditTrail. Reads cut no block, so their
+// latency is not comparable with write latency; never mix the tables.
+// Each worker seeds a pool of `pool` evidence items (untimed, via lib/pool),
 // then reads them round-robin:
 //   fabric -> evaluate (readOnly: true) on the evidence's channel;
 //   rest   -> GET /api/v1/evidence/:id | /api/v1/evidence/:id/audit
@@ -29,7 +29,7 @@ class ReadWorkload extends WorkloadModuleBase {
     if (!FNS[this.fn]) throw new Error(`read: fn must be ReadEvidence | GetAuditTrail (got ${this.fn})`);
     this.pool = await seedPool(this, roundArguments.pool || 50);
     if (this.mode === 'rest') {
-      // The anchored variants answer reads from the OFF-CHAIN trail, which only
+      // The anchored variants answer reads from the off-chain trail, which only
       // exists once a batch closes (receipts carry the event copy). Seeds still
       // in an open queue would read back as 404 / [] and this round would
       // measure misses, not reads. Untimed, like the seeding itself.

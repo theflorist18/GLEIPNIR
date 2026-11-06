@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# GLEIPNIR bring-up (docs/CONTRACTS.md §8, §11; ARCHITECTURE §4.6, milestone 1).
+# GLEIPNIR bring-up (docs/CONTRACTS.md §8, §11; docs/ARCHITECTURE.md §4.6).
 #   up.sh --variant <standard|anchoring|parallel|parallel-anchored> [--channels N] [--skip-crypto]
 #
 # Maps variant -> compose profiles, enrolls crypto, starts the network, creates
@@ -70,9 +70,9 @@ wait_healthz 9447 peer0-org2
 [ "${VARIANT}" = "parallel-anchored" ] && wait_healthz 9448 peer0-anchor
 
 # 3) channels + chaincode
-# Chaincode install is ORG-scoped, not channel-scoped: package + install happen
-# exactly once (audit F46 — a per-channel re-install exits non-zero under
-# set -e and killed `--channels N>1` bring-up at the second channel).
+# Chaincode install is org-scoped, not channel-scoped: package + install happen
+# exactly once. A per-channel re-install exits non-zero, which under set -e
+# would abort a `--channels N>1` bring-up at the second channel.
 APP_PKGID=""
 install_app_chaincode() {
   local pkg_host="ccaas-evidence"

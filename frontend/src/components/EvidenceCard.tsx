@@ -1,8 +1,8 @@
 import type { EvidenceRecord } from '../types';
 import { StatusPill } from './ui/Chips';
 
-// Promoted verbatim from demo.tsx (M14): the lockb0x Codex-Entry presentation
-// idiom — a signed "evidence card". Pure presentational.
+// Evidence record as an "evidence card" — the presentation idiom of the
+// lockb0x Codex Entry (conceptual reference only). Pure presentational.
 export function EvidenceCard({ record }: { record: EvidenceRecord | null }) {
   if (!record) return <p className="muted">No evidence loaded.</p>;
   return (

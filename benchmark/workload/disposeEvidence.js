@@ -1,8 +1,8 @@
 'use strict';
 
 // disposeEvidence workload — per-operation round (ops breakdown), every variant.
-// DisposeEvidence is a terminal STATUS TRANSITION (ACTIVE -> DISPOSED); nothing
-// is deleted. Each worker seeds a pool of `pool` evidence items (NOT timed, via
+// DisposeEvidence is a terminal status transition (ACTIVE -> DISPOSED); nothing
+// is deleted. Each worker seeds a pool of `pool` evidence items (untimed, via
 // lib/pool) and disposes each exactly once — a second dispose would be a
 // chaincode error, not a measurement — so txNumber must be <= pool × workers.
 // roundArguments: { mode, label, variant?, channels?, pool, payloadBytes? }.

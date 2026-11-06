@@ -57,7 +57,8 @@ function createRestBody(id, subject, caseId, payload) {
   };
 }
 
-// A fabric-connector request (peer-gateway binding shape, digest Q3).
+// A fabric-connector request (peer-gateway binding shape,
+// docs/research/caliper-0.6.0.md Q3).
 function fabricRequest(fn, args, channel) {
   const req = {
     contractId: 'evidence',
@@ -100,10 +101,10 @@ function restReq(item, caseId) {
 
 const opRequest = (mode, item, caseId) => (mode === 'rest' ? restReq : fabricReq)(item, caseId);
 
-// Round-robin case selector for multi-channel Parallel cells (audit F6/F24).
+// Round-robin case selector for multi-channel Parallel cells.
 // With roundArguments.channels = C, successive calls yield case-001..case-00C
 // cyclically (offset by workerIndex so workers do not synchronise on one case),
-// spreading the round's offered load across ALL provisioned case channels.
+// spreading the round's offered load across all provisioned case channels.
 // Returns null when `channels` is absent, or when `variant` names a
 // single-channel variant (standard / anchoring never carry a caseId — for
 // anchoring a caseId would silently change the batch scope from `shared`).

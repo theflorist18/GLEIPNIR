@@ -1,8 +1,8 @@
-# Build stage — pinned Node 20.19 (CLAUDE.md target runtime).
+# Build stage — Node pinned to 20.19, the project's target runtime.
 FROM node:20.19-alpine AS build
 WORKDIR /app
 # Lockfile-exact install; no npm-install fallback — a silent re-resolve would
-# defeat the commit-cited reproducibility story (audit F69).
+# break reproducing a build from its commit.
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .

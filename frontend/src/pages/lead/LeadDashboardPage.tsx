@@ -16,9 +16,9 @@ interface CaseTeam {
   participants: CaseParticipant[];
 }
 
-// M24: the Lead Investigator's home — the cases they lead, evidence flagged
-// for their attention, and the team's recent activity (merged M20 feeds).
-// M25 adds the team roster with add/remove, per led case.
+// The Lead Investigator's home — the cases they lead, evidence flagged
+// for their attention, the team's recent activity (merged per-case feeds),
+// and the team roster with add/remove, per led case.
 // Admins can reach it by URL; the sidebar links it for leads.
 export function LeadDashboardPage() {
   const { client, user } = useAuth();
@@ -61,7 +61,7 @@ export function LeadDashboardPage() {
 
       await loadTeams(mine);
 
-      // The roster picker (M25): active users, admin-or-lead-visible.
+      // The roster picker: active users, admin-or-lead-visible.
       try { setDirectory(await client.listUserDirectory()); } catch { setDirectory([]); }
 
       // Recent team activity: merge the per-case feeds, newest first.

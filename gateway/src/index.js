@@ -10,7 +10,7 @@ const { makeUsersStore } = require('./users');
 const { makeSessions } = require('./sessions');
 const { makeBatcherClient, makeReceiptsClient, makeCaseRegistryClient, makeEvidenceStoreClient } = require('./serviceClients');
 
-// User-session auth (M12) is additive: if the auth data dir is unavailable
+// User-session auth is optional: if the auth data dir is unavailable
 // (e.g. a container without the gateway-auth-data volume), the gateway still
 // starts and the service-token path works — only user login is disabled.
 async function makeAuthStores(env) {

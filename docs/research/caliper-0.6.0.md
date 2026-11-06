@@ -9,9 +9,9 @@ All facts verified against PRIMARY sources: the versioned docs site
 **v0.6.0**, `hyperledger-caliper/caliper-benchmarks` at tag **v0.6.0**, and the npm registry.
 Each item is tagged **VERIFIED** (with source) or **UNVERIFIED**.
 
-> **Headline correction to CLAUDE.md / ARCHITECTURE.md.** Those docs say Caliper "binds SUT
+> **Headline correction to docs/ARCHITECTURE.md.** It says Caliper "binds SUT
 > `fabric:2.5`". That string *does work* in 0.6.0, but only because the bind config **aliases**
-> `2.4`, `2.5`, `3`, and `fabric-gateway` to the **same** peer-gateway binding. The docs page only
+> `2.4`, `2.5`, `3`, and `fabric-gateway` to the **same** peer-gateway binding. The Caliper docs page only
 > lists `1.4`, `2.2`, `fabric-gateway` as "supported". There is **no separate `fabric:2.5`
 > connector** — `fabric:2.5` == `fabric:fabric-gateway` == the peer-gateway connector using
 > `@hyperledger/fabric-gateway@1.5.0`. Use `fabric:2.5` or `fabric:fabric-gateway`; they are byte-identical bindings. See Q1.
@@ -81,7 +81,7 @@ npx caliper bind --caliper-bind-sut fabric:2.5
 Notes:
 - There is **no `--caliper-bind-sdk`** for the Fabric gateway binding (SDK version is fixed by the
   SUT key). `--caliper-bind-sdk` existed for older multi-SDK bindings; not needed here.
-- Record the exact string used in `benchmark/README.md` (CLAUDE.md §Stale-knowledge traps). Use
+- Record the exact string used in `benchmark/README.md` (binding strings changed across Caliper releases). Use
   `fabric:fabric-gateway` (or `fabric:2.5`).
 
 ### Launch commands **[VERIFIED]**
@@ -235,7 +235,7 @@ Property support summary:
 - `timeout` / `orderer`: **1.4 binding only** — do not use with GLEIPNIR's gateway binding.
 
 For GLEIPNIR's create/transfer/access/verify workloads: use `readOnly:false` for
-`CreateEvidence`/`TransferCustody`/`AccessLog`/`DisposeEvidence` (M26 rename); `readOnly:true` for
+`CreateEvidence`/`TransferCustody`/`AccessLog`/`DisposeEvidence`; `readOnly:true` for
 `ReadEvidence`/`GetAuditTrail`. For the Parallel variant, per-case channel is selected either by a
 per-channel network config **or** by the `channel:` request field.
 Source: `https://hyperledger-caliper.github.io/caliper/0.6.0/concepts/workload-module/` and `.../connectors/fabric-config/`

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# GLEIPNIR smoke test (milestone 4) — Standard variant end-to-end via the gateway
-# REST API: create -> transfer -> access x2 -> audit-trail asserts 4 events ->
-# dispose (status transition) -> head status DISPOSED -> a further transfer must FAIL. Exits nonzero on any assertion failure.
-# Labelled 'smoke' — functional correctness only, never a scalability datapoint.
+# GLEIPNIR smoke test: Standard variant end-to-end via the gateway REST API:
+# create -> transfer -> access x2 -> audit trail has 4 events -> dispose (status
+# transition) -> head status DISPOSED -> a further transfer must fail.
+# Exits nonzero on any assertion failure.
+# Labelled 'smoke': functional correctness only, never a scalability datapoint.
 #
 # Prereq: gateway up (up.sh --variant standard); curl + jq on PATH.
 set -euo pipefail

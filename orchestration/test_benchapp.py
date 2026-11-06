@@ -40,7 +40,7 @@ def sweeps_setter():
         assert B.set_sweeps_value(edited, path, old) == text, path               # round trip: byte-identical
     tagged = B.set_sweeps_value(text, "baseline.batch_size", 100, tag="set from e1 2026-09-25")
     assert B.baseline_provenance(tagged, "baseline.batch_size") == "set from e1 2026-09-25"
-    assert B.baseline_provenance(text, "baseline.batch_size").startswith("PLACEHOLDER")
+    assert B.baseline_provenance(text, "baseline.batch_size").startswith(("PLACEHOLDER", "set "))   # before / after E1
     for bad, exc in (("baseline.nope", KeyError), ("nope", KeyError)):
         try:
             B.set_sweeps_value(text, bad, 1)
@@ -154,7 +154,7 @@ def help_coverage():
     tabs = ["Settings & Baselines", "E0 initial test", "E1 batch size", "E2 channels", "E3 main", "Custom test",
             "History & results"]
     assert all(t in H.TAB_HELP for t in tabs)
-    banned = ("optimal", "system channel", "lockb0x")   # CLAUDE.md terminology bans
+    banned = ("optimal", "system channel", "lockb0x")   # project terminology (docs/ARCHITECTURE.md): never these
     for text in [*H.FIELD_HELP.values(), *(d for _, d in H.TAB_HELP.values()), *H.COLUMN_HELP.values(),
                  *H.BUTTON_HELP.values(), *H.MODE_HELP.values(), *H.CUSTOM_HELP.values()]:
         t = text.lower().replace("never 'optimal'", "")   # the one allowed mention: the rule itself

@@ -1,5 +1,5 @@
-// Icons from the same-origin sprite (public/icons/sprite.svg, Claude Design
-// handoff): currentColor symbols, so an icon takes the colour of its text.
+// Icons from the same-origin sprite (public/icons/sprite.svg):
+// currentColor symbols, so an icon takes the colour of its text.
 // Always decorative — the accessible name comes from the surrounding label.
 export type IconName =
   | 'nav-ingest' | 'nav-cases' | 'nav-search' | 'nav-lead-dashboard' | 'nav-users' | 'nav-case-admin'
@@ -17,9 +17,8 @@ export function Icon({ name, size = 16, className }: { name: IconName; size?: nu
   );
 }
 
-// PLACEHOLDER mark — direction A ("1a") from the Claude Design boards, used
-// until the authors pick the brand (no brand exports / favicon until then).
-// One file to swap. The crossing is drawn by over-painting in var(--ground),
+// Placeholder brand mark until a final brand is chosen; this is the one place
+// to swap it. The crossing is drawn by over-painting in var(--ground),
 // which the container sets to its own background colour.
 export function BrandMark({ size }: { size: number }) {
   const tail = 'M18.9 17.4C19.6 16.3 19.93 15.2 19.93 14.06C19.93 11 17.9 8.97 16 9';

@@ -6,7 +6,7 @@ import { applyTheme, storedTheme, type Theme } from '../../lib/theme';
 import { Avatar } from '../ui/Chips';
 import { BrandMark, Icon } from '../ui/Icon';
 
-// Top bar (Claude Design screen 02): the horizontal lockup linking home, and
+// Top bar: the horizontal lockup linking home, and
 // a user menu (disclosure, not an ARIA menu) with the identity, the theme
 // choice and Sign out.
 export function TopBar() {

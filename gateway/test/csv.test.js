@@ -23,7 +23,7 @@ test('toCsv: header-only for zero rows', () => {
   assert.equal(toCsv(['x'], []), '"x"\r\n');
 });
 
-// S10: spreadsheet formula-injection neutralisation. A cell whose value begins
+// Spreadsheet formula-injection neutralisation. A cell whose value begins
 // = + - @ TAB or CR is a formula in Excel/Sheets; it must be prefixed with a
 // single quote so it renders literally, while ordinary cells are unchanged.
 test('toCsv: neutralises leading formula characters', () => {

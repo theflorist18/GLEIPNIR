@@ -1,4 +1,4 @@
-/* GLEIPNIR tokens.css — generated from tokens.json, trimmed to the tokens the SPA uses. Hybrid: Organic surfaces + type, brief §2 data colours.
+/* GLEIPNIR tokens.css — generated from tokens.json, trimmed to the tokens the SPA uses. Organic surfaces + type, with separate op/status data colours.
    Self-hosted only (CSP default-src 'self'): place woff2 files in /fonts. */
 @font-face{font-family:"Figtree";src:url("/fonts/Figtree-Variable.woff2") format("woff2");font-weight:400 700;font-display:swap}
 @font-face{font-family:"Caprasimo";src:url("/fonts/Caprasimo-Regular.woff2") format("woff2");font-weight:400;font-display:swap}

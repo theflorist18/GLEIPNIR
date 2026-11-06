@@ -1,12 +1,13 @@
 'use strict';
 
 // accessLog workload — per-operation round (ops breakdown), every variant.
-// AccessLog is a WRITE custody event (brief §1 Q7). Each worker seeds a pool of
-// `pool` evidence items (NOT timed, via lib/pool) and then logs an access to
-// the pooled items round-robin, always on the case the evidence lives on.
+// AccessLog is a write custody event, so it belongs in the writes table. Each
+// worker seeds a pool of `pool` evidence items (untimed, via lib/pool) and then
+// logs an access to the pooled items round-robin, always on the case the
+// evidence lives on.
 //
-// Legacy `scenario: shared` (the Stage-1 zero-MVCC-conflict gate: every worker
-// hits ONE evidenceId) is kept: it needs no pool and proves the composite
+// `scenario: shared` (the zero-MVCC-conflict check: every worker hits one
+// evidenceId) needs no pool and shows that the composite
 // (evidenceId, sortKey) design produces zero MVCC_READ_CONFLICT under
 // concurrency. roundArguments: { mode, label, variant?, channels?, pool,
 // payloadBytes?, scenario?, sharedEvidenceId? }.

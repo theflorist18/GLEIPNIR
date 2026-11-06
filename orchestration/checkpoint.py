@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""GLEIPNIR storage checkpoint (docs/CONTRACTS.md §11; ARCHITECTURE §4.7).
+"""GLEIPNIR storage checkpoint (docs/CONTRACTS.md §11; docs/ARCHITECTURE.md §4.7).
 
 `checkpoint.py <runId> --label <t>` runs `du -sb` inside each peer container against
 the block store (per channel) and the GoLevelDB world-state dir, plus the
 receipt-store's data volume (the off-chain witness is the cost side of the
-anchoring storage trade-off — audit F9), and appends JSONL rows to
+anchoring storage trade-off), and appends JSONL rows to
 benchmark/results/<runId>/checkpoints.jsonl.
 
-Row schema (uniform keys; audit F70 — world state is ONE GoLevelDB dir shared by
+Row schema (uniform keys; world state is one GoLevelDB dir shared by
 all of a peer's channels, so it is emitted once per container, never per channel):
   {runId, label, tsUtc, container, channel, blockstoreBytes, stateBytes, receiptBytes}
   - per-channel row:   channel set, blockstoreBytes set, others null
@@ -82,13 +82,13 @@ def main():
         channels = list_channels(container)
         if not channels:
             continue
-        # World state once per container (shared GoLevelDB dir — F70).
+        # World state once per container (one GoLevelDB dir shared by all channels).
         rows.append(row(container, state=du_bytes(container, f"{LEDGER}/stateLeveldb")))
         for channel in channels:
             rows.append(row(container, channel=channel,
                             blockstore=du_bytes(container, f"{LEDGER}/chains/chains/{channel}")))
 
-    # Receipt store (anchoring variants; container absent otherwise — F9).
+    # Receipt store (anchored variants only; the container is absent otherwise).
     receipt_bytes = du_bytes("gleipnir-receipt-store", "/data")
     if receipt_bytes is not None:
         rows.append(row("gleipnir-receipt-store", receipts=receipt_bytes))

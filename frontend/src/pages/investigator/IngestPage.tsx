@@ -89,9 +89,9 @@ export function suggestLabel(labels: Array<string | null | undefined>): string {
   return `ITEM-${String(max + 1).padStart(3, '0')}`;
 }
 
-// M22: the ingest wizard — the forensic successor of the M14 single form.
+// The four-step ingest wizard.
 // Bytes are hashed locally (WebCrypto, same RFC 6920 ni-URI as the gateway)
-// BEFORE upload, and the server's integrityProof is compared against the
+// before upload, and the server's integrityProof is compared against the
 // local hash after: an end-to-end integrity check the examiner can see.
 export function IngestPage() {
   const { client, user } = useAuth();

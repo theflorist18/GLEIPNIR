@@ -1,11 +1,11 @@
 // Typed client for the gateway public API (docs/CONTRACTS.md §6).
 //
 // Base URL is `/api/v1` (proxied to gateway:3000 by nginx in prod and by the
-// Vite dev server in dev — both preserve the path). Auth (M14): an opaque
+// Vite dev server in dev — both preserve the path). Auth: an opaque
 // session token from POST /auth/login, held by AuthContext; `onUnauthorized`
 // fires on any 401 so the app can drop a dead session and route to /login.
 //
-// This module is the ONLY place the SPA reaches the network. The frontend never
+// This module is the only place the SPA reaches the network. The frontend never
 // talks to Fabric directly — everything goes through the gateway BFF.
 
 import type {
@@ -96,7 +96,7 @@ export class GatewayClient {
     return { blob: await res.blob(), filename: match?.[1] || fallbackName };
   }
 
-  // ---- Scope B: chain of custody ----
+  // ---- Chain of custody ----
 
   transferCustody(id: string, req: TransferCustodyRequest) {
     return this.request<Record<string, unknown>>(
@@ -122,7 +122,7 @@ export class GatewayClient {
     return this.request<CoCEvent[]>('GET', `/evidence/${encodeURIComponent(id)}/audit`);
   }
 
-  // The verify chain is keyed by EVENT id, not evidence id (F33/F49): the
+  // The verify chain is keyed by event id, not evidence id: the
   // receipt store holds one witness per event. eventId comes from a write
   // response (every variant returns it).
   verifyEvidence(id: string, eventId: string): Promise<VerifyResult> {
@@ -132,7 +132,7 @@ export class GatewayClient {
     );
   }
 
-  // ---- Auth & users (M14) ----
+  // ---- Auth & users ----
 
   login(username: string, password: string): Promise<{ token: string; user: User }> {
     return this.request<{ token: string; user: User }>('POST', '/auth/login', { username, password });
@@ -162,12 +162,12 @@ export class GatewayClient {
     return this.request<User>('POST', `/admin/users/${encodeURIComponent(id)}/reset-password`, { password });
   }
 
-  /** M25: read-only roster picker (active users) — admin or lead sessions only. */
+  /** Read-only roster picker (active users) — admin or lead sessions only. */
   listUserDirectory(): Promise<User[]> {
     return this.request<User[]>('GET', '/users/directory');
   }
 
-  // ---- Cases (M14; proxied to case-registry, scoped server-side) ----
+  // ---- Cases (proxied to case-registry, scoped server-side) ----
 
   listCases(params?: { q?: string; status?: CaseStatus }): Promise<CaseSummary[]> {
     const qs = new URLSearchParams();
@@ -197,12 +197,12 @@ export class GatewayClient {
     return this.request<void>('DELETE', `/cases/${encodeURIComponent(caseId)}/participants/${encodeURIComponent(userId)}`);
   }
 
-  /** M25: change a participant's case role in place (admin-or-case-lead). */
+  /** Change a participant's case role in place (admin-or-case-lead). */
   updateParticipantRole(caseId: string, userId: string, roleInCase: CaseRole): Promise<CaseParticipant> {
     return this.request<CaseParticipant>('PATCH', `/cases/${encodeURIComponent(caseId)}/participants/${encodeURIComponent(userId)}`, { roleInCase });
   }
 
-  // ---- evidence categories (M19): per-case taxonomy, lead-managed ----
+  // ---- Evidence categories: per-case taxonomy, lead-managed ----
   listCategories(caseId: string): Promise<EvidenceCategory[]> {
     return this.request<EvidenceCategory[]>('GET', `/cases/${encodeURIComponent(caseId)}/categories`);
   }
@@ -223,7 +223,7 @@ export class GatewayClient {
     return this.request<void>('DELETE', `/cases/${encodeURIComponent(caseId)}/evidence/${encodeURIComponent(evidenceId)}`);
   }
 
-  // ---- Evidence library (M14) ----
+  // ---- Evidence library ----
 
   // Real file ingest: multipart POST — bytes go to the evidence-store; only
   // the ni-URI proof reaches the chain.
@@ -240,7 +240,7 @@ export class GatewayClient {
     return this.request<EvidenceIndexRow[]>('GET', `/evidence/search?${qs}`);
   }
 
-  // ---- collaboration (M20): examiner notes, flag, case activity ----
+  // ---- Collaboration: examiner notes, flag, case activity ----
   listNotes(evidenceId: string): Promise<EvidenceNote[]> {
     return this.request<EvidenceNote[]>('GET', `/evidence/${encodeURIComponent(evidenceId)}/notes`);
   }
@@ -259,7 +259,7 @@ export class GatewayClient {
     return this.request<CaseActivityEvent[]>('GET', `/cases/${encodeURIComponent(caseId)}/activity${qs}`);
   }
 
-  // ---- per-case CoC report (M24). Fetching it auto-logs one ACCESS per
+  // ---- Per-case CoC report. Fetching it auto-logs one ACCESS per
   // included evidence under the session username (server-side, synchronous).
   getCocReport(caseId: string): Promise<CocReport> {
     return this.request<CocReport>('GET', `/cases/${encodeURIComponent(caseId)}/coc-report`);

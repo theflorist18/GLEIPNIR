@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """GLEIPNIR report — tables (CSV + Markdown, UNITS in headers, mean ± SD over
-repetitions) and optional matplotlib charts per experiment (brief 2026-09-22 §9),
+repetitions) and optional matplotlib charts per experiment (docs/methodology/experiments.md §3),
 plus a per-round CSV export for Excel of EVERY experiment.
 
   report.py --exp e0|ramp|e1|e2|e3a|e3b|ops|cell [--out docs/results/<exp>] [--results <dir>]
@@ -8,7 +8,7 @@ plus a per-round CSV export for Excel of EVERY experiment.
 
 Always: benchmark/results/<exp>/<exp>-results.csv — one row per (run, round), every
 factor level, control and metric as its own numeric column with its unit in the
-header (column order follows the supervisor's table: send rate, throughput, latency
+header (column order: send rate, throughput, latency
 min/max/avg/p95, CPU, memory, success, failure, failure rate). UTF-8 with BOM so
 Excel opens it directly; --decimal-comma writes `;`-separated, comma-decimal CSV for
 an Excel whose regional settings use a decimal comma (e.g. Indonesian). The
@@ -40,7 +40,7 @@ EXPORT_EXPS = ["e0", "ramp", *EXPS, "cell"]            # per-round CSV export
 VARIANT_ORDER = ["standard", "anchoring", "parallel", "parallel-anchored"]
 SATURATION_RATIO = 0.9
 RAMP_MARGIN = 0.5             # suggested send rate <= this x the saturation point (a margin below the knee)
-# Baseline-selection thresholds — docs/methodology/experiments.md §4.1/§4.2 (confirm with D).
+# Baseline-selection thresholds (documented defaults) — docs/methodology/experiments.md §4.1/§4.2.
 PLATEAU_REL = 0.05            # §4.1 throughput AND on-chain bytes/event change to the next level <= 5 %
 AUDIT_BOUND = 1.5             # §4.1 audit time per case <= 1.5 x its value at the smallest level
 HEALTHY_TPS_RATIO = 0.95      # §4.2 throughput >= 0.95 x the previous level
@@ -52,7 +52,7 @@ X_LABEL = {"e1": "batch size (events)", "e2": "channels (n)", "e3a": "send rate 
            "ops": "operation"}
 FAILURE_CLASSES = ("MVCC_READ_CONFLICT", "ENDORSEMENT_POLICY_FAILURE", "TIMEOUT", "HTTP_4XX", "HTTP_5XX", "OTHER")
 
-# (key, header with unit, decimals) — column order follows the supervisor's result table:
+# (key, header with unit, decimals) — column order of the result tables:
 # send rate | throughput | latency (min, max, avg, p95) | CPU | memory | success | failure rate
 METRICS = [
     ("sendRateTps", "send rate (tx/s)", 0),
@@ -203,7 +203,7 @@ def num(v, dec=None, decimal_comma=False):
 
 
 def latency_cell(met):
-    """Markdown latency column, the call's format: avg (min–max), plus p95 (means over reps; SDs in the CSV)."""
+    """Markdown latency column: avg (min–max), plus p95 (means over reps; SDs in the CSV)."""
     avg, lo, hi, p95 = (met[k][0] for k in ("latencyAvgS", "latencyMinS", "latencyMaxS", "latencyP95S"))
     if avg is None:
         return "-"
@@ -227,8 +227,7 @@ def write_tables(exp, rows, out_dir, name, x_label, flags=None, per_round=False,
             sds = [num(r["metrics"][k][1] if r["metrics"][k][0] is not None else None, d, decimal_comma)
                    for k, _, d in metrics]
             w.writerow(base + means + ([flags.get((r["variant"], r["x"]), "")] if flags else []) + sds)
-    # Markdown: one table per variant (the supervisor's layout: X down the rows) and latency as ONE
-    # column, avg (min–max) + p95, per the 17 Sep call.
+    # Markdown: one table per variant (X down the rows) and latency as ONE column, avg (min–max) + p95.
     md_metrics = [m for m in metrics if m[0] not in LATENCY_KEYS]
     lat_at = next(i for i, m in enumerate(md_metrics) if m[0] == "cpuPct")
     md_headers = [x_label, "reps (n)"] + [h for _, h, _ in md_metrics[:lat_at]] + \
@@ -265,7 +264,7 @@ def _get(d, *path):
 
 
 # (header with unit, value(manifest, round, round_metrics)) — one CSV row per (run, round).
-# Metrics first in the supervisor's table order, then everything needed to filter/pivot in Excel.
+# Metrics first in the result-table order (METRICS), then everything needed to filter/pivot in Excel.
 EXPORT_COLUMNS = [
     ("experiment", lambda m, r, x: m.get("experiment")),
     ("variant", lambda m, r, x: m.get("variant")),
@@ -438,8 +437,8 @@ def charts(exp, rows, out_dir, x_label, saturation=None):
 
 
 # ---------------------------------------------------------------- baseline suggestions
-# Pure functions: they SUGGEST, the author decides (the desktop app writes a value into
-# sweeps.yaml only after an explicit confirm). "baseline", never "optimal".
+# Pure functions: they only suggest (the desktop app writes a value into sweeps.yaml only
+# after an explicit confirm). "baseline", never "optimal".
 
 def ramp_rows(manifest):
     """[(send rate, successful throughput, throughput / send rate, p95 ms)] per round of one ramp run."""
@@ -458,7 +457,7 @@ def ramp_suggestion(rows):
     Saturation = the first send rate whose throughput < 0.9 x send rate. The suggestion is the
     highest healthy rate at or below RAMP_MARGIN (half) of the saturation point (a margin, so E1/E2
     are not run at the knee); the highest healthy rate if there is none that low; None if nothing is
-    healthy. Margin and rule: confirm with D.
+    healthy. The margin and the rule are documented defaults (docs/methodology/experiments.md §4.3).
     """
     sat = next((rate for rate, _, ratio, _ in rows if ratio < SATURATION_RATIO), None)
     ok = [rate for rate, _, ratio, _ in rows if ratio >= SATURATION_RATIO and (sat is None or rate < sat)]
@@ -468,7 +467,7 @@ def ramp_suggestion(rows):
 
 def suggest_send_rate(manifests, grid=None, expected=VARIANT_ORDER):
     """§4.3 over the ramp runs (the NEWEST per variant). E1/E2/E3b run EVERY variant at one send rate,
-    so the suggestion is the minimum of the per-variant suggestions (confirm with D) — and none at all
+    so the suggestion is the minimum of the per-variant suggestions — and none at all
     until every expected variant has a ramp. The trimmed grid keeps every level up to the first one
     above the highest saturation point."""
     newest = {}
@@ -546,7 +545,7 @@ def suggest_batch_size(rows):
         notes.append("needs E1 results for BOTH anchored variants")
     missing = [v for v, lv in per.items() if lv is None]
     if missing:
-        notes.append("no plateau level for: " + ", ".join(missing) + " — extend batch_sizes or relax the rule (confirm with D)")
+        notes.append("no plateau level for: " + ", ".join(missing) + " — extend batch_sizes or relax the rule")
     levels = [lv for lv in per.values() if lv is not None]
     suggested = max(levels) if len(levels) == 2 else None
     return {"suggested": suggested, "perVariant": per, "disagree": len(set(levels)) > 1,
@@ -611,7 +610,7 @@ def build(exp, results_dir=RESULTS_DIR, out_dir=None, charts_on=True, decimal_co
             print(f"! results CSV not written ({e}) — close it in Excel and re-run")
     if exp == "ramp":
         out["suggestion"] = suggest_send_rate(manifests)
-        print(f"  suggested baseline.send_rate_tps = {out['suggestion']['suggested']} (confirm with D)")
+        print(f"  suggested baseline.send_rate_tps = {out['suggestion']['suggested']}")
     if exp not in EXPS:
         return out
     rows = aggregate(data_points(exp, manifests))
@@ -630,11 +629,11 @@ def build(exp, results_dir=RESULTS_DIR, out_dir=None, charts_on=True, decimal_co
             json.dump(sat, fh, indent=2)
     if exp == "e1":
         out["suggestion"] = suggest_batch_size(rows)
-        print(f"  suggested baseline.batch_size = {out['suggestion']['suggested']} (confirm with D)")
+        print(f"  suggested baseline.batch_size = {out['suggestion']['suggested']}")
     elif exp == "e2":
         out["suggestion"] = suggest_channels(rows, host_cores(manifests))
         print(f"  suggested baseline.channels = {out['suggestion']['channels']}, "
-              f"channels_max = {out['suggestion']['channelsMax']} (confirm with D)")
+              f"channels_max = {out['suggestion']['channelsMax']}")
     if charts_on:
         charts(exp, rows, out_dir, X_LABEL[exp], sat)
     return out

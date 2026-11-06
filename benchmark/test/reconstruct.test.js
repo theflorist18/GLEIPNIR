@@ -1,7 +1,7 @@
 'use strict';
 
 // audit/reconstruct.js against a tiny fake gateway (node:http) serving the
-// CONTRACTS §4 V2 three-leaf vectors: docs {"i":0},{"i":1},{"i":2}.
+// docs/CONTRACTS.md §4 V2 three-leaf vectors: docs {"i":0},{"i":1},{"i":2}.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');

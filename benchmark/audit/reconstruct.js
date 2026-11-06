@@ -1,8 +1,8 @@
 'use strict';
 
-// Audit reconstruction harness (brief §5) — AUDIT RECONSTRUCTION TIME, a
-// first-class metric: reconstruct and verify the full chain of custody of a
-// case, host-side, through the gateway only (never Fabric directly).
+// Audit reconstruction harness: measures audit reconstruction time, i.e. how
+// long it takes to reconstruct and verify the full chain of custody of a case,
+// host-side, through the gateway only (never Fabric directly).
 //
 //   node audit/reconstruct.js --variant V --trace <file> [--cases 5]
 //        [--gateway http://localhost:3000] [--out audit.json]       (token: GLEIPNIR_TOKEN)
@@ -15,7 +15,7 @@
 //     with `proof`; per event recompute leafHash(canonical(event)), fold the
 //     sibling path (audit/merkle.js — byte-identical to the services' copy),
 //     read the root once per (scopeId, batchId) via
-//     GET /api/v1/anchor-roots/:scopeId/:batchId (cached PER CASE: each case
+//     GET /api/v1/anchor-roots/:scopeId/:batchId (cached per case: each case
 //     pays its own root reads, so a case's time does not depend on which
 //     cases ran before it), compare.
 // One untimed pass over case 1's first evidence item (trail + root reads,
@@ -24,8 +24,8 @@
 // Output: { variant, method, traceHash, cases:[{caseId, dataCase, evidence,
 //   events, ms, verifiedEvents, failedEvents, rootReads}],
 //   summary:{msPerCase:{mean,sd,min,max}, msPerEvent, okRate} }.
-// ponytail: evidence items are fetched sequentially — that IS the definition
-// of "time to reconstruct one case"; parallelise only if the metric is redefined.
+// Evidence items are fetched sequentially: that is the definition of "time to
+// reconstruct one case". Parallelise only if the metric is redefined.
 
 const fs = require('node:fs');
 const { leafHash, computeRoot } = require('./merkle');

@@ -69,17 +69,17 @@ export interface TransferCustodyRequest {
   newCustodian: string;
   reason: string;
   actor?: string;
-  caseId?: string; // required by the gateway in parallel variants (audit F68)
+  caseId?: string; // required by the gateway in parallel variants
 }
 
 export interface AccessLogRequest {
   actor: string;
   action: string;
-  caseId?: string; // required by the gateway in parallel variants (audit F68)
+  caseId?: string; // required by the gateway in parallel variants
 }
 
-// ---- Evidence library (M14): auth, cases, evidence index ----
-// Wire shapes pinned by docs/CONTRACTS.md (M12/M13 additions).
+// ---- Evidence library: auth, cases, evidence index ----
+// Wire shapes pinned by docs/CONTRACTS.md §6.
 
 export type Role = 'admin' | 'lead' | 'investigator';
 
@@ -111,18 +111,18 @@ export interface CaseSummary {
   createdBy: string;
   createdAt: string;
   updatedAt: string;
-  /** The caller's own case role — present only on participant-scoped listings (M18). */
+  /** The caller's own case role — present only on participant-scoped listings. */
   myRoleInCase?: CaseRole;
 }
 
 export interface CaseDetail extends CaseSummary {
   participants: CaseParticipant[];
   evidence: EvidenceIndexRow[];
-  /** Per-case evidence taxonomy (M19), lead-managed. */
+  /** Per-case evidence taxonomy, lead-managed. */
   categories?: EvidenceCategory[];
 }
 
-/** Per-case evidence category (M19) — off-chain taxonomy, lead-managed. */
+/** Per-case evidence category — off-chain taxonomy, lead-managed. */
 export interface EvidenceCategory {
   id: string; // cat-<uuid>
   caseId: string;
@@ -144,20 +144,20 @@ export interface EvidenceIndexRow {
   uploadedAt: string | null;
   status: string;
   lastSyncedAt: string | null;
-  // M19 forensic metadata — off-chain only, never on the chain record.
+  // Forensic metadata — off-chain only, never on the chain record.
   label?: string | null;
   categoryId?: string | null;
   seizedAt?: string | null;
   acquisitionLocation?: string | null;
   handedOverBy?: string | null;
-  /** M20 triage flag (single, or null). */
+  /** Triage flag (single, or null). */
   flag?: EvidenceFlag;
 }
 
-/** M20: the one evidence triage flag (or null — unflagged). */
+/** The one evidence triage flag (or null — unflagged). */
 export type EvidenceFlag = 'HIGH_PRIORITY' | 'PROCESSED' | 'NEEDS_LEAD_REVIEW' | null;
 
-/** M20: examiner note — append-only, immutable through the API. */
+/** Examiner note — append-only, immutable through the API. */
 export interface EvidenceNote {
   id: string; // note-<uuid>
   evidenceId: string;
@@ -166,7 +166,7 @@ export interface EvidenceNote {
   createdAt: string;
 }
 
-/** M24: the per-case Chain-of-Custody report bundle (json format). */
+/** The per-case Chain-of-Custody report bundle (json format). */
 export interface CocReport {
   caseId: string;
   name: string;
@@ -177,11 +177,11 @@ export interface CocReport {
   evidence: Array<EvidenceIndexRow & { category: string | null; auditTrail: CoCEvent[] }>;
 }
 
-/** One entry of the case activity feed (M20; persistent audit log since M25b). */
+/** One entry of the case activity feed (rows of the persistent audit log). */
 export interface CaseActivityEvent {
   /** Audit-log row id (evt-<uuid>). */
   id?: string;
-  /** M25b event type (lib/activity.ts enumerates them). Render defensively: the enum can grow. */
+  /** Event type (frontend/src/lib/activity.ts enumerates them). Render defensively: the enum can grow. */
   type: string;
   ts: string;
   actor?: string;

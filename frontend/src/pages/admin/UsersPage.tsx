@@ -9,7 +9,7 @@ import type { Role, User } from '../../types';
 
 const ROLE_TONE: Record<Role, BadgeTone> = { admin: 'accent', lead: 'warn', investigator: 'muted' };
 
-// User administration (M14, admin-only route; M21 modal refresh). Users are
+// User administration (admin-only route). Users are
 // deactivated, never deleted — audit-trail actors must keep resolving to a
 // real username.
 export function UsersPage() {

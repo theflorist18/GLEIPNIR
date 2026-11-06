@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# GLEIPNIR ledger-only reset between benchmark runs (supervisor brief 2026-09-22 §9).
+# GLEIPNIR ledger-only reset between benchmark runs (one run = one network
+# lifetime, docs/methodology/experiments.md §5).
 #   GLEIPNIR_ALLOW_LEDGER_WIPE=1 reset-network.sh --variant V --channels C
 #
 # Fresh ledgers are required for storage measurement and independent repetitions.
-# This removes ONLY the ledger/witness volumes listed below, then re-runs up.sh
-# with the existing crypto (--skip-crypto). It NEVER removes gateway-auth-data,
+# This removes only the ledger/witness volumes listed below, then re-runs up.sh
+# with the existing crypto (--skip-crypto). It never removes gateway-auth-data,
 # case-registry-data, evidence-blob-data (the evidence library), CA state, or
-# network/organizations. Refuses to run without the env flag — a wipe destroyed
-# hand-built library data once (memory: never wipe without asking).
+# network/organizations. Refuses to run without the env flag: the wipe cannot be
+# undone and also erases the on-ledger custody trails of manually entered test
+# data (back up first with backup-volumes.sh).
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh

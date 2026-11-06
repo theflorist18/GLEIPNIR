@@ -2,8 +2,8 @@
 
 // GLEIPNIR API gateway (BFF). Builds the Express app from injected deps so the
 // routing is testable without a live Fabric. Endpoints per docs/CONTRACTS.md §6;
-// variant routing per §9. Auth (M12): static service bearer token (unchanged,
-// non-production) PLUS user sessions with server-enforced roles — see auth.js.
+// variant routing per §9. Auth: a static service bearer token (non-production)
+// plus user sessions with server-enforced roles — see auth.js.
 
 const express = require('express');
 const crypto = require('node:crypto');
@@ -22,9 +22,9 @@ const nowIso = () => new Date().toISOString();
 // here so a bad id fails before any bytes are stored.
 const SAFE_EVIDENCE_ID = /^[A-Za-z0-9._:-]+$/;
 
-// Content-type the SPA can trust for its render decision (S20). The declared
+// Content-type the SPA can trust for its render decision. The declared
 // multipart mimetype is attacker-controlled, and the only type the SPA renders
-// as ACTIVE content is application/pdf (in a sandboxed iframe, S11). Verify the
+// as active content is application/pdf (in a sandboxed iframe). Verify the
 // PDF magic bytes; a non-PDF masquerading as application/pdf is stored as
 // application/octet-stream so it downloads instead of framing. Defence-in-depth
 // behind the sandbox; other previewable types (image/video/audio/text) render
@@ -108,7 +108,7 @@ function createApp(deps) {
     ...config,
   };
   const routerDeps = { fabric, batcher, receipts, defaultChannel: cfg.defaultChannel };
-  // Security-event log (N4). Tests may inject a fake sink via deps.securityLog.
+  // Security-event log. Tests may inject a fake sink via deps.securityLog.
   const securityLog = deps.securityLog || makeSecurityLog();
   const auth = makeAuth({ token: cfg.token, sessions, users, securityLog });
 
@@ -116,20 +116,19 @@ function createApp(deps) {
   // The gateway sits behind exactly one reverse proxy (the nginx container that
   // serves the SPA and proxies /api). Trust that single hop so req.ip is the
   // real client address rather than nginx's, which the login throttle keys on
-  // (without this the per-(ip,username) throttle collapsed to per-username and
-  // any client could lock out a named account — S7). Trust ONE hop, not `true`:
+  // (without it the per-(ip,username) throttle collapses to per-username and
+  // any client could lock out a named account). Trust one hop, not `true`:
   // a client reaching :3000 directly can still spoof X-Forwarded-For, an
   // accepted local-dev residual.
   app.set('trust proxy', 1);
 
-  // Security headers on the gateway's own origin (OWASP A05 / N2). The SPA edge
-  // (frontend/nginx.conf) already sets these for :8081, but the gateway is
-  // published on :3000 and anything reaching it directly (bypassing nginx) got
-  // bare responses. This API only ever returns JSON, so the policy can be
-  // maximally strict: deny framing, forbid content-type sniffing, leak no
-  // referrer, and a `default-src 'none'` CSP (the API loads no resources).
-  // Response-side only — the service-token auth path and every response body
-  // are byte-unchanged, so the benchmark is unaffected.
+  // Security headers on the gateway's own origin (OWASP A05). The SPA edge
+  // (frontend/nginx.conf) sets these for :8081, but the gateway is also
+  // published on :3000 and is reachable directly, bypassing nginx. This API only
+  // returns JSON, so the policy is maximally strict: deny framing, forbid
+  // content-type sniffing, leak no referrer, and a `default-src 'none'` CSP (the
+  // API loads no resources). Headers only: response bodies and the service-token
+  // path are unchanged, so benchmark traffic is unaffected.
   app.use((_req, res, next) => {
     res.set('X-Content-Type-Options', 'nosniff');
     res.set('X-Frame-Options', 'DENY');
@@ -144,7 +143,7 @@ function createApp(deps) {
   app.get('/healthz', (_req, res) => res.json({ ok: true, variant: cfg.variant }));
 
   // Login is the only other unauthenticated route: it exchanges credentials for
-  // an opaque session token (M12). Deployments without a users store (e.g.
+  // an opaque session token. Deployments without a users store (e.g.
   // benchmark-only test harnesses that inject just fabric/batcher) answer 503
   // here; the service-token path below is unaffected.
   //
@@ -180,9 +179,8 @@ function createApp(deps) {
     return res.json({ token: sessions.create(user.id), user });
   });
 
-  // Everything below authenticates as either the static service token
-  // (unchanged contract: guards every route, internal ones included) or a user
-  // session (docs/CONTRACTS.md §6).
+  // Everything below authenticates as either the static service token (guards
+  // every route, internal ones included) or a user session (docs/CONTRACTS.md §6).
   app.use(auth.authenticate);
   const requireAdmin = auth.requireRole('admin');
   const requireAdminOrLead = auth.requireRole('admin', 'lead');
@@ -194,19 +192,20 @@ function createApp(deps) {
     if (isNotFound(err)) return res.status(404).json({ error: err.message });
     // Unmapped failure: the raw message can carry internal hostnames and
     // absolute container paths (e.g. an fs ENOENT from evidence-store). Log it
-    // server-side; return a generic body to the client (S15).
+    // server-side; return a generic body to the client.
     console.error('[gateway] unhandled error:', (err && err.stack) || err);
     return res.status(502).json({ error: 'upstream error' });
   });
 
   const V = cfg.variant;
 
-  // Actor attribution (M12): under a user session the audit actor is ALWAYS the
+  // Actor attribution: under a user session the audit actor is always the
   // authenticated username — client-supplied actor/identity.subject fields are
   // ignored for logging. The service-token path keeps client-supplied actors
   // (Caliper workloads and smoke scripts need them for load-test realism).
-  // actorFor(req) with no fallback is the M25b case-registry audit actor:
-  // undefined (header omitted) on the service-token path.
+  // actorFor(req) with no fallback is the case-registry audit actor
+  // (X-Gleipnir-Actor): undefined, so the header is omitted, on the
+  // service-token path.
   const actorFor = (req, fallback) => (req.principal && req.principal.kind === 'user' ? req.principal.username : fallback);
 
   // ---- auth/session ----
@@ -236,29 +235,29 @@ function createApp(deps) {
   app.post('/api/v1/admin/users/:id/reset-password', requireAdmin, wrap(async (req, res) => {
     const updated = await users.resetPassword(req.params.id, (req.body || {}).password);
     // A reset is the response to a suspected compromise — kill the target's
-    // live sessions so a stolen token cannot outlive it (S5).
+    // live sessions so a stolen token cannot outlive it.
     sessions.destroyForUser(req.params.id);
     res.json(updated);
   }));
 
-  // ---- user directory (M25): a read-only roster picker for team management.
-  // Admin-or-lead SESSIONS only — the service token and investigator sessions
-  // get 403. Exposes active users in the public shape (no password hashes);
-  // deliberately no management surface, that stays under /admin/users.
+  // ---- user directory: a read-only roster picker for team management.
+  // Admin-or-lead sessions only — the service token and investigator sessions
+  // get 403. Exposes active users in the public shape (no password hashes); no
+  // management surface, that stays under /admin/users.
   app.get('/api/v1/users/directory', requireAdminOrLead, wrap(async (req, res) => {
     const active = users.list().filter((u) => u.active);
-    // M25b: admin accounts sit above a lead's access scope — leads never see
-    // them in the roster picker (admins bypass roster authz anyway; only the
-    // M18 blob-content rule makes an admin roster entry meaningful, and that
-    // grant stays an admin-to-admin decision).
+    // Admin accounts sit above a lead's access scope, so leads never see them
+    // in the roster picker. Admins bypass roster authz anyway; only the
+    // participant-only blob-content rule makes an admin roster entry
+    // meaningful, and that grant stays an admin-to-admin decision.
     res.json(req.principal.role === 'admin' ? active : active.filter((u) => u.role !== 'admin'));
   }));
 
-  // ---- evidence library (M13c): case proxying, search, per-evidence authz ----
+  // ---- evidence library: case proxying, search, per-evidence authz ----
   const proxy = (res, out) => res.status(out.status).json(out.body);
   const isNonAdminUser = (req) => req.principal && req.principal.kind === 'user' && req.principal.role !== 'admin';
 
-  // Per-session rate limit for the auto-logging read routes (S17). view /
+  // Per-session rate limit for the auto-logging read routes. view /
   // download / export / coc-report each append an on-chain AccessLog, so an
   // authenticated user can otherwise drive unbounded ledger writes from GETs.
   // Fixed window per username; the service token is exempt (it never auto-logs
@@ -278,8 +277,8 @@ function createApp(deps) {
 
   // Per-evidence access gate. The service token always bypasses (the
   // benchmark/infra path; case scoping is a library concern). Admins bypass
-  // for metadata and trails, but NOT for blob content ({content:true}, M18 —
-  // CONTRACTS §12-8): downloading evidence bytes requires being a participant
+  // for metadata and trails, but not for blob content ({content:true},
+  // docs/CONTRACTS.md §12-8): downloading evidence bytes requires being a participant
   // of the evidence's case, even for admins. User identity in case-registry
   // is the immutable username.
   async function ensureEvidenceAccess(req, evidenceId, { write = false, dispose = false, content = false } = {}) {
@@ -295,7 +294,7 @@ function createApp(deps) {
       securityLog.authzDenied(req, `evidence_access:${body.reason || 'denied'}`);
       throw new RequestError(body.reason === 'unknown-evidence' ? 404 : 403, 'access to this evidence is denied');
     }
-    // M25 role ladder: viewer = view/export, contributor = +write events and
+    // Case role ladder: viewer = view/export, contributor = +write events and
     // annotations, lead = +dispose. The 'uploader' pseudo-role (own
     // uncategorized evidence — no case, so no lead exists) keeps both.
     if (dispose && !['lead', 'uploader'].includes(body.roleInCase)) {
@@ -308,8 +307,8 @@ function createApp(deps) {
     }
   }
 
-  // Case-management gate (M18): sessions only — the service token was never
-  // sufficient for case management (CONTRACTS §6) and stays that way. Admins
+  // Case-management gate: sessions only — the service token is not sufficient
+  // for case management (docs/CONTRACTS.md §6). Admins
   // manage any case; a lead manages only cases where they hold the case-lead
   // role. Non-participants get 404 so case ids can't be probed. Returns the
   // case detail for lead callers (admins return null — no fetch needed).
@@ -334,7 +333,7 @@ function createApp(deps) {
     // user demoted from global 'lead' to 'investigator' may still hold a stale
     // case-lead participant row, and users are deactivated-not-deleted, so
     // demotion is a real operation. auth.js re-fetches the user per request, so
-    // req.principal.role is live (S4). Admins already returned above.
+    // req.principal.role is live. Admins already returned above.
     if (req.principal.role !== 'lead') throw new RequestError(403, 'the lead role is required');
     return out.body;
   }
@@ -354,9 +353,9 @@ function createApp(deps) {
     return leads.length === 1 && leads[0].userId === userId;
   };
 
-  // Synchronous auto-AccessLog (M13c): a user-session view/download/export
-  // succeeds ONLY if the on-chain log write succeeds — "no doubt of tampering"
-  // beats latency. NEVER fires for the service token: Caliper read workloads
+  // Synchronous auto-AccessLog: a user-session view/download/export succeeds
+  // only if the on-chain log write succeeds — a complete trail beats latency.
+  // Never fires for the service token: Caliper read workloads
   // must not mutate the ledger.
   async function logAccess(req, evidenceId, action, caseId) {
     if (!req.principal || req.principal.kind !== 'user') return;
@@ -376,7 +375,7 @@ function createApp(deps) {
   app.get('/api/v1/cases/search', listCases);
   app.get('/api/v1/cases', listCases);
 
-  // Case creation is admin-or-lead (M18). A lead who creates a case owns it:
+  // Case creation is admin-or-lead. A lead who creates a case owns it:
   // they land on the roster as case 'lead'. Admins may hand the case to a
   // lead at creation via leadUserId (must reference an active 'lead' user).
   app.post('/api/v1/cases', requireAdminOrLead, wrap(async (req, res) => {
@@ -423,9 +422,9 @@ function createApp(deps) {
       return res.status(404).json({ error: 'no such user' });
     }
     // Admins sit above a lead's scope: a lead may not pull an admin account
-    // onto their roster. The directory picker already hides admins from leads
-    // (M25b); mirror it on the write path, since participation is exactly what
-    // unlocks the §12-8 admin blob-content check. Admins may add anyone (S14).
+    // onto their roster. The directory picker already hides admins from leads;
+    // mirror it on the write path, since participation is what unlocks the
+    // admin blob-content check (docs/CONTRACTS.md §12-8). Admins may add anyone.
     if (req.principal.role !== 'admin' && target && target.role === 'admin') {
       return res.status(403).json({ error: 'cannot add an admin account to a case roster' });
     }
@@ -438,7 +437,7 @@ function createApp(deps) {
     }));
   }));
 
-  // M25: change a participant's role in place. Same policy as grant/revoke:
+  // Change a participant's role in place. Same policy as grant/revoke:
   // admin-or-case-lead caller, the case-lead role needs a global-lead target,
   // and a lead cannot demote the case's last lead (an admin may).
   app.patch('/api/v1/cases/:id/participants/:userId', wrap(async (req, res) => {
@@ -446,7 +445,7 @@ function createApp(deps) {
     const role = (req.body || {}).roleInCase;
     const target = users.getByUsername(req.params.userId);
     // A lead may not manage an admin's roster entry (mirror of the add-path
-    // rule; admins are above a lead's scope — S14).
+    // rule; admins are above a lead's scope).
     if (req.principal.role !== 'admin' && target && target.role === 'admin') {
       return res.status(403).json({ error: 'cannot manage an admin account on a case roster' });
     }
@@ -481,7 +480,7 @@ function createApp(deps) {
     proxy(res, await caseRegistry.request('DELETE', `/cases/${encodeURIComponent(req.params.id)}/evidence/${encodeURIComponent(req.params.evidenceId)}`, undefined, { actor: actorFor(req) }));
   }));
 
-  // ---- evidence categories (M19): per-case taxonomy. Reading follows case
+  // ---- evidence categories: per-case taxonomy. Reading follows case
   // visibility (participant-or-admin); managing is admin-or-case-lead.
   app.get('/api/v1/cases/:id/categories', wrap(async (req, res) => {
     const out = await visibleCase(req, req.params.id);
@@ -508,7 +507,7 @@ function createApp(deps) {
     proxy(res, await caseRegistry.request('DELETE', `/cases/${encodeURIComponent(req.params.id)}/categories/${encodeURIComponent(req.params.categoryId)}`, undefined, { actor: actorFor(req) }));
   }));
 
-  // Library-owned evidence metadata (M19): label, category, seizure context.
+  // Library-owned evidence metadata: label, category, seizure context.
   // Write-gated like the on-chain ops; metadata only, so the admin bypass
   // applies. Nothing here touches the chain — the head record is immutable.
   app.patch('/api/v1/evidence/:id/details', wrap(async (req, res) => {
@@ -520,8 +519,8 @@ function createApp(deps) {
     }, { actor: actorFor(req) }));
   }));
 
-  // ---- collaboration (M20): notes, flag, activity feed. Off-chain library
-  // metadata, NOT evidence content — none of these routes auto-AccessLog,
+  // ---- collaboration: notes, flag, activity feed. Off-chain library
+  // metadata, not evidence content — none of these routes auto-AccessLog,
   // and the CoC trail contract is untouched. Notes are immutable-by-API:
   // no update/delete routes exist anywhere in the stack.
   app.get('/api/v1/evidence/:id/notes', wrap(async (req, res) => {
@@ -546,7 +545,7 @@ function createApp(deps) {
     }, { actor: actorFor(req) }));
   }));
 
-  // ---- per-case Chain-of-Custody report (M24). Metadata + on-chain trails,
+  // ---- per-case Chain-of-Custody report. Metadata + on-chain trails,
   // no blob content — so the admin metadata bypass is legitimate here. For
   // user sessions each included evidence gets ONE synchronous auto-
   // AccessLog('coc-report') after assembly (same posture as /export: the
@@ -630,10 +629,10 @@ function createApp(deps) {
   }));
 
   // ---- writes ----
-  // Multipart ingest support (M13c). Engages ONLY for multipart/form-data —
-  // the JSON path below (payloadBase64 hash-then-discard) is what Caliper's
-  // REST connector and smoke-standard.sh use, and stays byte-identical.
-  // defParamCharset utf8 (B1): browsers send multipart filenames as UTF-8 (RFC
+  // Multipart ingest support. Engages only for multipart/form-data — the JSON
+  // path below (payloadBase64 hash-then-discard) is what Caliper's REST
+  // connector and smoke-standard.sh use, and is not affected by it.
+  // defParamCharset utf8: browsers send multipart filenames as UTF-8 (RFC
   // 7578); busboy's latin1 default turned "証拠.pdf" into mojibake. The name may
   // hold code points > 255, so serviceClients percent-encodes it for the
   // evidence-store header and it is served back via RFC 5987.
@@ -663,7 +662,7 @@ function createApp(deps) {
 
   // Multipart ingest: store bytes off-chain -> commit the Codex-Entry head
   // with the store's integrity proof -> register the read-model row. The
-  // library caseId NEVER reaches the chain (case linkage is off-chain only;
+  // library caseId never reaches the chain (case linkage is off-chain only;
   // the on-chain record is identical to a caseless create).
   async function libraryIngest(req, res) {
     const b = req.body || {};
@@ -675,8 +674,8 @@ function createApp(deps) {
     const caseId = b.caseId || null;
     if (caseId) await ensureCaseIngest(req, caseId);
 
-    // Validate the category BEFORE any write: a bad categoryId must fail the
-    // ingest cleanly, not after the append-only chain commit (M19).
+    // Validate the category before any write: a bad categoryId must fail the
+    // ingest cleanly, not after the append-only chain commit.
     if (b.categoryId) {
       if (!caseId) throw new RequestError(400, 'categoryId requires a caseId');
       const cd = await caseRegistry.request('GET', `/cases/${encodeURIComponent(caseId)}`);
@@ -714,7 +713,7 @@ function createApp(deps) {
     } catch (err) {
       // The blob is orphaned if the chain write failed — best-effort cleanup.
       // Pass the rollback token from the PUT so evidence-store permits the delete
-      // (S9: DELETE is rollback-only).
+      // (its DELETE is rollback-only).
       await evidenceStore.del(evidenceId, stored.body && stored.body.rollbackToken).then(() => {}, () => {});
       throw err;
     }
@@ -723,11 +722,11 @@ function createApp(deps) {
       evidenceId,
       caseId: caseId || undefined,
       originalFilename,
-      mimeType: contentType, // sniffed-safe type (S20) — drives the SPA render decision
+      mimeType: contentType, // sniffed-safe type — drives the SPA render decision
       sizeBytes: req.file.size,
       integrityProof,
       uploadedBy: actor,
-      // M19 forensic metadata — off-chain only; buildHead/buildEvent above
+      // Forensic metadata — off-chain only; buildHead/buildEvent above
       // are untouched, so the on-chain record stays byte-identical.
       label: b.label, categoryId: b.categoryId, seizedAt: b.seizedAt,
       acquisitionLocation: b.acquisitionLocation, handedOverBy: b.handedOverBy,
@@ -771,7 +770,7 @@ function createApp(deps) {
     res.status(r.status).json(r.body);
   }));
 
-  // DisposeEvidence (M26): a terminal status transition, never a deletion —
+  // DisposeEvidence: a terminal status transition, never a deletion —
   // the head and its audit trail stay on the ledger. DELETE is kept as the
   // HTTP verb for API stability.
   app.delete('/api/v1/evidence/:id', wrap(async (req, res) => {
@@ -787,7 +786,7 @@ function createApp(deps) {
     res.status(r.status).json(r.body);
   }));
 
-  // ---- reads (direct variants: evaluate; batched variants: off-chain trail, M26) ----
+  // ---- reads (direct variants: evaluate; batched variants: off-chain trail) ----
   // Under a user session every evidence read is (a) authz-gated per case and
   // (b) view/download/export auto-append a synchronous AccessLog event.
   app.get('/api/v1/evidence/:id', limitAutoLog, wrap(async (req, res) => {
@@ -801,7 +800,7 @@ function createApp(deps) {
   // fetches record + trail together, and logging trail reads would grow the
   // trail on every render of the very page that displays it.
   // ?proofs=1 (batched variants only; ignored elsewhere) attaches each event's
-  // Merkle witness for host-side audit reconstruction (M26).
+  // Merkle witness for host-side audit reconstruction.
   app.get('/api/v1/evidence/:id/audit', wrap(async (req, res) => {
     await ensureEvidenceAccess(req, req.params.id);
     const withProofs = req.query.proofs === '1' || req.query.proofs === 'true';
@@ -809,7 +808,7 @@ function createApp(deps) {
     res.type('application/json').send(out);
   }));
 
-  // Blob CONTENT is participant-only (M18): unlike view/audit/export, the
+  // Blob content is participant-only: unlike view/audit/export, the
   // admin bypass does not apply here — {content:true} sends admins through
   // the same case-participation check as everyone else.
   app.get('/api/v1/evidence/:id/download', limitAutoLog, wrap(async (req, res) => {
@@ -854,7 +853,7 @@ function createApp(deps) {
     res.status(resp.status).json(body);
   }));
 
-  // Anchor-root read for audit reconstruction (M26): any authenticated
+  // Anchor-root read for audit reconstruction: any authenticated
   // principal. Anchoring keeps its roots on coc-main; Parallel-Anchored keeps
   // them on the anchor channel, reachable only through the anchor-client (the
   // sole holder of that identity) — proxied verbatim, status included. The
@@ -874,12 +873,12 @@ function createApp(deps) {
   }));
 
   // ---- internal: anchor-root sink for the Anchoring variant (coc-main) ----
-  // Service-principal only (S1). These routes commit/read Merkle roots on the
+  // Service-principal only. These routes commit/read Merkle roots on the
   // ledger and belong to the batcher + verification service, which use the
   // service token (docs/CONTRACTS.md §6). Global auth.authenticate alone would
   // admit any user session — an investigator could commit an arbitrary root or
   // squat a batchId to break verification of a genuine batch. requireService
-  // closes that without touching the frozen service-token semantics.
+  // closes that without changing the service-token semantics.
   app.post('/internal/anchor-root', auth.requireService, wrap(async (req, res) => {
     const { batchId, merkleRoot, meta } = req.body || {};
     if (!batchId || !merkleRoot) throw new RequestError(400, 'batchId and merkleRoot are required');
@@ -892,14 +891,13 @@ function createApp(deps) {
     res.type('application/json').send(out);
   }));
 
-  // Terminal error handler (OWASP A05/A09 / N6). Errors thrown in MIDDLEWARE
-  // before the route handlers — most notably a malformed or oversized JSON body
-  // rejected by express.json() — never reach the per-route wrap() sanitizer, so
-  // Express's built-in handler was returning a full HTML stack trace with
-  // internal container paths (/app/node_modules/...). S15 only covered wrap().
-  // Catch them here: keep the client-error status, but log any detail
-  // server-side and return a generic JSON body. Response-side only; the
-  // service-token path and success responses are unchanged.
+  // Terminal error handler (OWASP A05/A09). Errors thrown in middleware before
+  // the route handlers — most notably a malformed or oversized JSON body
+  // rejected by express.json() — never reach the per-route wrap() sanitizer,
+  // and Express's built-in handler would return an HTML stack trace with
+  // internal container paths (/app/node_modules/...). Keep the client-error
+  // status, log any detail server-side and return a generic JSON body.
+  // Success responses are unchanged.
   // eslint-disable-next-line no-unused-vars
   app.use((err, req, res, next) => {
     if (res.headersSent) return next(err);

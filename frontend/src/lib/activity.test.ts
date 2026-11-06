@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { activityLine, activityTone } from './activity';
 
-describe('activityLine (M25b audit log)', () => {
+describe('activityLine (case audit log)', () => {
   it('renders participant lifecycle with target + role detail', () => {
     expect(activityLine({ type: 'PARTICIPANT_ADDED', ts: 't', actor: 'lena', target: 'ivy', detail: { roleInCase: 'contributor' } }))
       .toBe('lena added ivy as contributor');

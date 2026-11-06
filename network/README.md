@@ -61,7 +61,7 @@ plus anchor-client, peer0-anchor, ccaas-evidence-anchor, ca-anchor.
 `gateway-auth-data`, `case-registry-data`, `evidence-blob-data`.
 `du` checkpoints target `…/ledgersData/chains/chains/<channel>` (block store),
 `…/ledgersData/stateLeveldb` (world state) and the receipt store's `/data`.
-`orchestration/reset-network.sh` (M26) removes ONLY the six ledger volumes + `receipt-data` +
+`orchestration/reset-network.sh` removes only the six ledger volumes + `receipt-data` +
 `verify-metrics` between runs and never the library volumes or `organizations/`.
 `.env` also carries the batcher's per-run `BATCH_SIZE` / `BATCH_FLUSH_MS` / `BATCH_EPOCH`
 (one batch-size grid for both anchored variants), written by `experiment.py`.

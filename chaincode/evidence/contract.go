@@ -10,7 +10,7 @@ import (
 // EvidenceContract deterministically persists chain-of-custody audit records
 // (and Merkle roots) to a channel's world state. It does nothing else: no
 // off-chain binaries, no payload hashing, no signing, no cross-channel writes
-// (ARCHITECTURE sect. 4.1).
+// (docs/ARCHITECTURE.md §4.1).
 type EvidenceContract struct {
 	contractapi.Contract
 }
@@ -39,7 +39,7 @@ func (c *EvidenceContract) CreateEvidence(ctx contractapi.TransactionContextInte
 	if err := json.Unmarshal([]byte(codexEntryJSON), &entry); err != nil {
 		return fmt.Errorf("invalid codex entry JSON: %w", err)
 	}
-	// Minimal Codex-Entry validation (ARCHITECTURE sect. 1a required fields).
+	// Minimal Codex-Entry validation (docs/ARCHITECTURE.md §1(a) required fields).
 	if entry.ID == "" || entry.Version == "" || entry.Storage == nil || entry.Identity == nil {
 		return fmt.Errorf("codex entry missing required field (id, version, storage, identity)")
 	}
@@ -53,9 +53,9 @@ func (c *EvidenceContract) CreateEvidence(ctx contractapi.TransactionContextInte
 }
 
 // TransferCustody documents a custody transfer while preserving integrity.
-// Custody is a chain, so head writes are serial per evidence; a concurrent
-// transfer of the SAME evidence conflicting via MVCC is the correct outcome and
-// must NOT be retried by the caller (ARCHITECTURE sect. 4.1).
+// Custody is a chain, so head writes are serial per evidence; an MVCC conflict
+// between concurrent transfers of the same evidence is the correct outcome and
+// is not retried.
 //
 // ISO/IEC 27037: Preservation.
 func (c *EvidenceContract) TransferCustody(ctx contractapi.TransactionContextInterface, evidenceId, newCustodian, reason string) error {
@@ -76,11 +76,11 @@ func (c *EvidenceContract) TransferCustody(ctx contractapi.TransactionContextInt
 
 // AccessLog records who accessed the evidence and what action was taken.
 //
-// It MUST NOT read or write the head key (the structural zero-conflict
-// guarantee, and the thesis gate): any head read here — even a "reject if
-// disposed" check — would reintroduce a conflict point under concurrent access.
-// So access is ALWAYS appended, even after DisposeEvidence; a post-disposal
-// access is deliberately recorded as an audit event rather than rejected.
+// It must not read or write the head key: that is what makes concurrent
+// access logging conflict-free. Any head read here, even a "reject if
+// disposed" check, would reintroduce a conflict point under concurrent access.
+// So access is always appended, even after DisposeEvidence; a post-disposal
+// access is recorded as an audit event rather than rejected.
 //
 // ISO/IEC 27037: Preservation (auditability of access).
 func (c *EvidenceContract) AccessLog(ctx contractapi.TransactionContextInterface, evidenceId, actor, action string) error {
@@ -222,8 +222,8 @@ func putJSON(ctx contractapi.TransactionContextInterface, key string, v any) err
 }
 
 // readActiveHead loads the head record and requires it to be ACTIVE. Used by
-// the serial mutating ops (TransferCustody, DisposeEvidence). AccessLog does NOT
-// use this — it never reads the head.
+// the serial mutating ops (TransferCustody, DisposeEvidence); AccessLog never
+// reads the head.
 func (c *EvidenceContract) readActiveHead(ctx contractapi.TransactionContextInterface, evidenceId string) (EvidenceHead, string, error) {
 	headBytes, headKey, err := getRequired(ctx, objectTypeHead, []string{evidenceId}, fmt.Sprintf("evidence %q", evidenceId))
 	if err != nil {

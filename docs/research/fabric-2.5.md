@@ -3,7 +3,7 @@
 Verified: 2026-07-03. Every fact below was checked against a primary source on that date
 (Docker Hub API, raw file contents of the `hyperledger/fabric` repo at tag `v2.5.16`/`v2.5.15`,
 `hyperledger/fabric-samples` at `main` commit `c9b221e4a940da386cfadc3498a88085298d44be`,
-the npm registry, and GitHub Releases). Nothing here is answered from memory.
+the npm registry, and GitHub Releases).
 
 ---
 
@@ -25,7 +25,7 @@ Source: Docker Hub API, e.g. `https://hub.docker.com/v2/repositories/hyperledger
 - **`hyperledger/fabric-ca:1.5.19` EXISTS.** Newest 1.5.x is **`1.5.21`** (pushed 2026-06-03). Full recent series: 1.5.19, 1.5.20, 1.5.21.
 - **WARNING:** `hyperledger/fabric-peer:latest` currently resolves to the same digest as **`3.1.5`** (Fabric 3.x). The fabric-samples test-network compose files use `image: hyperledger/fabric-peer:latest` — GLEIPNIR must replace every `:latest` with a pinned 2.5.x tag or it will silently run Fabric 3.1.
 
-**Exact strings to pin (matching the CLAUDE.md pinned stack, both verified to exist):**
+**Exact strings to pin (matching the pinned stack in docs/AS-BUILT.md §2, both verified to exist):**
 
 ```
 hyperledger/fabric-peer:2.5.15

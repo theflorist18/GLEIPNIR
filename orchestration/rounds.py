@@ -1,13 +1,13 @@
 """GLEIPNIR round renderer — the ONLY source of Caliper benchconfigs and network
-configs, rendered from benchmark/sweeps.yaml (docs/CONTRACTS.md §10, §11;
-supervisor brief 2026-09-22 §9). A library, no CLI: experiment.py renders every
+configs, rendered from benchmark/sweeps.yaml (docs/CONTRACTS.md §10, §11).
+A library, no CLI: experiment.py renders every
 config per run into the run dir (nothing generated is committed).
 
 Library use (experiment.py): `render_round(...)` returns one benchconfig dict
 (one round + the docker resource monitor block); `network_config(variant, C)`
 picks the network config and `render_parallel_network(C)` renders the parallel
 one; `smoke_rounds` / `ops_rounds` / `trace_round` build round specs.
-Round-argument NAMES are binding (brief §4): the workloads read
+Round-argument names are binding (docs/CONTRACTS.md §10): the workloads read
 `mode`, `label`, `channels`, `trace`, `slice`, `sliceSize`, `variant`, `pool`,
 `payloadBytes`, `fn`, `seedCount`.
 
@@ -64,7 +64,7 @@ def mode_for(variant):
 
 
 def channels_for(variant, channels):
-    """Code-enforced: Standard and Anchoring are single-channel (brief §1 Q2)."""
+    """Code-enforced: Standard and Anchoring are single-channel (docs/CONTRACTS.md §12-13)."""
     return int(channels) if variant in MULTI_CHANNEL_VARIANTS else 1
 
 
@@ -112,7 +112,7 @@ def smoke_rounds(sweeps, variant):
               {"pool": pool, "payloadBytes": payload}),
     ]
     if variant == "standard":
-        # Stage-1 gate in miniature: every worker appends to ONE evidence; the
+        # Zero-MVCC-conflict check in miniature: every worker appends to ONE evidence; the
         # (evidenceId, counter) sub-key design must yield zero MVCC conflicts.
         rounds.append(_spec("smoke-access-shared-gate", "accessLog.js", s["cases"] * s["logs_per_case_min"], tps,
                             {"scenario": "shared", "sharedEvidenceId": "ev-shared-gate", "payloadBytes": payload}))

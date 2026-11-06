@@ -1,6 +1,6 @@
 'use strict';
 
-// trace workload — replays slice k of THIS worker's pre-generated sequence
+// trace workload — replays slice k of this worker's pre-generated sequence
 // (trace/generate.js). The mixed-workload round used by E1/E2/E3: the same
 // transaction sequence is replayed against every variant; only the write path
 // differs (`mode`). roundArguments: { mode, label, variant, trace: <abs path>,

@@ -5,7 +5,7 @@ import { useErr } from '../../hooks/useErr';
 import type { CaseDetail, CaseStatus, CaseSummary } from '../../types';
 import { StatusPill } from '../../components/ui/Chips';
 
-// Case administration (M14, admin-only route): the all-cases list, status
+// Case administration (admin-only route): the all-cases list, status
 // change, categorize/uncategorize evidence. Admins create cases from
 // MyCasesPage and manage rosters in CaseDetailPage's Team section.
 export function CasesAdminPage() {

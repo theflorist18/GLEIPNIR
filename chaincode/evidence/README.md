@@ -45,12 +45,12 @@ These annotations live as comments on the four ops in `contract.go`; keep them o
   unique per tx, and commit-ordered — **without a shared counter key**.
 - **Anchor root** `("root", [scopeId, batchId])`, `scopeId = meta.caseId || "shared"`.
 
-**Why `AccessLog` never reads or writes the head:** any head access — even a "reject if
-disposed" guard — would reintroduce a read-write conflict point, so concurrent access
+**Why `AccessLog` never reads or writes the head:** any head access, even a "reject if
+disposed" guard, would reintroduce a read-write conflict point, so concurrent access
 logging to the same evidence would hit `MVCC_READ_CONFLICT`. Instead every access is
-appended under its own distinct event key. Conflict avoidance is **structural, not a retry
-loop**. A consequence, by design: an access logged *after* `DisposeEvidence` is recorded as
-an audit event rather than rejected (auditability over gatekeeping).
+appended under its own distinct event key: conflict avoidance is structural, not a retry
+loop. As a consequence, an access logged *after* `DisposeEvidence` is recorded as an audit
+event rather than rejected (auditability over gatekeeping).
 
 ## Endorsement policies (constant across all runs; applied at commit, docs/CONTRACTS.md §3)
 
@@ -85,12 +85,12 @@ docker run --rm -v "$PWD":/src -w /src golang:1.25.5 go test ./... -v
 `contract_test.go` uses an in-memory `ChaincodeStubInterface` stub (faithful composite-key
 encoding) and covers create/read, duplicate rejection, transfer, the concurrent-access
 distinct-key gate, terminal disposition (`TestDisposeIsTerminal`), audit ordering, and
-anchor-root scoping. All pass.
+anchor-root scoping.
 
-## Versioning note (M26 rename `RemoveEvidence` → `DisposeEvidence`)
+## Versioning note
 
-`CC_VERSION` stays `1.0`. The chaincode runs as ccaas, so the rebuilt binary is served
-under the same package id — no new package/approve/commit cycle — and the git SHA the
-thesis cites pins which code was deployed. Ledgers written before the rename carry
-`op: "REMOVE"` / `status: "REMOVED"` rows; the library treats those as equivalent to
-`DISPOSE` / `DISPOSED` when it reads them back, but this chaincode never writes them again.
+`CC_VERSION` is `1.0`. The chaincode runs as ccaas, so a rebuilt binary is served under
+the same package id (no new package/approve/commit cycle); the git SHA pins which code was
+deployed. Older ledgers may carry `op: "REMOVE"` / `status: "REMOVED"` rows from before
+`RemoveEvidence` became `DisposeEvidence`; the library reads those as `DISPOSE` /
+`DISPOSED`, and this chaincode never writes them.

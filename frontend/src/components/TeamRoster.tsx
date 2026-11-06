@@ -4,7 +4,7 @@ import type { CaseParticipant, CaseRole, User } from '../types';
 import { Badge } from './ui/Badge';
 import { Modal } from './ui/Modal';
 
-// M25 case-team roster, shared by CaseDetailPage (Team section) and
+// Case-team roster, shared by CaseDetailPage (Team section) and
 // LeadDashboardPage (My team): the participant list with in-place role change
 // and remove, plus the add-member modal fed by the user directory.
 export function RosterList({ participants, manage, label, onRole, onRemove }: {

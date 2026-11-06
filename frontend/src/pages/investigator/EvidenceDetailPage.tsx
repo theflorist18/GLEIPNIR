@@ -15,13 +15,13 @@ import { Icon } from '../../components/ui/Icon';
 import { CopyButton, StatusPill } from '../../components/ui/Chips';
 import type { CaseDetail, CoCEvent, EvidenceFlag, EvidenceIndexRow, EvidenceNote, EvidenceRecord, Op } from '../../types';
 
-// Evidence detail (M14; M23 tabbed refresh): Overview / Chain of Custody /
-// Examiner Notes. Opening this page performs an on-chain read, which the
+// Evidence detail: Overview / Chain of Custody / Examiner Notes tabs.
+// Opening this page performs an on-chain read, which the
 // gateway auto-logs as ACCESS(view) under the signed-in username — the trail
-// includes it. Blob download is participant-only since M18: the button is
+// includes it. Blob download is participant-only: the button is
 // hidden for admins outside the case (the server enforces it regardless).
 
-// M25: which simple file types the browser can render inline. Anything else
+// Which simple file types the browser can render inline. Anything else
 // stays download-only. Text previews are capped so a huge log file cannot
 // freeze the page.
 export type PreviewKind = 'image' | 'video' | 'audio' | 'pdf' | 'text' | null;
@@ -38,7 +38,7 @@ export function previewKind(mime: string | null | undefined): PreviewKind {
 const TEXT_PREVIEW_CAP = 64 * 1024; // bytes shown of a text file
 
 // Loads the blob through the same authed download route as the Download
-// button — so previewing IS a download and is auto-logged as one on the
+// button — so previewing is a download and is auto-logged as one on the
 // chain (the trail-only refresh after load makes that visible, not hidden,
 // and does not itself append a further access).
 function EvidencePreview({ id, mime, onLogged }: { id: string; mime: string | null; onLogged: () => Promise<void> | void }) {
@@ -88,12 +88,12 @@ function EvidencePreview({ id, mime, onLogged }: { id: string; mime: string | nu
       {kind === 'image' && url && <img className="preview-media" src={url} alt={id} />}
       {kind === 'video' && url && <video className="preview-media" controls src={url} />}
       {kind === 'audio' && url && <audio controls src={url} />}
-      {/* Sandbox the preview of attacker-supplied bytes (S11): an empty sandbox
+      {/* Sandbox the preview of attacker-supplied bytes: an empty sandbox
           blocks script execution, form submission and same-origin access, so a
           malicious PDF's OpenAction/JS or annotations cannot drive the app
-          origin or read the localStorage session. The built-in PDF viewer
+          origin or read the stored session token. The built-in PDF viewer
           renders fine without allow-scripts. Pairs with server-side content
-          sniffing (S20) so the mimeType that routes here can be trusted. */}
+          sniffing so the mimeType that routes here can be trusted. */}
       {kind === 'pdf' && url && <iframe className="preview-frame" src={url} title={`${id} PDF preview`} sandbox="" referrerPolicy="no-referrer" />}
       {kind === 'text' && text !== null && (
         <div>
@@ -266,11 +266,10 @@ export function EvidenceDetailPage() {
   );
 
   // Trail-only refresh. GET /evidence/:id/audit is never auto-logged, while
-  // GET /evidence/:id IS — so after an action that already wrote its own
-  // ACCESS (download/export/preview) we must re-read ONLY the trail. Calling
-  // the full refresh() there appended a second, spurious ACCESS('view') that
-  // no examiner performed, inflating the chain of custody with the UI's own
-  // bookkeeping. The head record is immutable and the index/roster do not
+  // GET /evidence/:id is — so after an action that already wrote its own
+  // ACCESS (download/export/preview) only the trail is re-read. The full
+  // refresh() would append a second, spurious ACCESS('view') that no
+  // examiner performed. The head record is immutable and the index/roster do not
   // change on a read, so the trail is the only thing that can have moved.
   const refreshTrail = useCallback(
     () => run(async () => { setEvents(await client.getAudit(evidenceId)); }),
@@ -280,7 +279,7 @@ export function EvidenceDetailPage() {
 
   useEffect(() => { void refresh(); }, [refresh]);
 
-  // Pending-vs-tamper must never be conflated (F49): a 404 missing-receipt /
+  // Pending and tamper are distinct states: a 404 missing-receipt /
   // missing-anchor-root means "batch not closed yet"; only a 200 ok:false
   // root-mismatch is the red badge.
   const doVerify = async (eventId: string): Promise<VerifyState> => {
@@ -324,7 +323,7 @@ export function EvidenceDetailPage() {
   const myCaseRole = caseDetail?.participants.find((p) => p.userId === user?.username)?.roleInCase;
   const isUploader = !indexRow?.caseId && indexRow?.uploadedBy === user?.username;
   const canWrite = user?.role === 'admin' || myCaseRole === 'contributor' || myCaseRole === 'lead' || isUploader;
-  // M18: blob content is participant-only even for admins — hide the button
+  // Blob content is participant-only even for admins — hide the button
   // when an admin is outside the case (the server 403s it anyway).
   const canDownload = user?.role !== 'admin' || Boolean(myCaseRole) || isUploader;
   const category = (caseDetail?.categories ?? []).find((c) => c.id === indexRow?.categoryId)?.name;

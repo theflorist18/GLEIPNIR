@@ -1,7 +1,7 @@
 'use strict';
 
 // Thin HTTP clients to the gateway's off-chain services: merkle-batcher,
-// receipt-store, and the two library services (M13c) case-registry and
+// receipt-store, and the two evidence-library services, case-registry and
 // evidence-store. Injected into createApp so every route is unit-testable
 // offline with fakes. The library services authenticate the gateway with the
 // shared X-Gleipnir-Internal-Token header — end-user authz decisions stay in
@@ -29,7 +29,7 @@ function makeBatcherClient(batcherUrl) {
   };
 }
 
-// receipt-store per-evidence index (M26): the READ path of the batched
+// receipt-store per-evidence index: the read path of the batched
 // variants, whose audit events never land on the app channel as records — a
 // trail is reassembled from the receipts (each carries the CoC `event` it
 // witnesses).
@@ -45,7 +45,7 @@ function makeReceiptsClient(receiptStoreUrl) {
 function makeCaseRegistryClient(baseUrl, internalToken) {
   // Generic pass-through: the gateway's proxy routes translate/forward the
   // registry's own status codes, so this returns {status, body} instead of
-  // throwing on non-2xx. opts.actor (M25b) carries the session-attributed
+  // throwing on non-2xx. opts.actor carries the session-attributed
   // username to the registry's case audit log via X-Gleipnir-Actor.
   async function request(method, path, body, opts) {
     const actor = opts && opts.actor;
@@ -76,9 +76,9 @@ function makeEvidenceStoreClient(baseUrl, internalToken) {
         ...headers,
         'content-type': 'application/octet-stream',
         ...(contentType ? { 'x-content-type': contentType } : {}),
-        // Percent-encode: the recovered filename may hold non-latin1 code
+        // Percent-encode: the filename may hold non-latin1 code
         // points (e.g. CJK/emoji), which are illegal in an HTTP header value
-        // and would otherwise throw when the request is built (B1). evidence-
+        // and would otherwise throw when the request is built. evidence-
         // store percent-decodes it back.
         ...(originalFilename ? { 'x-original-filename': encodeURIComponent(originalFilename) } : {}),
       },
@@ -95,7 +95,7 @@ function makeEvidenceStoreClient(baseUrl, internalToken) {
   }
 
   // rollbackToken (from the blob's PUT response) is required by evidence-store's
-  // DELETE (S9, rollback-only). Orphan cleanup has it from the just-completed PUT.
+  // DELETE, which is rollback-only. Orphan cleanup has it from the just-completed PUT.
   async function del(evidenceId, rollbackToken) {
     const resp = await fetch(`${baseUrl}/blobs/${encodeURIComponent(evidenceId)}`, {
       method: 'DELETE',

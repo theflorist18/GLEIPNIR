@@ -5,7 +5,7 @@ Tabs: Settings & Baselines · E0 initial test · E1 batch size · E2 channels ·
 History & results. Every experiment value is an input box bound to benchmark/sweeps.yaml (saved in
 place, comments kept — the thesis cites that file's git SHA); the E-tabs Preview / Run / Resume the
 matching `experiment.py --exp` plan inside WSL, with live progress and per-round results in the
-supervisor's table columns; History lists every run and exports CSV for Excel (+ tables and charts).
+results-table columns (LIVE_COLS); History lists every run and exports CSV for Excel (+ tables and charts).
 
 Every run resets the ledger, which erases the manual-test custody trails — so a run first backs up
 all gleipnir_* volumes (backups/<timestamp>/), and [Restore my test data] puts them back. Baselines
@@ -138,7 +138,7 @@ def heading_tips(tree, texts):
 
 
 def image(name):
-    """PhotoImage for orchestration/icons/<name>.png (the Claude Design desktop icons), None if missing."""
+    """PhotoImage for orchestration/icons/<name>.png (the desktop icon set), None if missing."""
     if name not in _IMAGES:
         path = os.path.join(ICON_DIR, f"{name}.png")
         _IMAGES[name] = tk.PhotoImage(file=path) if os.path.exists(path) else None
@@ -189,7 +189,7 @@ def set_chip(label, text, icon_name, style):
 
 
 def keep_awake(on):
-    """Stop Windows from sleeping mid-campaign (a laptop shutdown once cost a campaign 10 % of its runs)."""
+    """Stop Windows from sleeping mid-campaign (a sleep mid-run fails the run in progress)."""
     try:
         import ctypes
         ctypes.windll.kernel32.SetThreadExecutionState(0x80000000 | (0x00000001 if on else 0))
@@ -507,7 +507,7 @@ class App:
         self.e3_reps = self.reps_box(f, 3, 0)
         self.actions(f, lambda: BC.experiment_args(self.e3_mode.get(), variants=self.pick(self.e3_vars),
                                                    reps=num(self.e3_reps)), 4,
-                     note="Supervisor gate: the variable table + three flowcharts go to D before E3 runs.")
+                     note="Runs at the baselines above: set them from E0, E1 and E2 first.")
 
     def tab_custom(self):
         f = self.tab("Custom test")
@@ -597,7 +597,7 @@ class App:
         self.h_canvas.pack(fill="both", expand=True)
 
     def results_tree(self, parent, cols, run_col=False):
-        """Per-round results in the supervisor's columns. run_col: the first column is the tree column, so
+        """Per-round results table (configured send rate, then the measured metrics). run_col: the first column is the tree column, so
         each row can carry its variant marker."""
         first, rest = (cols[0], cols[1:]) if run_col else (None, cols)
         tree = ttk.Treeview(parent, columns=[c for c, _ in rest], show="tree headings" if run_col else "headings")
@@ -714,7 +714,7 @@ class App:
             fill(tree, [(v, p["saturation"] or "not reached", p["suggested"]) for v, p in s["perVariant"].items()],
                  variant_first=True)
             verdict.set(f"suggested baseline send rate = {s['suggested']} tx/s (the lowest variant's suggestion, "
-                        f"since E1/E2/E3b run every variant at it — confirm with D) · trimmed grid "
+                        f"since E1/E2/E3b run every variant at it) · trimmed grid "
                         f"{s['trimmedGrid']}" + ("".join(f" · {n}" for n in s["notes"])))
             if s["suggested"]:
                 ibutton(buttons, f"Use {s['suggested']} tx/s as baseline…", "use-baseline",
@@ -732,7 +732,7 @@ class App:
                          "✓" if e["qualifies"] else "") for e in s["evidence"]], ok_col=9, variant_first=True)
             verdict.set(f"suggested baseline batch size = {s['suggested']} (per variant: {s['perVariant']}"
                         f"{'; the variants DISAGREE — the larger level is taken' if s['disagree'] else ''})"
-                        + "".join(f" · {n}" for n in s["notes"]) + " · thresholds: confirm with D")
+                        + "".join(f" · {n}" for n in s["notes"]) + " · rule: methodology §4.1")
             if s["suggested"]:
                 ibutton(buttons, f"Use {s['suggested']} as baseline batch size…", "use-baseline",
                         lambda v=s["suggested"]: self.apply({"baseline.batch_size": v}, "e1"),
@@ -747,7 +747,7 @@ class App:
                         for e in s["evidence"]], ok_col=8)
             verdict.set(f"healthy range {s['healthy']} → suggested cases/channels = {s['channels']} (median), "
                         f"max = {s['channelsMax']} (top)" + "".join(f" · {n}" for n in s["notes"])
-                        + " · thresholds: confirm with D")
+                        + " · rule: methodology §4.2")
             if s["channels"]:
                 ibutton(buttons, f"Use {s['channels']} / max {s['channelsMax']} as baselines…", "use-baseline",
                         lambda a=s["channels"], b=s["channelsMax"]: self.apply(
@@ -762,7 +762,7 @@ class App:
         lines = "\n".join(f"  {p}: {show_value(BC.get_path(self.sweeps, p))}  →  {show_value(v)}" for p, v in edits.items())
         if not messagebox.askyesno("Use as baseline", f"Write into benchmark/sweeps.yaml?\n\n{lines}\n\n"
                                    f"Tagged “set from {exp} {today()}”. This is a baseline, never an optimum; "
-                                   "the rule thresholds are still to be confirmed with D."):
+                                   "check it against the rule in docs/methodology/experiments.md §4."):
             return
         try:
             self.write_sweeps(edits, lambda p: f"set from {exp} {today()}" if p.startswith("baseline.") else None)
@@ -1214,13 +1214,13 @@ class App:
 
 
 def main():
-    try:  # own taskbar identity: Windows then shows the window icon, not pythonw's (design brief §3.7)
+    try:  # own taskbar identity: Windows then shows the window icon, not pythonw's
         import ctypes
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Gleipnir.Bench")
     except Exception:  # noqa: BLE001 — not Windows
         pass
     root = tk.Tk()
-    try:  # Tk's quill as the app icon (icons/extract-tk-icon.py, author's choice); `default=` covers every dialog
+    try:  # Tk's quill as the app icon (icons/extract-tk-icon.py); `default=` covers every dialog
         root.iconbitmap(default=os.path.join(ICON_DIR, "gleipnir-bench.ico"))
     except tk.TclError:
         pass

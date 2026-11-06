@@ -1,9 +1,9 @@
 'use strict';
 
-// User store for the gateway's session auth (M12). One JSON array file at
+// User store for the gateway's session auth. One JSON array file at
 // AUTH_DATA_DIR/users.json — file-backed, loaded once at boot
 // and rewritten on every mutation (user counts are tiny; simplicity wins).
-// Users are deactivated (active:false), NEVER deleted: audit-trail actor
+// Users are deactivated (active:false), never deleted: audit-trail actor
 // attribution must keep resolving to a real username. Passwords are hashed with
 // node:crypto scrypt — zero new dependencies. Password hashes never leave this
 // module: every method returns the public shape (hash stripped).
@@ -13,13 +13,13 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { promisify } = require('node:util');
 
-// ASYNC scrypt (S6): the KDF runs on the libuv threadpool instead of the event
+// Async scrypt: the KDF runs on the libuv threadpool instead of the event
 // loop, so a burst of logins (each doing full scrypt work, even for unknown
-// usernames — see DUMMY_HASH) can no longer stall the whole gateway.
+// usernames — see DUMMY_HASH) cannot stall the whole gateway.
 const scrypt = promisify(crypto.scrypt);
 
 const USERNAME_RE = /^[A-Za-z0-9._-]{1,64}$/;
-// M18 (CONTRACTS §12-8): 3-tier RBAC. 'lead' sits between admin and
+// 3-tier RBAC (docs/CONTRACTS.md §12-8). 'lead' sits between admin and
 // investigator — leads may create cases and manage the cases they lead.
 const ROLES = ['admin', 'lead', 'investigator'];
 
@@ -58,7 +58,7 @@ function toPublic(user) {
 // Verifying against this dummy hash keeps an unknown-username login doing the
 // same scrypt work as a real mismatch, so response timing cannot be used to
 // enumerate which usernames exist. Computed once as a promise (hashPassword is
-// now async) and awaited in verifyPassword; boot never blocks on it.
+// async) and awaited in verifyPassword; boot never blocks on it.
 const DUMMY_HASH = hashPassword('gleipnir-timing-equalizer');
 
 function makeUsersStore(authDataDir) {
@@ -108,7 +108,7 @@ function makeUsersStore(authDataDir) {
     return toPublic(user);
   }
 
-  // Seeds the first admin only when the store is EMPTY (first boot); returns
+  // Seeds the first admin only when the store is empty (first boot); returns
   // null otherwise so a restart never resets a live user database.
   async function seedAdmin({ username, password, name }) {
     if (users.length > 0) return null;

@@ -2,18 +2,18 @@
 
 // Variant routing — the one place that knows how each variant writes to the
 // ledger (docs/CONTRACTS.md §9). The chaincode interface, client API, and
-// workloads are identical across variants; only the write PATH differs:
+// workloads are identical across variants; only the write path differs:
 //
 //   standard          -> submit on coc-main
 //   anchoring         -> enqueue to the merkle-batcher (root committed at boundary)
 //   parallel          -> submit on case-<id>
 //   parallel-anchored -> enqueue to the merkle-batcher (per-case, root -> anchor channel)
 //
-// Reads differ too (M26): the batched variants keep no per-event record on
+// Reads differ too: the batched variants keep no per-event record on
 // the app channel (only the Merkle root goes on-chain), so ReadEvidence /
-// GetAuditTrail are served from the OFF-CHAIN trail — the receipt-store's
+// GetAuditTrail are served from the off-chain trail — the receipt-store's
 // per-evidence index, each receipt carrying the CoC event it witnesses. The
-// direct variants evaluate the chaincode as before.
+// direct variants evaluate the chaincode.
 //
 // This module is pure: it takes injected deps ({fabric, batcher, receipts,
 // defaultChannel}) so it is unit-tested across all four variants without a
@@ -53,10 +53,10 @@ function channelFor(variant, caseId, defaultChannel) {
 async function routeWrite(spec, deps) {
   const { variant, fn, ccArgs, event, caseId } = spec;
   if (isBatched(variant)) {
-    // Per-case variants require a valid caseId on the batched path too (F57):
+    // Per-case variants require a valid caseId on the batched path too:
     // without this check a missing caseId would be silently defaulted to the
     // "shared" scope — events from different cases pooled into one batch —
-    // where the direct parallel path correctly answers 400.
+    // where the direct parallel path answers 400.
     if (isParallel(variant)) channelFor(variant, caseId, deps.defaultChannel);
     const placement = await deps.batcher.enqueue(event);
     return {
@@ -70,7 +70,7 @@ async function routeWrite(spec, deps) {
 }
 
 // Off-chain trail of one evidence: the CoC events in receipt (enqueue) order.
-// Receipts without an `event` copy (pre-M26 witnesses) carry no trail entry
+// Receipts without an `event` copy (older witnesses) carry no trail entry
 // and are skipped. withProofs attaches each event's Merkle witness so a
 // reconstruction client can recompute the branch and check the root.
 async function offChainTrail(evidenceId, withProofs, deps) {
@@ -93,7 +93,7 @@ function foldHead(evidenceId, events) {
     storage: (create && create.detail && create.detail.storage) || {},
     identity: { subject: createActor },
     custodian: (lastTransfer && lastTransfer.detail && lastTransfer.detail.newCustodian) || createActor,
-    status: events.some((e) => e.op === 'DISPOSE' || e.op === 'REMOVE') ? 'DISPOSED' : 'ACTIVE', // REMOVE = pre-rename rows
+    status: events.some((e) => e.op === 'DISPOSE' || e.op === 'REMOVE') ? 'DISPOSED' : 'ACTIVE', // REMOVE: op tag on receipts written before the DISPOSE rename
     offChain: true,
   };
 }

@@ -22,16 +22,16 @@ const FLAG_TONE: Record<Exclude<EvidenceFlag, null>, 'danger' | 'ok' | 'warn'> =
   NEEDS_LEAD_REVIEW: 'warn',
 };
 
-// M25: the same general file-type presets case-registry seeds into new cases.
+// The same general file-type presets case-registry seeds into new cases.
 // Shown as one-click adds for partially-curated cases where the lead wants one back.
 const PRESET_CATEGORIES = ['Image', 'Video', 'Audio', 'Text', 'Document', 'PDF', 'Spreadsheet', 'Archive', 'Other'];
 
-// M25: the evidence-tab export is CLIENT-side CSV over exactly the filtered
+// The evidence-tab export is client-side CSV over exactly the filtered
 // rows — library metadata only (no blob fetch, no trail), so it is not an
-// evidence access and is deliberately not auto-logged (mirrors /details).
+// evidence access and is not auto-logged (same as /details).
 const csvCell = (v: unknown): string => {
   const raw = v === null || v === undefined ? '' : String(v);
-  // Neutralise spreadsheet formula injection (S10): a value starting = + - @
+  // Neutralise spreadsheet formula injection: a value starting = + - @
   // TAB or CR runs as a formula when this export is opened in Excel/Sheets.
   // Prefix with a single quote so it renders literally. File names, labels and
   // free-text metadata are user-controlled and reach these cells.
@@ -51,10 +51,10 @@ export function evidenceCsv(rows: EvidenceIndexRow[], categoryName: (id: string 
   return `${lines.join('\r\n')}\r\n`;
 }
 
-// Case detail (M14; M23 tabbed refresh): Overview / Evidence / Activity /
-// Team. Server-side scoping means a non-participant gets a 404 here; the
-// Team tab is manageable only by admins and the case lead (server-enforced,
-// mirrored in the UI).
+// Case detail: Overview / Evidence / Activity tabs, with Categories and Team
+// as sections of Overview. Server-side scoping means a non-participant gets a
+// 404 here; the team is manageable only by admins and the case lead
+// (server-enforced, mirrored in the UI).
 export function CaseDetailPage() {
   const { caseId = '' } = useParams();
   const { client, user } = useAuth();
@@ -70,11 +70,11 @@ export function CaseDetailPage() {
   const catErr = useErr();
   const [newCat, setNewCat] = useState('');
 
-  // M25: Overview folds Categories and Team into press-to-expand sections.
+  // Overview folds Categories and Team into press-to-expand sections.
   const [openCats, setOpenCats] = useState(false);
   const [openTeam, setOpenTeam] = useState(false);
 
-  // M25: evidence-tab filters; the CSV export covers exactly the filtered rows.
+  // Evidence-tab filters; the CSV export covers exactly the filtered rows.
   const [fq, setFq] = useState('');
   const [fCat, setFCat] = useState('');
   const [fFlag, setFFlag] = useState('');

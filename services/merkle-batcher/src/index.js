@@ -6,12 +6,12 @@
 // submits the root for on-chain commit (gateway for `anchoring`, anchor-client
 // for `parallel-anchored`), then re-PUTs receipts with the returned txId.
 //
-// A boundary is reached by SIZE (BATCH_SIZE events in the open queue) or, when
-// BATCH_FLUSH_MS > 0, by TIME (a timer armed at the first enqueue of an open
+// A boundary is reached by size (BATCH_SIZE events in the open queue) or, when
+// BATCH_FLUSH_MS > 0, by time (a timer armed at the first enqueue of an open
 // batch), or by POST /flush at run end. Every batch record carries the
-// timestamps the "anchoring delay" metric is computed from (supervisor brief
-// 2026-09-22 §6): openedAt / closedAt / committedAt and per-event
-// enqueue -> commit delays {min, mean, max}.
+// timestamps the anchoring-delay metric is computed from
+// (docs/methodology/experiments.md): openedAt / closedAt / committedAt and
+// per-event enqueue -> commit delays {min, mean, max}.
 //
 // Does NOT: submit to the ledger itself, persist receipts, or verify anything.
 // Contracts: docs/CONTRACTS.md §4/§5/§6/§7/§9; docs/ARCHITECTURE.md §4.2.
@@ -31,20 +31,20 @@ function loadConfig() {
   return {
     port: int(process.env.PORT, 4001),
     variant: process.env.VARIANT || 'anchoring',
-    // BATCH_SIZE is the one batch-size knob (E1 sweeps ONE grid for both
-    // anchored variants); default = the compose default.
+    // BATCH_SIZE is the only batch-size knob (E1 sweeps one grid shared by
+    // both anchored variants); default = the compose default.
     batchSize: int(process.env.BATCH_SIZE, 100),
     // 0 = size-only batching (partial batch flushed at run end by /flush).
     flushMs: int(process.env.BATCH_FLUSH_MS, 0),
     receiptStoreUrl: process.env.RECEIPT_STORE_URL || 'http://receipt-store:4002',
     gatewayUrl: process.env.GATEWAY_URL || 'http://gateway:3000',
     anchorClientUrl: process.env.ANCHOR_CLIENT_URL || 'http://anchor-client:4003',
-    // Bearer token for the gateway's authed /internal/anchor-root (audit F23).
+    // Bearer token for the gateway's authenticated /internal/anchor-root.
     token: process.env.GLEIPNIR_TOKEN || 'dev-token',
     // batchEpoch namespaces batchIds per batcher lifetime: the ledger persists
     // across batcher recreates (experiment cells recreate the batcher), so a
     // bare per-scope sequence would collide with roots already committed by an
-    // earlier process and poison verification (audit F44). The orchestrator
+    // earlier process and poison verification. The orchestrator
     // sets BATCH_EPOCH per run; the startup timestamp covers every other restart.
     batchEpoch: process.env.BATCH_EPOCH || Date.now().toString(36),
     logLevel: process.env.LOG_LEVEL || 'info',
@@ -68,7 +68,7 @@ function createApp(overrides) {
 
   // batchId = scope + epoch + sequence. Opaque at every consumer (receipt
   // rootRef, chaincode composite key, verification query); the epoch component
-  // keeps ids unique across batcher restarts against a persistent ledger (F44).
+  // keeps ids unique across batcher restarts against a persistent ledger.
   const batchIdFor = (scopeId, seq) =>
     `${scopeId}-${cfg.batchEpoch}-b${String(seq).padStart(6, '0')}`;
 
@@ -101,7 +101,7 @@ function createApp(overrides) {
   }
 
   // Submit the root: anchor-client for parallel-anchored, else the gateway's bearer-authed
-  // /internal/anchor-root (F23). Throws so the caller keeps receipts and marks the batch degraded.
+  // /internal/anchor-root. Throws so the caller keeps receipts and marks the batch degraded.
   async function submitRoot(scopeId, batchId, merkleRoot, leafCount) {
     const [url, auth, body] = cfg.variant === 'parallel-anchored'
       ? [`${cfg.anchorClientUrl}/roots`, {}, { caseId: scopeId, batchId, merkleRoot, meta: { leafCount } }]

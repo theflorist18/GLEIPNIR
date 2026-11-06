@@ -83,10 +83,10 @@ test('healthz', async (t) => {
   assert.deepEqual(await (await fetch(`${url}/healthz`)).json(), { ok: true });
 });
 
-// ---- per-evidence index + listing (supervisor brief 2026-09-22 §6) ----
-// The receipt now carries `evidenceId` + `event`; the store indexes eventIds
+// ---- per-evidence index + listing ----
+// The receipt carries `evidenceId` + `event`; the store indexes eventIds
 // under DATA_DIR/idx/<evidenceId>.txt and lists them back in index order.
-// This is an index and an event copy, nothing more — still un-hardened.
+// This is an index and an event copy, nothing more (not hardened).
 
 function receiptFor(eventId, evidenceId, seq) {
   return {

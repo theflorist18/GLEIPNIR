@@ -8,7 +8,7 @@ import (
 	"github.com/hyperledger/fabric-contract-api-go/v2/contractapi"
 )
 
-// Chaincode-as-a-service entry point (CONTRACTS sect. 3). The peer never
+// Chaincode-as-a-service entry point (docs/CONTRACTS.md §3). The peer never
 // compiles this chaincode; it runs as its own service and the peer dials it
 // using the ccaas external builder. Reads CHAINCODE_ID (the package ID) and
 // CHAINCODE_SERVER_ADDRESS (e.g. 0.0.0.0:9999) from the environment.

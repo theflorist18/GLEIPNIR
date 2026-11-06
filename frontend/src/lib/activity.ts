@@ -1,4 +1,4 @@
-// M25b: one renderer for the case audit log, shared by CaseDetailPage and
+// One renderer for the case audit log, shared by CaseDetailPage and
 // LeadDashboardPage so every event type reads the same everywhere. Unknown
 // types (the enum can grow) fall back to a generic line instead of vanishing.
 

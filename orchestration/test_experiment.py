@@ -126,7 +126,7 @@ def main():
     many.send_rate = [25, 50]
     assert rejected(many, ["standard"])   # --rounds with several send rates
 
-    # CSV export: one row per (run, round), the supervisor's column order, units in headers.
+    # CSV export: one row per (run, round), the result-table column order, units in headers.
     with tempfile.TemporaryDirectory() as d:
         rdir = os.path.join(d, "cell", "standard", "ch1-cases5-rate50", "r0")
         os.makedirs(rdir)

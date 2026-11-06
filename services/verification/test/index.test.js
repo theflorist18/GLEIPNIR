@@ -118,9 +118,9 @@ test('anchor read error -> 502 anchor-read-error', async (t) => {
   assert.equal((await resp.json()).reason, 'anchor-read-error');
 });
 
-// The receipt-store is deliberately un-hardened and stores ANY JSON, so a
-// corrupt witness must produce a graceful verdict — never an unhandled throw
-// that kills the metric service mid-run (audit F54).
+// The receipt-store is not hardened and stores any JSON, so a corrupt witness
+// must produce a graceful verdict, never an unhandled throw that kills the
+// metric service mid-run.
 test('malformed receipt -> 422 malformed-receipt, service stays up', async (t) => {
   const badPath = goodReceipt('shared');
   badPath.siblingPath = [{ pos: 'X', hash: 'not-hex' }];
@@ -140,10 +140,10 @@ test('malformed receipt -> 422 malformed-receipt, service stays up', async (t) =
   assert.equal((await health.json()).ok, true);
 });
 
-// RQ2: when VERIFY_METRICS_PATH is set, each COMPLETED (3-step, 200) verify
+// When VERIFY_METRICS_PATH is set, each completed (3-step, 200) verify
 // appends one JSON line with the fetch/recompute/compare breakdown; error paths
 // (partial steps) do not. This is the per-request source collect.py summarises.
-test('RQ2: a completed verify appends a step-breakdown metric line; errors do not', async (t) => {
+test('a completed verify appends a step-breakdown metric line; errors do not', async (t) => {
   const metricsPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'verify-metrics-')), 'verify.jsonl');
   const rstore = await receiptStore(new Map([['evt-1', goodReceipt('shared')]])); // evt-missing absent
   const gw = await rootServer();
@@ -166,7 +166,7 @@ test('RQ2: a completed verify appends a step-breakdown metric line; errors do no
   }
 });
 
-test('RQ2: with no metricsPath (default) nothing is written and verify still works', async (t) => {
+test('with no metricsPath (default) nothing is written and verify still works', async (t) => {
   const rstore = await receiptStore(new Map([['evt-1', goodReceipt('shared')]]));
   const gw = await rootServer();
   const url = await boot(t, { receiptStoreUrl: rstore.url, gatewayUrl: gw.url }, rstore, gw);
@@ -191,9 +191,9 @@ test('parallel-anchored path reads the anchor-client, not the gateway', async (t
   assert.equal(anchorHits, 1);
 });
 
-// ---- leaf recomputed from the event copy (supervisor brief 2026-09-22 §6) ----
-// Receipts written since the brief carry `event` (the CoC event as enqueued).
-// The leaf is then SHA-256(canonical event) recomputed HERE, inside
+// ---- leaf recomputed from the event copy ----
+// Receipts carry `event` (the CoC event as enqueued). The leaf is then
+// SHA-256(canonical event), recomputed by the verification service inside
 // recomputeMs, and the stored leafHash is not trusted for the fold.
 
 test('receipt with event copy: leaf recomputed from the event -> ok:true, leafSource:"event"', async (t) => {

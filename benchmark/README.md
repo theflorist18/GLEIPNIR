@@ -7,7 +7,7 @@ per-variant network configs. Drives all four variants identically; `orchestratio
 renders the round configs, `orchestration/experiment.py` runs them, `orchestration/collect.py`
 reads the outputs.
 
-## Binding (record the exact string — CLAUDE.md stale-knowledge trap)
+## Binding (record the exact string: binding names changed across Caliper releases)
 
 ```bash
 npm install
@@ -23,7 +23,7 @@ Q1). Node 18 or 20 (0.6.0 support window).
 
 | Path | What |
 |---|---|
-| `sweeps.yaml` | **single source of truth** for the E1/E2/E3 grids, baseline constants, workload shape (CONTRACTS §10) |
+| `sweeps.yaml` | **single source of truth** for the E1/E2/E3 grids, baseline constants, workload shape (docs/CONTRACTS.md §10) |
 | `trace/generate.js` | seeded (mulberry32) transaction-trace generator — `npm run gen:trace` |
 | `workload/trace.js` | mixed-workload round: replays one slice of the pre-generated trace (E1/E2/E3) |
 | `workload/{createEvidence,transferCustody,accessLog,disposeEvidence}.js` | per-operation WRITE rounds (ops breakdown) |
@@ -71,7 +71,7 @@ a harness artefact, not a property of the design). Campaign traces keep ≥ `HEA
 E0 smoke trace, 60 items per worker) keeps ≥ 7 (S/8; 5.6 s at 5 tx/s) and has no forced pair.
 When every active lifecycle is cooling down, the one with the oldest head write goes; for the
 campaign shapes (≥ 5 cases × 224 events/case/round) that happens only in a worker's last
-≤ `headGap` items (at most 72 measured); cells with ≤ 4 cases fall back earlier (CONTRACTS §12-22).
+≤ `headGap` items (at most 72 measured); cells with ≤ 4 cases fall back earlier (docs/CONTRACTS.md §12-22).
 `caseId` is the channel routing key `case-NNN`, `NNN = ((dataCase−1) mod channels)+1`. DISPOSE ends `round(dispose_fraction × owned)`
 of each worker's evidence; the weighted interleave ends every lifecycle near the end of the
 sequence, so all DISPOSEs fall in the last round (E3a and the ramp: the top send-rate level) —
@@ -79,7 +79,7 @@ trace-based DISPOSE latency comes only from that round; the per-operation breakd
 `ops`. TRANSFER/ACCESS are drawn by `transfer_weight : access_weight`.
 CREATE's `detail.payload` is `payloadBytes` deterministic characters (`lib/payloads.filler`)
 whose SHA-256 becomes `storage.integrity_proof` — the synthetic evidence "file" never reaches
-the ledger, only its hash (CLAUDE.md: binaries are always off-chain).
+the ledger, only its hash (evidence binaries are always off-chain, in every variant).
 
 ## Round arguments (rendered by `orchestration/rounds.py`; names are BINDING)
 
@@ -102,8 +102,8 @@ back to `channels: 1` → `case-001`, which points Standard's fabric requests at
 from `networks/coc-main.yaml` and stamps Anchoring's events with a caseId instead of the
 `shared` batch scope.
 
-`accessLog.js` also keeps the legacy `scenario: shared` + `sharedEvidenceId` (the Stage-1
-zero-MVCC-conflict gate: every worker appends to ONE evidenceId).
+`accessLog.js` also supports `scenario: shared` + `sharedEvidenceId` (the zero-MVCC-conflict
+check: every worker appends to one evidenceId).
 
 Write paths per op: fabric → `CreateEvidence` / `TransferCustody` / `AccessLog` /
 `DisposeEvidence` (channel = `caseId` for Parallel variants, none = `coc-main` for Standard);

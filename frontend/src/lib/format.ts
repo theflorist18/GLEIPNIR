@@ -1,11 +1,8 @@
-// Timestamp formatting for the evidence UI (M-UX). Every timestamp in the app
-// used to render as a raw ISO string (e.g. "2026-07-21T08:02:54.455Z") — hard
-// to read and, in a chain-of-custody / court report, needlessly ambiguous.
-//
-// A forensic record must read the same for every examiner, so we render a
-// FIXED, timezone-explicit UTC format rather than a locale string (which would
-// silently differ per machine). The full original ISO — milliseconds and all —
-// stays available via a `title` tooltip at the call sites for exact precision.
+// Timestamp formatting for the evidence UI. A forensic record must read the
+// same for every examiner, so timestamps render in a fixed, timezone-explicit
+// UTC format rather than a locale string (which would differ per machine).
+// The full original ISO value, milliseconds included, stays available via a
+// `title` tooltip at the call sites.
 
 // "2026-07-21 08:02:54 UTC". Returns an em dash for empty input and, defensively,
 // the raw value for anything unparseable (never throw in a render path).
@@ -16,8 +13,8 @@ export function formatTs(iso: string | null | undefined): string {
   return `${d.toISOString().slice(0, 19).replace('T', ' ')} UTC`;
 }
 
-// Evidence head status → terminal? 'DISPOSED' since M26 (DisposeEvidence);
-// 'REMOVED' is the legacy value on rows written before the rename — same
-// meaning, so pills and filters treat both alike.
+// Evidence head status → terminal? 'DISPOSED' is set by DisposeEvidence;
+// 'REMOVED' is the legacy value still found on older rows — same meaning, so
+// pills and filters treat both alike.
 export const isDisposed = (status: string | null | undefined): boolean =>
   status === 'DISPOSED' || status === 'REMOVED';

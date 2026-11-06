@@ -15,7 +15,7 @@ fabric-tools container. Python 3.10+ with `pyyaml` (`pip install -r requirements
 | Script | Does |
 |---|---|
 | `up.sh --variant V [--channels N] [--skip-crypto]` | enroll → compose up → create channels (osnadmin, HTTP 201 on all 3 orderers) → deploy ccaas chaincode → start services |
-| `down.sh [--wipe]` | stop all profiles; `--wipe` removes ALL named volumes incl. the library — never run it without the authors' go-ahead |
+| `down.sh [--wipe]` | stop all profiles; `--wipe` removes ALL named volumes incl. the evidence library — back them up first (`backup-volumes.sh`) |
 | `reset-network.sh --variant V --channels C` | **ledger-only reset**: needs `GLEIPNIR_ALLOW_LEDGER_WIPE=1`; prints and removes only the ledger/witness volumes, then `up.sh --skip-crypto` |
 | `backup-volumes.sh <dir> [--restore]` | tar every `gleipnir_*` volume (one file each) via `alpine`; `--restore` untars them back |
 | `provision-channel.sh case-NNN` | per-case channel + chaincode approve/commit (idempotent-safe) |
@@ -23,12 +23,13 @@ fabric-tools container. Python 3.10+ with `pyyaml` (`pip install -r requirements
 | `smoke-library.sh` | evidence-library gate on the standard variant (login/roles → case + participant → multipart ingest → categorize → search → auto-log asserts → authz negatives), 17 steps |
 | `build-images.sh` | dev-host workaround, not product code: builds all 9 compose images with the host's MITM-proxy CA injected at build time only (`GLEIPNIR_CA_BUNDLE=<bundle> bash orchestration/build-images.sh`); the tracked Dockerfiles are untouched. Afterwards check that the dependencies really resolve inside each Node image — npm can exit 0 with nothing installed when TLS fails |
 | `rounds.py` (library) | the ONLY renderer of Caliper configs from `sweeps.yaml`: `render_round(...)` and `render_parallel_network(C)`, which experiment.py writes per run into the run dir (no generated config is committed) |
-| `benchapp.pyw` | the desktop app (M27): input boxes for every `sweeps.yaml` value, Preview/Run/Resume/Cancel of each experiment through WSL, live results, history, CSV export, suggested baselines, automatic backup/restore — see below |
+| `benchapp.pyw` | the desktop app: input boxes for every `sweeps.yaml` value, Preview/Run/Resume/Cancel of each experiment through WSL, live results, history, CSV export, suggested baselines, automatic backup/restore — see below |
 | `open-web.ps1` (double-click `GLEIPNIR Web.cmd` in the repo root) | opens the evidence library: if `:8081/healthz` is down it starts Docker Desktop, starts the stack on its existing volumes (the Bench app's restore-path command, never `up.sh`), waits for the gateway, then opens the SPA in a Chrome app window with its own profile (`%LOCALAPPDATA%\GleipnirWeb`, so no shared browser cache); default browser if Chrome is absent |
 | `experiment.py --exp e0\|ramp\|e1\|e2\|e3a\|e3b\|ops\|cell` | the campaign driver — plans cells × reps, runs the lifecycle below per run, loud failures; `cell` runs ONE cell at the factor levels you pass |
 | `checkpoint.py <run> --label tK` | `du -sb` block store per channel + GoLevelDB state per peer + receipt store → `checkpoints.jsonl` (labels `t0..tN`) |
 | `collect.py <run-dir>` | run dir → `manifest.json` (rounds, per-tx percentiles, failure classes, resources, storage regression, anchoring, audit); `--selftest` |
 | `report.py --exp E [--out docs/results/E] [--no-charts] [--decimal-comma]` | ALWAYS the per-round Excel CSV `benchmark/results/E/E-results.csv` (any E incl. e0/ramp/cell); for e1–ops also CSV + Markdown tables (units in headers, mean ± SD over reps; Markdown one table per variant, one latency column) + optional PNG charts; E1's batch-size-free reference rows print `ref`, and the per-round tables (e3a, ops) carry a header note that the run-level metrics repeat per row |
+| `present.py [--out docs/results/pooled-c1-c5]` (Windows, `py -3.11`; needs openpyxl) | campaigns 1–5 pooled: every cell's mean ± sample SD over its 15 runs (5 campaigns × 3 reps), read from the campaign archives through `report.py`'s own functions. Writes `gleipnir-results-pooled-c1-c5.xlsx` (README; one sheet per table with mean/SD as Excel formulas over the runs and native charts with ±1 SD error bars; one runs sheet per experiment with the 15 run values and each campaign's own mean/SD). Stops unless every cell has exactly 15 runs and each campaign's means equal its published table. Does not change any per-campaign table |
 
 `lib.sh` holds the shared helpers (compose wrapper, `peer_env`, `create_channel`,
 `app_channel` / `deploy_app_chaincode` (shared by up.sh and provision-channel.sh), ccaas
@@ -36,7 +37,7 @@ packaging, `set_env_var`, `wait_raft_leader`, `wait_healthz`).
 
 ## experiment.py — plans and the run lifecycle
 
-`--exp` selects the plan (brief 2026-09-22 §9); every run is **one network lifetime**:
+`--exp` selects the plan (docs/methodology/experiments.md §3); every run is **one network lifetime**:
 
 | exp | variants | swept | fixed | rounds per run |
 |---|---|---|---|---|
@@ -66,7 +67,7 @@ full log is always in `rounds/<label>/caliper.log`.
 **Results CSV (Excel).** After every completed run `benchmark/results/<exp>/<exp>-results.csv`
 is rewritten from every complete manifest of that experiment (`report.export_rounds`): one row
 per run × round, every factor level, control and metric in its own numeric column with the
-unit in the header, in the supervisor's table order — send rate (tx/s), throughput (TPS),
+unit in the header, in this column order: send rate (tx/s), throughput (TPS),
 latency min / max / avg / p95 (s), CPU (%), memory (MB), success (n), failure (n), failure rate
 (%) — then measured send rate, per-channel throughput, p50/p99, fabric/off-chain CPU+memory, the
 six failure classes, storage bytes/event, audit time, anchoring delay, regime, least-loaded
@@ -85,12 +86,12 @@ and, with matplotlib, the charts.
 into the round as Caliper's `fixed-rate` `opts.tps`, which is only that controller's key name;
 the measured output is throughput. `--batch-size` applies to the anchored variants.
 `--cases N` applies to every variant (same trace) and is also the channel count on Parallel and
-Parallel-Anchored — **one channel per case, in every plan** (author decision 2026-09-24), so there
+Parallel-Anchored — **one channel per case, in every plan** (docs/methodology/experiments.md §4.4), so there
 is no `--channels`; Standard and Anchoring put the same N cases on their one shared channel.
 Default: `baseline.channels` in `sweeps.yaml` (the set case count). A flag no selected variant
 uses, or a level < 1, aborts before anything runs.
 
-`--exp cell` **control** flags (the controlled workload, supervisor brief §5.5-1; also cell
+`--exp cell` **control** flags (the controlled workload, docs/methodology/experiments.md §2.2; also cell
 only): `--seed`, `--workers`, `--rounds` (one send rate only), `--events-per-case` (a round
 submits cases × this transactions), `--evidence-per-case`, `--transfer-weight`,
 `--access-weight`, `--dispose-fraction` (0–1), `--payload-bytes`, `--audit-cases`,
@@ -144,16 +145,16 @@ floor rule divides by channel count, so it would label the same workload `steady
 single-channel variants and `sub-floor` on the multi-channel ones). Smoke and steady
 artifacts never share a results directory.
 
-## benchapp.pyw — the desktop app (M27)
+## benchapp.pyw — the desktop app
 
 Double-click `orchestration/benchapp.pyw` (or `pyw -3.11 orchestration\benchapp.pyw`) on the
 Windows host. It needs nothing beyond the host's Python 3.11 (tkinter, PyYAML; matplotlib for
 charts) and the WSL `Ubuntu-22.04` distro the benchmark already runs in. `benchcore.py` holds
 everything that is not a widget; `test_benchapp.py` checks it.
 
-Look (Claude Design handoff, 2026-09-25): `benchtheme.py` (drop-in — named ttk styles on the
+Look: `benchtheme.py` (named ttk styles on the
 native vista theme, tooltip / help-icon / log / row-tag specs), `icons/` (16 px Tk PNGs, rest +
-disabled, and the 12 px variant markers — rendered from the handoff's vector symbols; the app is
+disabled, and the 12 px variant markers, rendered from vector symbols; the app is
 not DPI-aware, so only the @1x set is used). The report charts use `gleipnir.mplstyle` +
 `variant_style.py` (colour, marker and dash looked up by variant slug, never by the
 matplotlib colour cycle); `benchtheme.VARIANT` is the same table, so the app and the charts
@@ -163,11 +164,11 @@ share one label/colour source.
 |---|---|
 | Settings & Baselines | controlled workload (seed, workers, repetitions, evidence/case, events/case/round, rounds, mix, **evidence file size (B) — off-chain; only its hash goes on-chain**, audit cases, flush timeout, monitor interval, steady floor) and the four baselines with their provenance note |
 | E0 initial test | smoke shape + ramp events + send-rate grid; smoke or ramp; variants. Suggests `baseline.send_rate_tps` (and a trimmed grid) from the ramp |
-| E1 batch size | batch-size grid; anchored variants + Standard/Parallel reference lines; reps. Suggests `baseline.batch_size` (§4.1) |
-| E2 channels | channel (= case) grid; reps. Suggests `baseline.channels` (median of the healthy range) + `channels_max` (§4.2) |
+| E1 batch size | batch-size grid; anchored variants + Standard/Parallel reference lines; reps. Suggests `baseline.batch_size` (docs/methodology/experiments.md §4.1) |
+| E2 channels | channel (= case) grid; reps. Suggests `baseline.channels` (median of the healthy range) + `channels_max` (docs/methodology/experiments.md §4.2) |
 | E3 main | E3a / E3b / per-operation; case grid; variants; reps — the baselines shown read-only, with a warning while any is still a placeholder |
 | Custom test | `--exp cell`: send rates, batch size, cases + the 12 control overrides |
-| History & results | every run from `runlog.jsonl`; a run's per-round table in the supervisor's columns; **Export per-round CSV** (Excel, decimal-comma option), **Export summary tables**, **Generate tables + charts** (e1–ops only) |
+| History & results | every run from `runlog.jsonl`; a run's per-round table in the results-CSV columns; **Export per-round CSV** (Excel, decimal-comma option), **Export summary tables**, **Generate tables + charts** (e1–ops only) |
 
 - **Preview plan** = `experiment.py … --dry-run` (run list, regimes, sub-floor warnings, ETA).
   **Run** = Preview → a confirm dialog (plan, what gets wiped, baselines, uncommitted-sweeps
@@ -181,7 +182,7 @@ share one label/colour source.
   submitted/succeeded/failed counts, and one results row per finished round (CPU, memory and the
   run's on-chain / off-chain bytes per event are filled in once the run is collected — the same
   columns appear in History, so an odd storage value can be spotted before exporting). The raw log is kept in `benchmark/results/benchapp-logs/`.
-- **Backups:** every run resets the ledger, which erases the manual-test custody trails, so the
+- **Backups:** every run resets the ledger, which erases the custody trails of any manually entered test data, so the
   app first stops the stack (never `--wipe`), copies every `gleipnir_*` volume + `.env` to
   `backups/<timestamp>/` and verifies the archives; the experiment starts only if that worked.
   **Restore my test data** stops the stack, replaces every volume from a chosen backup,
@@ -189,8 +190,8 @@ share one label/colour source.
   when its `backup.json` exists.
 - **Baselines** are suggested by the methodology rules and written only on "Use as baseline"
   (tagged `[set from <exp> <date>]`); a hand edit is tagged `[set by hand <date>]`. Thresholds
-  and the minimum-over-variants send-rate reading: confirm with D.
-- Closing the app during a run cancels it (Resume it later). The laptop is kept awake while an
+  and the minimum-over-variants send-rate reading are open defaults (docs/methodology/experiments.md §4.3, §8).
+- Closing the app during a run cancels it (Resume it later). The host is kept awake while an
   experiment runs.
 
 ## Results layout
@@ -217,7 +218,7 @@ benchmark/traces/<hash>.json     deterministic transaction traces (gitignored)
 the ccaas ids and re-runs `up.sh --skip-crypto`. It never touches `gateway-auth-data`,
 `case-registry-data`, `evidence-blob-data`, CA state or `network/organizations`. **Rule:**
 run `backup-volumes.sh <dir>` before the first reset of a campaign (and before any
-`down.sh --wipe`, which is never run without asking the authors).
+`down.sh --wipe`, which also removes the library volumes).
 
 ## Metrics contract (manifest.json)
 

@@ -1,4 +1,4 @@
-"""Render the web favicon from its SVG master (design brief §3.6) — Windows host tool.
+"""Render the web favicon from its SVG master — Windows host tool.
 
     py -3.11 orchestration/icons/render-app-icon.py
 
@@ -6,7 +6,7 @@ Writes frontend/public/favicon.ico (frames 16/32/48: the light-scheme mark on tr
 fallback for browsers that ignore /favicon.svg). Rasterises frontend/public/favicon.svg at
 1024 px in headless Chrome over the DevTools protocol (transparent background, forced light
 colour scheme) and downsamples with Pillow (LANCZOS); BMP frames. Needs Chrome, Pillow and
-`websockets`. Placeholder until the designers' hand-hinted masters land (brief §3.12): swap the
+`websockets`. To change the icon, replace the
 SVG and re-run. The Bench app icon is Tk's own quill (extract-tk-icon.py), not rendered here.
 """
 import asyncio

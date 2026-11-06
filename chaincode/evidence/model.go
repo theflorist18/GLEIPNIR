@@ -4,13 +4,13 @@ import "encoding/json"
 
 // Record shapes for the evidence chaincode.
 //
-// Field naming follows docs/CONTRACTS.md sect. 5 exactly:
-//   - The Codex-Entry mapping (ARCHITECTURE sect. 1a) uses snake_case member
+// Field naming follows docs/CONTRACTS.md §5 exactly:
+//   - The Codex-Entry mapping (docs/ARCHITECTURE.md §1(a)) uses snake_case member
 //     names (integrity_proof, tx_hash, key_id, previous_id, ...).
 //   - The on-chain event and anchor-root records use the camelCase member names
-//     given verbatim in the CONTRACTS sect. 5 JSON examples.
+//     given verbatim in the docs/CONTRACTS.md §5 JSON examples.
 // These are cross-module wire shapes; do not rename members without updating
-// CONTRACTS.md.
+// docs/CONTRACTS.md.
 
 // Status values for an evidence head record.
 const (
@@ -27,7 +27,7 @@ const (
 )
 
 // Storage is the off-chain binary pointer. integrity_proof is an RFC 6920
-// ni-URI computed by the gateway, never by chaincode (CONTRACTS sect. 5).
+// ni-URI computed by the gateway, never by chaincode (docs/CONTRACTS.md §5).
 type Storage struct {
 	Protocol       string `json:"protocol"`
 	Location       string `json:"location"`
@@ -42,7 +42,7 @@ type Encryption struct {
 	LastControlledBy string `json:"last_controlled_by"`
 }
 
-// Identity: org = owning MSP, subject = custodian (ARCHITECTURE sect. 1a).
+// Identity: org = owning MSP, subject = custodian (docs/ARCHITECTURE.md §1(a)).
 type Identity struct {
 	Org      string `json:"org"`
 	Process  string `json:"process"`
@@ -80,11 +80,11 @@ type CodexEntry struct {
 }
 
 // EvidenceHead is the mutable "head" record stored under the "evd" composite
-// key. It IS the Codex-Entry mapping plus custodian and status (CONTRACTS
-// sect. 5): CodexEntry is embedded WITHOUT a json tag so the stored JSON is
-// the flat sect. 5 shape ({id, version, storage, ..., custodian, status}),
-// never nested under a "codex" key. Written ONLY by CreateEvidence/
-// TransferCustody/DisposeEvidence, which are semantically serial per evidence.
+// key: the Codex-Entry mapping plus custodian and status (docs/CONTRACTS.md
+// §5). CodexEntry is embedded without a json tag so the stored JSON is the
+// flat §5 shape ({id, version, storage, ..., custodian, status}), never nested
+// under a "codex" key. Written only by CreateEvidence/TransferCustody/
+// DisposeEvidence, which are semantically serial per evidence.
 // AccessLog never touches it.
 type EvidenceHead struct {
 	CodexEntry
@@ -93,7 +93,7 @@ type EvidenceHead struct {
 }
 
 // Event is one append-only audit record stored under the "evt" composite key.
-// Shape follows the CONTRACTS sect. 5 CoC event (camelCase members). ts and
+// Shape follows the docs/CONTRACTS.md §5 CoC event (camelCase members). ts and
 // txId are taken from the signed proposal (GetTxTimestamp / GetTxID) so the
 // record is byte-identical across endorsers (determinism requirement).
 type Event struct {
@@ -106,7 +106,7 @@ type Event struct {
 }
 
 // AnchorRoot is the on-chain Merkle-root record stored under the "root"
-// composite key. Shape per CONTRACTS sect. 5.
+// composite key. Shape per docs/CONTRACTS.md §5.
 type AnchorRoot struct {
 	ScopeID     string          `json:"scopeId"`
 	BatchID     string          `json:"batchId"`

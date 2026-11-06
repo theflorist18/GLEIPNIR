@@ -12,7 +12,7 @@ import type { CaseStatus, CaseSummary } from '../../types';
 const STATUSES: Array<CaseStatus | ''> = ['', 'OPEN', 'CLOSED', 'ARCHIVED'];
 
 // Cases the signed-in user participates in (admins see all — same endpoint,
-// scoped server-side). Since M18 leads and admins create cases from here.
+// scoped server-side). Leads and admins create cases from here.
 export function MyCasesPage() {
   const { client, user } = useAuth();
   const { msg, run } = useErr();

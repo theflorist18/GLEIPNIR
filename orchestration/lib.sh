@@ -86,7 +86,7 @@ peer channel join -b ${CTN_ARTIFACTS}/${channel}.block"
 }
 
 # Approve (org1 + org2) and commit the app chaincode on one channel. Install is
-# ORG-scoped, not channel-scoped: up.sh installs once (audit F46), before any channel.
+# org-scoped, not channel-scoped: up.sh installs once, before any channel.
 # args: <channel> <package-id>
 deploy_app_chaincode() {
   local channel="$1" pkgid="$2" policy="OR('Org1MSP.peer','Org2MSP.peer')"
@@ -118,19 +118,18 @@ app_channel() {
 # args: <ccaas-service-host>
 package_ccaas() {
   local ccaas_host="$1"
-  # channel-artifacts must already exist here: installs are hoisted before the
-  # first create_channel (F46), whose mkdir used to cover this on a clean tree
-  # (audit F73, first live bring-up).
-  # DETERMINISTIC packaging (reproducibility): the package id is a sha256 of
-  # these bytes, so it must be identical on every bring-up of the cited commit.
-  # `tar -czf` was non-deterministic — gzip embeds a build timestamp and tar
-  # records per-run file mtimes/ownership — so a re-package produced a DIFFERENT
-  # id that no running ccaas serves (the Parallel c>1 endorsement bug, worked
-  # around in provision-channel.sh by reusing CCAAS_ID_APP; fixed at the root
-  # here). Pin all of it: --mtime=@0 --owner/group=0 --numeric-owner remove tar's
-  # timestamps/ownership, and gzip -n drops the gzip header's mtime+name. Written
-  # to files (not a pipe) so `set -e` catches a tar/gzip failure. Verified
-  # byte-identical across repeated runs. GNU tar 1.34 in fabric-tools.
+  # mkdir channel-artifacts here: the install runs before the first
+  # create_channel, so on a clean tree the directory does not exist yet.
+  # Deterministic packaging: the package id is a sha256 of these bytes, so it
+  # must be identical on every bring-up of the same commit. A plain `tar -czf`
+  # is not (gzip embeds a timestamp, tar records per-run mtimes/ownership), and
+  # a re-package would yield an id that no running ccaas container serves.
+  # --mtime=@0 --owner/group=0 --numeric-owner remove tar's timestamps and
+  # ownership; gzip -n drops the gzip header's mtime and name. Written to files
+  # (not a pipe) so `set -e` catches a tar/gzip failure. GNU tar 1.34 in
+  # fabric-tools; the output is byte-identical across repeated runs.
+  # provision-channel.sh reads the installed id from .env (CCAAS_ID_APP)
+  # instead of re-packaging.
   cli "set -e
 mkdir -p ${CTN_ARTIFACTS}
 tmp=\$(mktemp -d)
@@ -156,8 +155,8 @@ set_env_var() {
 # Wait until a freshly created channel's Raft cluster has elected a leader.
 # osnadmin join answers 201 while the election is still in flight, and an
 # immediate approveformyorg then dies with SERVICE_UNAVAILABLE "no Raft
-# leader" (F77 — intermittent since the first bring-ups, deterministic on a
-# loaded host). `peer channel fetch` is a read-only probe that succeeds
+# leader" (intermittent, near-certain on a loaded host). `peer channel fetch`
+# is a read-only probe that succeeds
 # exactly when the orderer can serve the channel. args: <org> <channel>
 wait_raft_leader() {
   local org="$1" channel="$2" tries=0
@@ -175,10 +174,10 @@ peer channel fetch newest /tmp/${channel}-leader-probe.block -c ${channel} -o ${
 
 # Wait for a host-published operations /healthz to answer (peers/orderers).
 # Peers register a docker-daemon health check that can never pass here: ccaas
-# peers have no docker socket BY DESIGN, so after startup their healthz is a
-# permanent 503 whose only failed check is "docker" — a bare 200 is just the
-# pre-registration startup window (audit F74, first parallel-anchored
-# bring-up). Ready therefore = status OK, or failed_checks == ["docker"].
+# peers have no docker socket by design, so after startup their healthz is a
+# permanent 503 whose only failed check is "docker"; a bare 200 is just the
+# pre-registration startup window. Ready therefore = status OK, or
+# failed_checks == ["docker"].
 wait_healthz() {
   local port="$1" name="$2" tries=0 body
   until body="$(curl -sS --max-time 3 "http://localhost:${port}/healthz" 2>/dev/null)" && \

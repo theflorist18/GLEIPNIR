@@ -1,11 +1,10 @@
 # GLEIPNIR — Experimental Methodology (E0–E3)
 
 Paper-facing methodology layer for the M26 experimental redesign. Derived from the
-supervisor brief of 2026-09-22 (`docs/supervisor-brief-2026-09-22.md`
-§5) and the binding build brief. Every constant named here lives in
+supervisor's review (2026-09-22). Every constant named here lives in
 `benchmark/sweeps.yaml` (single source of truth); every rule here is what
 `orchestration/experiment.py`, `collect.py` and `report.py` implement. Values marked
-`[PLACEHOLDER]` are filled from measured results; decisions marked **confirm with D**
+`[PLACEHOLDER]` are filled from measured results; decisions marked **confirm with the supervisor**
 are documented defaults (§8), not settled facts.
 
 Terminology used throughout: *send rate* = the configured offered load (input);
@@ -75,7 +74,7 @@ What the code enforces (a violation aborts the run):
 | Resource-monitor interval | 5 | s | `monitor.interval_s` |
 | Audit cases per run | 5 (first five data-cases of the trace) | cases | `workload.audit_cases` |
 | Host | single machine; cores and memory recorded per run | cores / GB | `run.json provenance.host` |
-| Software stack | Fabric 2.5.15; Caliper 0.6.0 (`fabric:fabric-gateway` binding); Node 20.19; Go 1.25.5; Fabric CA 1.5.19; GoLevelDB; two peer orgs; Raft (3 orderers); `@hyperledger/fabric-gateway` | — | `run.json provenance`, CLAUDE.md |
+| Software stack | Fabric 2.5.15; Caliper 0.6.0 (`fabric:fabric-gateway` binding); Node 20.19; Go 1.25.5; Fabric CA 1.5.19; GoLevelDB; two peer orgs; Raft (3 orderers); `@hyperledger/fabric-gateway` | — | `run.json provenance`, `docs/AS-BUILT.md` §2 |
 | Ledger state at t0 | fresh ledgers every run (`reset-network.sh`: teardown + redeploy between runs) | — | `run.json` |
 
 ### 2.3 Dependent variables (measured)
@@ -190,7 +189,7 @@ next grid level is ≤ 5 % relative — while mean audit reconstruction time per
 within the stated bound of ≤ 1.5 × its value at the smallest grid level. Both anchored
 variants must satisfy the rule at the same level; if they disagree, the larger of the
 two qualifying levels is taken and the disagreement is reported. Thresholds: confirm
-with D.
+with the supervisor.
 
 4.2 **Channel count.** A grid level is *healthy* when (a) mean aggregate throughput is
 ≥ 0.95 × that of the previous grid level (non-declining), (b) mean failure rate ≤ 1 %,
@@ -198,7 +197,7 @@ and (c) the summed average CPU of all containers ≤ 0.9 × cores × 100 %. The 
 range is the longest contiguous run of healthy levels starting from the lowest level.
 `baseline.channels` = the **median grid level** of that range (lower-middle for an
 even count); it is never the maximum. `baseline.channels_max` = the top of the range.
-Thresholds: confirm with D.
+Thresholds: confirm with the supervisor.
 
 4.3 **Send rate.** Saturation = the first send rate at which successful throughput
 < 0.9 × the configured send rate (`report.py` flags it; the latency knee is shown
@@ -208,7 +207,7 @@ is a sub-saturation level from the same ramp: per variant, the highest healthy r
 ½ × its saturation point (else its highest healthy rate), and the baseline is the MINIMUM of the
 four variants' values, because E1, E2 and E3b run every variant at that one rate (`report.py`
 `ramp_suggestion` / `suggest_send_rate`; the desktop app suggests it, the authors confirm it).
-Margin, minimum-over-variants reading and thresholds: confirm with D.
+Margin, minimum-over-variants reading and thresholds: confirm with the supervisor.
 
 4.4 **Cases.** Cases are data, channels are infrastructure — and on Parallel and
 Parallel-Anchored there is **one channel per case** (authors' decision, 24 Sep 2026): data-case
@@ -233,7 +232,7 @@ within a cell.
 | Per-op | 4 variants × 3 | **12** | 6 (7 anchored) | `<measured after E0>` | `<measured after E0>` |
 | **Total** | | **≤ 150** (+ 8 pilot) | | | `<measured after E0>` |
 
-The fully crossed design D warned about (4 × 6 × 5 × 4 × 5 ≈ 2,400 runs) is replaced by
+The fully crossed design the supervisor warned about (4 × 6 × 5 × 4 × 5 ≈ 2,400 runs) is replaced by
 the calibrate-then-sweep sequence above. `experiment.py --dry-run` prints the plan and
 an ETA from `results/runlog.jsonl` medians once E0 has run; `--resume` skips complete
 runs.
@@ -316,43 +315,43 @@ flowchart TD
 | Single host; channel count bounded by CPU cores | Parallel variants cannot be scaled past the core count without measuring host exhaustion instead of the design | E2 sweep stops at the healthy range; E3b never exceeds `baseline.channels_max`; cores recorded per run |
 | GoLevelDB world state | no rich-query overhead is present; results do not transfer to CouchDB deployments | stated as scope; key-value access only by design |
 | Calibration-dependent fixed values | E3 results are conditional on `baseline.*` chosen by rules §4; E1's batch size was calibrated at the pre-set provisional channel count (20), not the E2 median | rules and thresholds stated up front; all baselines and the runs that produced them are reported (E1, E2 are experiments, not tuning) |
-| Off-chain witness integrity assumption | the receipt store (receipts + event copies) is deliberately un-hardened; its availability, not the ledger's integrity, is the exposure | measured and stated as a property of the design; no hash chains, replication or signatures are added |
+| Off-chain witness integrity assumption | the receipt store (receipts + event copies) is un-hardened by design; its availability, not the ledger's integrity, is the exposure | measured and stated as a property of the design; no hash chains, replication or signatures are added |
 | Anchored-variant write latency is **enqueue latency** on the gateway (BFF) path | Caliper's submit → response time for Anchoring / Parallel-Anchored writes ends when the event is accepted by the batcher, not when its root is committed | **anchoring delay** (enqueue → root committed, from batcher timestamps) is reported beside latency and covers the commit lag; the two are never summed silently |
 | Parallel latency is set by the block timer at low per-channel send rates | once channels > send rate ÷ 5 (per-channel rate < 5 tx/s, e.g. 20 channels at 50 tx/s = 2.5 tx/s each), no case channel fills a 10-message block within BatchTimeout 2 s, so every block is cut by the timer and Parallel's latency reflects block cutting, not host contention | block-cutting parameters are a controlled variable (§2.2); the per-channel send rate (each round's send rate — `manifest.json` `rounds[].sendRateTps`, the CSV's send-rate column — ÷ `levels.channels`) is to be stated beside every Parallel latency (derivable from the CSV; not yet a `report.py` column); the CPU column separates host contention from block cutting |
 | Caliper throughput numerator (issue #1418) | Caliper's reported throughput counts Succ + Fail | `collect.py` recomputes successful-only throughput (Succ / window) and records the policy string in every manifest |
-| End-of-round drain inside the throughput window | the window is `lastFinish − firstCreate`, so it includes the wait for the round's last blocks (≤ BatchTimeout 2 s after the last send), a bias of ≈ 2 s ÷ (round duration + 2 s) that falls on Parallel (every channel's last partial block waits for the timer): for 4,480-tx rounds (ramp, E3a, 20 cases) ≈ 1 % at 25 tx/s, ≈ 2 % at 50, ≈ 4 % at 100, ≈ 6–9 % at 150–200 (≈ 0.91 × send rate at 200, one point from the 0.9 rule); at 50 tx/s ≈ 8 % and ≈ 4 % for the 1,120- and 2,240-tx rounds of 5 and 10 cases. Standard's single channel fills its blocks (modelled ≤ 0.6 %) and the anchored variants' REST acks wait for no block, so on its own the drain puts Parallel ≈ 4–8 % below Standard at 5–10 cases (E3b) and adds a rising trend to E2's throughput vs channels (§4.2 a) | the ramp replays the E3a slice (224 events/case) instead of 800-tx rounds, which would read ≈ 0.89 × send rate on Parallel at 50 tx/s (modelled; CONTRACTS §12-21); a drain-free rate can be recomputed from the per-transaction `tCreate`/`tFinal` — **OPEN for the authors/D**: `collect.py` computes none yet (`windowS` = lastFinal − firstCreate); until it does, E2 §4.2(a), E3a's 200 tx/s flag on Parallel and E3b cross-variant throughput are reported with this bias stated |
+| End-of-round drain inside the throughput window | the window is `lastFinish − firstCreate`, so it includes the wait for the round's last blocks (≤ BatchTimeout 2 s after the last send), a bias of ≈ 2 s ÷ (round duration + 2 s) that falls on Parallel (every channel's last partial block waits for the timer): for 4,480-tx rounds (ramp, E3a, 20 cases) ≈ 1 % at 25 tx/s, ≈ 2 % at 50, ≈ 4 % at 100, ≈ 6–9 % at 150–200 (≈ 0.91 × send rate at 200, one point from the 0.9 rule); at 50 tx/s ≈ 8 % and ≈ 4 % for the 1,120- and 2,240-tx rounds of 5 and 10 cases. Standard's single channel fills its blocks (modelled ≤ 0.6 %) and the anchored variants' REST acks wait for no block, so on its own the drain puts Parallel ≈ 4–8 % below Standard at 5–10 cases (E3b) and adds a rising trend to E2's throughput vs channels (§4.2 a) | the ramp replays the E3a slice (224 events/case) instead of 800-tx rounds, which would read ≈ 0.89 × send rate on Parallel at 50 tx/s (modelled; CONTRACTS §12-21); a drain-free rate can be recomputed from the per-transaction `tCreate`/`tFinal` — **OPEN for the authors and the supervisor**: `collect.py` computes none yet (`windowS` = lastFinal − firstCreate); until it does, E2 §4.2(a), E3a's 200 tx/s flag on Parallel and E3b cross-variant throughput are reported with this bias stated |
 | Synthetic workload and trace | fixed proportions and payload sizes may not match real casework | trace parameters and hash are recorded; mix is a documented controlled variable |
 | Residual trace race (Standard, Parallel) | Caliper does not await submissions, so a TRANSFER/DISPOSE endorsed before the same evidence's previous CREATE/TRANSFER commits fails (`MVCC_READ_CONFLICT` or "evidence not found"); within a round the generator spaces such pairs ≥ 110 items apart in campaign traces and ≥ 7 (S/8; 5.6 s at 5 tx/s) in the E0 smoke trace's 60-item rounds (§2.2), except — for the campaign shapes (≥ 5 cases × 224 events/case/round) — in a worker's last ≤ `headGap` items (at most 72 measured); cells with ≤ 4 cases fall back earlier; beyond the saturation knee commit latency can exceed the spacing | modelled below saturation ≤ 0.1 % (Parallel, 20 cases: 0.004 % at 50 tx/s over a 5-round run, 0.10 % in the 200 tx/s round; 5–10 cases at 50 tx/s: 0.07–0.08 %; 0.48 % and 1.79 % with the previous generator (uniform interleave, no spacing)); past the knee it grows with commit latency (pessimistic queue model: Standard 2–6 % at 150–200 tx/s); counted in the failure rate and classes, never retried or filtered (CONTRACTS §12-22) |
 | Repetitions r = 3 | small samples; SD is indicative, not inferential | mean ± SD reported; no significance claims beyond the visible spread |
 
 ---
 
-## 8. Defaults to confirm with D
+## 8. Defaults to confirm with the supervisor
 
-Each row is a decision taken by the build brief on an open question in the supervisor
-spec (§6). Implemented and labelled as defaults; D confirms or overrides.
+Each row is a default chosen for a question the supervisor's review left open.
+Implemented and labelled as defaults; the supervisor confirms or overrides.
 
 | # | Default | Rationale |
 |---|---|---|
-| 1 | Batch grid `{10, 25, 50, 100, 200}`, **one grid for N and K** | one grid keeps the two anchored cells comparable in the factorial frame; the chat grid stands until the pilot says otherwise |
+| 1 | Batch grid `{10, 25, 50, 100, 200}`, **one grid for N and K** | one grid keeps the two anchored cells comparable in the factorial frame; the agreed grid stands until the pilot says otherwise |
 | 2 | Channel calibration on Parallel only; Parallel-Anchored inherits; Standard and Anchoring forced to 1 channel | anchoring is the A factor, channels the B factor — mixing them would confound the calibration |
 | 3 | One channel per case on the parallel variants (authors, 24 Sep 2026); data-case c → `case-NNN`, NNN = c; one case-count knob | keeps the paper's per-case channel model; a separate channel knob would let infrastructure and data drift apart |
 | 4 | Send-rate grid `{10, 25, 50, 75, 100, 150, 200}`; saturation = first rate with successful throughput < 0.9 × send rate; latency knee alongside | a numeric rule is reproducible; the grid brackets saturation on a laptop-class host and is trimmed after E0 |
 | 5 | r = 3; mean ± SD | keeps the budget ≤ 150 runs; SD conveys spread without over-claiming |
-| 6 | Per-operation breakdown at one point: `baseline.channels` × `baseline.send_rate_tps` × `baseline.batch_size` | the call's "one point" reading; crossing operations with sweeps re-creates the run explosion |
-| 7 | **AccessLog is a WRITE** custody event; reads = `ReadEvidence`, `GetAuditTrail` (+ `VerifyEvent` for anchored) in a separate reads table | in GLEIPNIR viewing evidence creates a custody record (ISO/IEC 27037 access logging); this **contradicts D's 10 Sep assumption** that AccessLog is read-only — D must be informed |
+| 6 | Per-operation breakdown at one point: `baseline.channels` × `baseline.send_rate_tps` × `baseline.batch_size` | the supervisor's "one point" reading; crossing operations with sweeps re-creates the run explosion |
+| 7 | **AccessLog is a WRITE** custody event; reads = `ReadEvidence`, `GetAuditTrail` (+ `VerifyEvent` for anchored) in a separate reads table | in GLEIPNIR viewing evidence creates a custody record (ISO/IEC 27037 access logging); this **contradicts the supervisor's 10 Sep assumption** that AccessLog is read-only — the supervisor must be informed |
 | 8 | p95 implemented from per-transaction JSONL written by the workloads from Caliper `TxStatus` timestamps | no custom TxObserver needed; the log is off the timed path and also yields failure classes |
-| 9 | Audit reconstruction per case: fetch every trail, verify every Merkle branch, read each distinct root once per case (cached per scope + batch, cache reset for every case); one untimed pass over case 1's first evidence item (trail + root reads, discarded) before the timed cases; anchoring delay is a separate metric | matches "fetch → recompute → verify"; caching roots reflects how a verifier would work, and a per-case cache plus the warm-up keep each case's time independent of the cases before it (E0: case 1 was timed cold on every variant — 45–161 ms vs 9–17 ms — and on Anchoring also paid all 5 root reads); delay answers N's "window time" question independently |
+| 9 | Audit reconstruction per case: fetch every trail, verify every Merkle branch, read each distinct root once per case (cached per scope + batch, cache reset for every case); one untimed pass over case 1's first evidence item (trail + root reads, discarded) before the timed cases; anchoring delay is a separate metric | matches "fetch → recompute → verify"; caching roots reflects how a verifier would work, and a per-case cache plus the warm-up keep each case's time independent of the cases before it (E0: case 1 was timed cold on every variant — 45–161 ms vs 9–17 ms — and on Anchoring also paid all 5 root reads); delay separately answers the "window time" question (how long events wait for their batch to fill and commit) |
 | 10 | Storage = per-channel block store (app + anchor channel) + GoLevelDB state per peer + receipt store (off-chain, incl. event bodies); checkpoints at t0 and after every round; bytes/event = OLS slope (≥ 3 points) with t0→tN delta cross-check | regression absorbs block-cutting granularity; the delta guards against a misfit |
 | 11 | E3b run for all four variants (data-scaling sweep for Standard and Anchoring) | keeps the 2×2 frame complete on the cases axis; the single-channel cells are the comparison Parallel is measured against |
-| 12 | `run.json` records cores/memory; hardware line in the paper optional | reproducibility evidence at zero cost; D said the paper line is optional |
-| 13 | E0 derives no channel count: the pre-set `baseline.channels` = 20 (below the host's 24 physical cores) serves the ramp and E1 until E2 replaces it | the brief lists a provisional channel count as an E0 output, but E0 has no channel sweep; a pre-set value below the core limit is the honest reading — D confirms |
+| 12 | `run.json` records cores/memory; hardware line in the paper optional | reproducibility evidence at zero cost; the supervisor said the paper line is optional |
+| 13 | E0 derives no channel count: the pre-set `baseline.channels` = 20 (below the host's 24 physical cores) serves the ramp and E1 until E2 replaces it | the supervisor's review lists a provisional channel count as an E0 output, but E0 has no channel sweep; a pre-set value below the core limit is the honest reading — the supervisor confirms |
 
-Two further notes for D:
+Two further notes for the supervisor:
 
-- **AccessLog is a write.** D's 10 Sep review assumed it was read-only; in GLEIPNIR
+- **AccessLog is a write.** The supervisor's 10 Sep review assumed it was read-only; in GLEIPNIR
   each access is a custody event written under the `(evidenceId, monotonicCounter)`
   sub-key. Genuinely read-only operations are benchmarked and tabulated separately.
 - **The paper's N and K grids are unified.** The earlier N ∈ {10, 50, 100, 250} and
-  K ∈ {5, 10, 25, 50} are replaced by the single grid in row 1; Bab 3 and Table 3
-  must be updated to match.
+  K ∈ {5, 10, 25, 50} are replaced by the single grid in row 1; Chapter 3 of the thesis
+  and its Table 3 must be updated to match.

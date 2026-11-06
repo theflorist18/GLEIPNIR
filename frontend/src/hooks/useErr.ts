@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { GatewayError } from '../api';
 
-// Inline-error helper promoted verbatim from demo.tsx (M14): run() clears the
+// Inline-error helper: run() clears the
 // message, awaits the action, and formats a GatewayError as "status: body".
 export function useErr() {
   const [msg, setMsg] = useState<string>('');

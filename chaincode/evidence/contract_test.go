@@ -153,9 +153,9 @@ func TestCreateReadRoundtrip(t *testing.T) {
 	if head.Custodian != "custodian-a" {
 		t.Errorf("custodian = %q, want custodian-a", head.Custodian)
 	}
-	// Pin the contracted WIRE shape, not just the Go struct: CONTRACTS sect. 5
-	// requires the flat Codex mapping — id at top level, never nested under
-	// a "codex" key (audit finding F25).
+	// Pin the contracted wire shape, not just the Go struct: docs/CONTRACTS.md
+	// §5 requires the flat Codex mapping, with id at top level, never nested
+	// under a "codex" key.
 	var wire map[string]any
 	if err := json.Unmarshal([]byte(out), &wire); err != nil {
 		t.Fatalf("unmarshal head as map: %v", err)
@@ -205,9 +205,9 @@ func TestTransferUpdatesCustodian(t *testing.T) {
 	}
 }
 
-// The Stage-1 correctness gate in miniature: two AccessLog calls with the SAME
-// tx timestamp but different txIDs must land on DISTINCT event keys (never a
-// single mutated record), so the world state ends with both events.
+// The conflict-free access-logging invariant in miniature: two AccessLog calls
+// with the same tx timestamp but different txIDs must land on distinct event
+// keys (never a single mutated record), so the world state ends with both events.
 func TestConcurrentAccessLogDistinctKeys(t *testing.T) {
 	c := &EvidenceContract{}
 	stub := newMemStub()
@@ -264,7 +264,7 @@ func TestDisposeIsTerminal(t *testing.T) {
 	if err := c.DisposeEvidence(ctx, id, "again"); err == nil {
 		t.Fatal("second DisposeEvidence should fail")
 	}
-	// AccessLog after disposal is deliberately still recorded (no head read).
+	// AccessLog after disposal is still recorded (it never reads the head).
 	stub.txID = "d3access00feed000aee"
 	if err := c.AccessLog(ctx, id, "auditor", "post-disposal-view"); err != nil {
 		t.Fatalf("post-disposal AccessLog should be recorded, got: %v", err)

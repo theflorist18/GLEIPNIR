@@ -1,6 +1,6 @@
 'use strict';
 
-// trace/generate.js — the determinism contract (brief §3): same params →
+// trace/generate.js — the determinism contract: same params →
 // byte-identical file; different seed → different sequence; lifecycle order
 // per evidence; exact per-worker lengths and op counts.
 

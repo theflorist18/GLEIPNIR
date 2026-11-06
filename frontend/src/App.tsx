@@ -14,10 +14,9 @@ import { LeadDashboardPage } from './pages/lead/LeadDashboardPage';
 import { UsersPage } from './pages/admin/UsersPage';
 import { CasesAdminPage } from './pages/admin/CasesAdminPage';
 
-// Multi-page evidence library (M14). The old single-page demo scope toggle
-// became real routes: the library pages for any signed-in role, the
-// admin section RequireRole-gated. nginx's SPA fallback (try_files ->
-// /index.html) makes deep links refresh-safe.
+// Route table of the evidence-library SPA: the library pages for any
+// signed-in role, the admin section RequireRole-gated. nginx's SPA fallback
+// (try_files -> /index.html) makes deep links refresh-safe.
 
 function Shell() {
   return (
@@ -47,7 +46,7 @@ export function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
-      {/* Print-optimized CoC report (M24): authenticated but OUTSIDE the
+      {/* Print-optimized CoC report: authenticated but outside the
           shell — no nav chrome on the court document. */}
       <Route path="/cases/:caseId/report" element={<RequireAuth><CoCReportPage /></RequireAuth>} />
       <Route element={<RequireAuth><Shell /></RequireAuth>}>

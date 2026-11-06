@@ -1,7 +1,7 @@
 """Hover-help texts for benchapp.pyw (the "?" icons, tab headers, buttons and table columns).
 
 Text only — no logic. Keep it in step with benchmark/sweeps.yaml, docs/methodology/experiments.md §4
-and the supervisor guidance (docs/supervisor-brief-2026-09-22.md).
+and docs/CONTRACTS.md §10.
 Terminology: send rate = configured input; throughput = measured output; TPS only as a unit;
 "baseline", never "optimal".
 """
@@ -15,8 +15,8 @@ TAB_HELP = {
         "BASELINES: the FIXED LEVELS of independent variables. Each is swept in its own experiment (send rate\n"
         "in the E0 ramp / E3a, batch size in E1, cases/channels in E2 / E3b) and held at its baseline wherever\n"
         "it is not swept (batch size in all of E3; cases in E3a and the per-operation breakdown; send rate in\n"
-        "E1, E2, E3b and the breakdown). D: batch size and channel count stay design factors, static in E3 —\n"
-        "'tinggal pakai value itu terus' (said of batch and channel; the send-rate baseline is our pilot rule).\n"
+        "E1, E2, E3b and the breakdown). Batch size and channel count stay design factors, static in E3\n"
+        "once calibrated; the send-rate baseline follows the E0 ramp rule.\n"
         "Always 'baseline', never 'optimal'. The calibrations must be reported in the paper.\n\n"
         "Save writes benchmark/sweeps.yaml in place (comments kept). run.json cites that file's git SHA, so\n"
         "commit it before a campaign."),
@@ -38,17 +38,17 @@ TAB_HELP = {
         "Held fixed: the baseline send rate and case count.\n\n"
         "Trade-off: bigger batches -> fewer on-chain transactions and less ledger growth, but longer\n"
         "anchoring delay and more verification work per audit.\n\n"
-        "Rule (methodology §4.1, confirm with D): the SMALLEST batch size where throughput and on-chain\n"
+        "Rule (methodology §4.1): the SMALLEST batch size where throughput and on-chain\n"
         "bytes/event change <= 5 % to the next level while audit time stays <= 1.5x the smallest level's.\n"
         "If the two variants disagree, the larger level is taken."),
     "E2 channels": (
         "Goal: find how many cases/channels Parallel handles on this host before it stops scaling.",
         "Parallel only (Parallel-Anchored inherits the result). One channel per case, so cases = channels.\n"
         "Held fixed: the baseline send rate.\n\n"
-        "Rule (methodology §4.2, confirm with D): a level is HEALTHY while throughput >= 0.95x the previous\n"
+        "Rule (methodology §4.2): a level is HEALTHY while throughput >= 0.95x the previous\n"
         "level, failure rate <= 1 % and total CPU <= 0.9 x cores x 100 %. The healthy range runs from the\n"
         "lowest level up to the first unhealthy one.\n"
-        "  baseline cases = the MEDIAN of that range (never its maximum — supervisor)\n"
+        "  baseline cases = the MEDIAN of that range (never its maximum)\n"
         "  max cases      = its top (E3b does not go beyond it: past it you measure the host running out\n"
         "                   of CPU, not the architecture)."),
     "E3 main": (
@@ -59,9 +59,8 @@ TAB_HELP = {
         "     max cases — shows e.g. where Parallel starts losing to Standard.\n"
         "Per-operation breakdown: each operation (create, transfer, access, dispose + the reads) tested on its\n"
         "     own at one operating point — which operation is most expensive? does anchoring help all of\n"
-        "     them? Writes and reads in separate tables (supervisor: 'masing-masing diuji').\n\n"
-        "Uses the fixed baselines from E0/E1/E2. Supervisor gate: send D the variable table + three\n"
-        "flowcharts before running E3."),
+        "     them? Writes and reads in separate tables.\n\n"
+        "Uses the fixed baselines from E0/E1/E2: set them before running E3."),
     "Custom test": (
         "One ad-hoc probe at your own levels — not an E1–E3 datapoint.",
         "Runs a single cell (experiment.py --exp cell) with any send rate(s), batch size, case count and\n"
@@ -70,7 +69,7 @@ TAB_HELP = {
     "History & results": (
         "Every run so far, its per-round results, and the exports for Excel.",
         "Left: every run in results/runlog.jsonl (a failed or cancelled attempt is its own row).\n"
-        "Right: the selected run's rounds in the supervisor's columns. Storage (on-/off-chain bytes per\n"
+        "Right: the selected run's rounds with the reported metrics. Storage (on-/off-chain bytes per\n"
         "event) is measured once per run, so it repeats on each round row.\n\n"
         "Exports: per-round CSV (one row per run x round, every setting + metric), summary tables (mean +- SD\n"
         "over repetitions, E1–E3 only) and charts (one per metric, one line per variant; none for the\n"
@@ -86,7 +85,7 @@ FIELD_HELP = {
         "order) on all four variants, so differences come from the architecture, not the workload. Only the\n"
         "channel routing differs (1 channel for Standard/Anchoring, one per case for the Parallel variants),\n"
         "so run.json shows two trace hashes per cell: one for each pair. Repetitions reuse it.\n"
-        "Keep it fixed for the whole campaign (D: 'kamu pastiin seed-nya tuh tetap')."),
+        "Keep it fixed for the whole campaign."),
     "workers": (
         "Caliper worker processes = the load-generating CLIENTS (4 per round, for every variant — not one per\n"
         "variant). They share the send rate and transaction count (5 tx/s = ~1.25 each); each replays its\n"
@@ -97,7 +96,7 @@ FIELD_HELP = {
     "repetitions": (
         "How many times each cell (variant x levels) is run: r0, r1, ... — each on a FRESH ledger with the SAME\n"
         "trace. Tables show mean +- SD: the SD tells whether a difference between variants is bigger than\n"
-        "run-to-run noise. 3 is the usual minimum; D's example used 5 (open: confirm with D). Cost: time\n"
+        "run-to-run noise. 3 is the usual minimum; 5 gives a steadier SD. Cost: time\n"
         "(r=5 is ~2/3 more machine time than r=3). E0 and the ramp always run once."),
     "workload.evidence_per_case": (
         "Evidence items per case in the trace (baseline 20 cases x 20 = 400 items). Each item: one create,\n"
@@ -111,7 +110,7 @@ FIELD_HELP = {
         "rate sets HOW FAST: round length ~ round size / send rate (4,480 at 50 tx/s ~ 90 s).\n"
         "Per run each case gets rounds x this (5 x 224 = 1,120), above the steady floor of 1,000. The seeded\n"
         "trace scatters channels around it: the least-loaded Parallel channel gets 1,046–1,102 over the case\n"
-        "grid (200 left some at 935–999, sub-floor; 224 decided 2026-09-29). cases x this must divide by the\n"
+        "grid (200 left some at 935–999, sub-floor). cases x this must divide by the\n"
         "workers for every case count (with 4 workers: a multiple of 4).\n"
         "High send rates make rounds short (4,480 tx at 200 tx/s ~ 22 s)."),
     "workload.rounds": (
@@ -127,8 +126,8 @@ FIELD_HELP = {
         "flight on one item can collide (the first E0's 1-in-240 failures); the trace now keeps such pairs\n"
         ">= 110 items apart within a round (campaign traces; the E0 smoke trace, 60 items per worker, keeps\n"
         ">= 7 = S/8, 5.6 s at 5 tx/s). The anchored variants only enqueue events to the batcher, so they\n"
-        "cannot collide. Our assumption: the guidance fixes the proportions\n"
-        "('proporsinya tetap') but gives no numbers — state and justify it in Bab 3."),
+        "cannot collide. The weights are a modelling assumption (fixed proportions, values chosen\n"
+        "for this benchmark): report them with the results."),
     "workload.mix.access_weight": (
         "Relative share of AccessLog (someone viewed/handled the evidence — a WRITE custody event) among the\n"
         "follow-up events. Only the ratio to the transfer weight matters (0.3 : 1.7 = 0.15 : 0.85).\n"
@@ -138,9 +137,9 @@ FIELD_HELP = {
         "deleted). 0.5 ~ half, rounded per worker (E0: 12 of 20). Keeps all four operations in the mix.\n"
         "Standard/Parallel: the chaincode then rejects later transfers, and like a transfer it can collide.\n"
         "Anchoring/Parallel-Anchored: events are only enqueued, so nothing is checked or rejected on-chain.\n"
-        "Our assumption — state it in Bab 3."),
+        "A modelling assumption: report it with the results."),
     "workload.payload_bytes": (
-        "Size of the synthetic stand-in for each evidence FILE (the supervisor's 'file size per evidence', in\n"
+        "Size of the synthetic stand-in for each evidence FILE ('file size per evidence', in\n"
         "bytes). The file itself is NEVER on-chain — only its SHA-256 hash (ni-URI) is — so this does not\n"
         "change ledger growth or the comparison between variants."),
     "workload.audit_cases": (
@@ -169,7 +168,7 @@ FIELD_HELP = {
     "baseline.send_rate_tps": (
         "Baseline SEND RATE (configured input, tx/s) used by E1, E2, E3b and the per-operation breakdown.\n"
         "From the E0 ramp: per variant, the highest healthy rate <= 1/2 of its saturation point; the baseline\n"
-        "is the LOWEST of the four (all variants run at one rate). Rule: confirm with D."),
+        "is the LOWEST of the four (all variants run at one rate)."),
     "baseline.batch_size": (
         "Baseline batch size (events per Merkle batch; Anchoring + Parallel-Anchored only), from E1 — then\n"
         "held fixed in E3 (the same value for both anchored variants)."),

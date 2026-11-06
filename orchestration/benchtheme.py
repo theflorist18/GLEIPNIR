@@ -1,7 +1,8 @@
 """GLEIPNIR Bench theme — named ttk styles replacing the literals in benchapp.pyw.
 
 Call benchtheme.apply(root) in main() right after ttk.Style().theme_use("vista").
-Hex values come from gleipnir-design/tokens.json (hybrid: Organic neutrals + brief data colours).
+Hex values follow the project's design tokens (frontend/src/tokens.css): warm neutrals plus the
+variant data colours in variant_style.py. Contrast ratios are against the window background.
 Under vista, Windows draws buttons, checkbuttons, progress bars, notebook tabs and Treeview
 headings natively — only Label foregrounds, tk.* widget colours, Treeview tags and images apply.
 """
@@ -11,13 +12,13 @@ from tkinter import ttk, font as tkfont
 from variant_style import VARIANT_STYLE as VARIANT
 
 TEXT = "#201E1D"          # text.primary        17.0:1 on desk
-NOTE = "#474238"          # text.secondary      9.4:1  (replaces #555)
-HINT = "#645C50"          # text.muted          6.0:1  (replaces #777, which failed at 3.9:1)
+NOTE = "#474238"          # text.secondary      9.4:1
+HINT = "#645C50"          # text.muted          6.0:1
 DISABLED = "#A19786"      # text.disabled       exempt
-BASELINE = "#2F3E9E"      # info                8.0:1  (replaces #036)
-ERROR = "#B42318"         # error               5.8:1  (replaces #b00)
-SAVED = "#1B7339"         # success             5.2:1  (replaces #060)
-WARN = "#8A5A00"          # warning             5.2:1  (replaces #a60)
+BASELINE = "#2F3E9E"      # info                8.0:1
+ERROR = "#B42318"         # error               5.8:1
+SAVED = "#1B7339"         # success             5.2:1
+WARN = "#8A5A00"          # warning             5.2:1
 SELECT_BG, SELECT_FG = "#8C491A", "#FFFFFF"   # brand.primary, 6.9:1
 TIP_BG = "#FFFFE8"
 LOG_BG, LOG_MARKER = "#FFFFFF", "#8C491A"

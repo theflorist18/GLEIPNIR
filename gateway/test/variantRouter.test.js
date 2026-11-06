@@ -4,8 +4,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { routeWrite, routeRead, channelFor, RequestError, foldHead } = require('../src/variantRouter');
 
-// Off-chain trail fixture (M26): three receipts for ev-1 in enqueue order, each
-// carrying the CoC event it witnesses; plus one pre-M26 receipt without an
+// Off-chain trail fixture: three receipts for ev-1 in enqueue order, each
+// carrying the CoC event it witnesses; plus one older receipt without an
 // event copy, which must contribute no trail entry.
 const receiptFor = (i, event) => ({
   eventId: event.eventId, evidenceId: 'ev-1', event,
@@ -77,12 +77,12 @@ test('parallel-anchored: enqueue to batcher (per-case), 202', async () => {
   const f = fakes();
   const r = await routeWrite({ variant: 'parallel-anchored', fn: 'CreateEvidence', ccArgs: ['ev-1', '{}'], event: evt('case-003'), caseId: 'case-003' }, f.deps);
   assert.equal(r.status, 202);
-  assert.equal(r.body.evidenceId, 'ev-1'); // batched response carries evidenceId too (F68)
+  assert.equal(r.body.evidenceId, 'ev-1'); // batched response carries evidenceId too
   assert.equal(f.enqueues[0].caseId, 'case-003');
   assert.equal(f.submits.length, 0);
 });
 
-// F57: the batched path must be as strict as the direct path — a missing or
+// The batched path must be as strict as the direct path — a missing or
 // invalid caseId in a per-case variant is a 400, never a silent pool into the
 // "shared" scope.
 test('parallel-anchored: missing/invalid caseId rejected 400 BEFORE enqueue', async () => {
@@ -117,7 +117,7 @@ test('routeRead evaluates on the resolved channel', async () => {
   assert.match(out, /case-001/);
 });
 
-// ---- M26: batched variants read the OFF-CHAIN trail, never the app channel ----
+// ---- batched variants read the off-chain trail, never the app channel ----
 
 test('anchoring GetAuditTrail: CoC events in receipt order, no proof by default, fabric untouched', async () => {
   const f = fakes();

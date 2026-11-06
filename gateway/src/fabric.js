@@ -1,6 +1,6 @@
 'use strict';
 
-// The ONLY @hyperledger/fabric-gateway sessions to the APPLICATION channels
+// The only @hyperledger/fabric-gateway sessions to the application channels
 // (coc-main, case-*). One shared grpc client; a Network/Contract is created per
 // call (plain object construction, no RPC). Returns a {submit, evaluate} adapter that the
 // routes/variantRouter consume. The anchor channel is owned by the anchor-client
@@ -15,9 +15,9 @@ const crypto = require('node:crypto');
 const grpc = require('@grpc/grpc-js');
 const { connect, hash, signers } = require('@hyperledger/fabric-gateway');
 
-// Same fixed paths the Caliper network configs pin. Re-enrollment ADDS a
+// Same fixed paths the Caliper network configs pin. Re-enrollment adds a
 // hash-named key beside the old one, so never pick a keystore file by name
-// order; registerEnroll.sh refreshes priv_sk to the newest key (audit F47/F56).
+// order; registerEnroll.sh refreshes priv_sk to the newest key.
 async function readIdentity(cryptoPath) {
   const credentials = await fs.readFile(path.join(cryptoPath, 'signcerts', 'cert.pem'));
   const privateKeyPem = await fs.readFile(path.join(cryptoPath, 'keystore', 'priv_sk'));

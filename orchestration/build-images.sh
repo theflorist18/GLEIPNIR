@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Dev-host workaround (first used in docs/reviews/chunk-7-live-e2e.md §Environment):
-# pre-build the compose images with the host MITM-proxy CA injected at BUILD
-# time only. The tracked Dockerfiles are citation-pinned and must not change,
-# so wrappers are GENERATED from them (awk-inserted CA lines only) and the CA
-# is supplied via --build-context — it never enters the repo. Tags match the
+# Dev-host workaround for a TLS-intercepting (MITM) proxy: pre-build the compose
+# images with the proxy's CA injected at build time only. The tracked
+# Dockerfiles are cited by commit SHA and must not change, so wrappers are
+# generated from them (awk-inserted CA lines only) and the CA is supplied via
+# --build-context; it never enters the repo. Tags match the
 # compose-v2 defaults (<project>-<service>) so `compose up` skips building.
 #
 # Re-run after code changes to any image, or if the engine's image store is
@@ -12,11 +12,13 @@
 # Afterwards verify the dependencies resolve inside each Node image: npm can
 # exit 0 with an empty node_modules when TLS through the proxy fails.
 #
-#   GLEIPNIR_REPO=/path/to/repo GLEIPNIR_CA_BUNDLE=/path/to/ca.crt \
-#     bash orchestration/build-images.sh
+#   GLEIPNIR_CA_BUNDLE=/path/to/ca.crt bash orchestration/build-images.sh
+#
+# GLEIPNIR_REPO defaults to the checkout holding this script, GLEIPNIR_CA_BUNDLE
+# to ~/gleipnir-ca-bundle.crt.
 set -euo pipefail
-REPO="${GLEIPNIR_REPO:-/c/theflorist18/Gleipnir}"
-CA_BUNDLE="${GLEIPNIR_CA_BUNDLE:-/c/Users/LENOVO/gleipnir-ca-bundle.crt}"
+REPO="${GLEIPNIR_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+CA_BUNDLE="${GLEIPNIR_CA_BUNDLE:-${HOME}/gleipnir-ca-bundle.crt}"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT

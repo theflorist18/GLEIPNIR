@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Icon } from './Icon';
 
-// Small shared chips from the Claude Design screens: status pills whose SHAPE
+// Small shared chips: status pills whose shape
 // carries the meaning as well as colour, initials avatars, and a copy button.
 
 // Round dot = open/active, filled square = closed/disposed (never red — a

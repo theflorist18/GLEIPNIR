@@ -1,13 +1,13 @@
 'use strict';
 
-// Seeded transaction-trace generator — the determinism contract (brief §3).
+// Seeded transaction-trace generator — the determinism contract.
 //
-// A trace is a PURE function of (seed, cases, channels, evidencePerCase,
+// A trace is a pure function of (seed, cases, channels, evidencePerCase,
 // eventsPerCasePerRound, rounds, workers, mix, payloadBytes, headGap): same params →
 // byte-identical file; different seed → different file. The four variants
-// replay the SAME trace (workload/trace.js); only the write path differs.
+// replay the same trace (workload/trace.js); only the write path differs.
 //
-// Rules: (a) evidence e (global index) is owned by worker e mod workers and ALL
+// Rules: (a) evidence e (global index) is owned by worker e mod workers and all
 // its ops sit in that worker's sequence in lifecycle order
 // CREATE → (TRANSFER|ACCESS)* → [DISPOSE]; (b) each worker's sequence is a
 // seeded interleave of its evidence lifecycles, weighted by remaining ops so

@@ -34,8 +34,8 @@ if (-not (Healthy)) {
     if (-not (Healthy)) { Write-Host 'The web app did not come up; see the output above.'; Read-Host 'Press Enter to close'; exit 1 }
 }
 
-# Own Chrome profile, app window: its cache never mixes with the everyday browser (a pre-redesign
-# SPA cached there kept showing up on 2026-09-29). Falls back to the default browser.
+# Own Chrome profile, app window: its cache never mixes with the everyday browser, where a stale
+# cached SPA build can hide a newer one. Falls back to the default browser.
 $chrome = 'C:\Program Files\Google\Chrome\Application\chrome.exe'
 if (Test-Path $chrome) {
     $profile = Join-Path $env:LOCALAPPDATA 'GleipnirWeb'

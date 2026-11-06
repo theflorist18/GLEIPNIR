@@ -8,10 +8,10 @@
 //
 // Root keys are (caseId, batchId): the chaincode derives scopeId from
 // metaJSON.caseId, so concurrent per-case roots write distinct state keys and
-// never MVCC-collide (CONTRACTS §3 root sub-key design).
+// never MVCC-collide (docs/CONTRACTS.md §3, root sub-key design).
 //
-// This file has NO static import of ./fabric.js; the real Fabric session is
-// loaded only inside start(). Tests inject a fake contract via createApp().
+// No static import of ./fabric.js: the real Fabric session is loaded only
+// inside start(). Tests inject a fake contract via createApp().
 
 import http from 'node:http';
 import { pathToFileURL } from 'node:url';
@@ -147,7 +147,7 @@ async function start() {
 
 // Only start the server when run directly, not when imported by tests.
 // pathToFileURL handles Windows drive letters correctly (a hand-rolled
-// `file://C:/...` puts the drive in the URL host and never matches — F66).
+// `file://C:/...` puts the drive in the URL host and never matches).
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   start().catch((err) => {
     console.error(`anchor-client failed to start: ${err.stack || err.message}`);

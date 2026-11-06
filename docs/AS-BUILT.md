@@ -14,18 +14,17 @@ updated 2026-08-03** to fill in the M25/M25b library additions (team-roster
 picker, in-place case-role change, persistent case activity feed) that had
 landed in code and CONTRACTS.md but not yet in this document's route table
 and frontend catalogue, and to add §9 covering the `owasp-top10-review`
-branch's web-app-tier security hardening (N1–N6). **Updated 2026-09-22 for
-M26**, the experimental redesign mandated by the supervisor brief
-(`docs/supervisor-brief-2026-09-22.md`; decision record
-CONTRACTS §12-10..17): `RemoveEvidence` → `DisposeEvidence`; one batch-size
-grid (`BATCH_SIZE`/`BATCH_FLUSH_MS`); receipts carry the event copy and the
+branch's web-app-tier security hardening (six fixes). **Updated 2026-09-22 for
+M26**, the experimental redesign requested in the supervisor's review
+(2026-09-22; decision record docs/CONTRACTS.md §12-10..17):
+`RemoveEvidence` → `DisposeEvidence`; one batch-size grid (`BATCH_SIZE`/`BATCH_FLUSH_MS`); receipts carry the event copy and the
 receipt store indexes them per evidence, so the anchored variants read their
 trail off-chain; the benchmark became a seeded trace-replay harness with
 per-transaction capture; `sweep.py`/`generate-rounds.js` were replaced by
 `rounds.py` + `experiment.py` (E0/ramp/E1/E2/E3a/E3b/ops) with a ledger-only
 reset per run; and audit reconstruction time, anchoring delay, CPU/memory,
-failure classes and p95 joined the metrics. **Updated 2026-09-26 for the ponytail
-refactor** (CONTRACTS §12-20):
+failure classes and p95 joined the metrics. **Updated 2026-09-26 for the
+simplification refactor** (docs/CONTRACTS.md §12-20):
 - generated Caliper configs are no longer committed, and `rounds.py --static`, `teardown-channel.sh` and
   `case-template.yaml` are gone;
 - `BATCH_N`/`BATCH_K`, `--fresh-network` and `SESSION_IDLE_TTL_SECONDS` are removed;
@@ -39,12 +38,9 @@ normative; the paper-facing procedure lives in `docs/methodology/experiments.md`
 | `docs/ARCHITECTURE.md` | The binding **build plan** (written before implementation; milestones, module specs) |
 | `docs/CONTRACTS.md` | The binding **interface contracts** (§1–§12; cited below rather than restated) |
 | **`docs/AS-BUILT.md`** (this file) | The system **as implemented**: modules, dependencies, ports, data flows |
-| `docs/STATUS.md` | **Where things stand**: live environment, how to run, next steps, open decisions — one living file, updated in place (replaced the dated handoffs on 2026-09-28) |
-| `docs/supervisor-brief-2026-09-22.md` | The supervisor's consolidated guidance that mandated M26 (governing input; moved from the repo root on 2026-09-28) |
-| `docs/reviews/REPORT.md` + `docs/reviews/*` | The **verification record** (`docs/audit/` until 2026-09-28): static code audit (F1–F71), live E2E (F72–F73), variant smokes (F74–F76), the library reviews, and the pre-M26 steady-state campaign notes |
-| `docs/reviews/security-review.md` | The **S1–S20 security pass** — first systematic security review, all fixable items resolved |
-| `docs/reviews/owasp-top10-review.md` | The **OWASP Top 10 (2021) pass** over the web-app tier — six new fixes (N1–N6), summarized in §9 |
-| `docs/methodology/experiments.md` | The **paper-facing methodology** (M26): 2×2 frame, variable table, E0–E3 + ops procedures, level-selection rules, run budget, flowcharts, threats to validity, defaults to confirm with D |
+| `docs/methodology/experiments.md` | The **paper-facing methodology** (M26): 2×2 frame, variable table, E0–E3 + ops procedures, level-selection rules, run budget, flowcharts, threats to validity, defaults to confirm with the supervisor |
+| `docs/research/` | Version-pinned research notes on Fabric 2.5, Caliper 0.6.0 and the fabric-samples patterns reused |
+| `docs/results/` | Generated per-experiment tables and charts (`report.py` / `present.py` output) |
 
 GLEIPNIR benchmarks four blockchain chain-of-custody (B-CoC) architectural
 variants on a single Hyperledger Fabric 2.5 LTS substrate, measured with
@@ -140,7 +136,7 @@ on-chain or are Merkle-anchored.
 | Benchmark app | Python 3.11 + tkinter (Tk 8.6), PyYAML; drives `experiment.py` inside WSL | `orchestration/benchapp.pyw`, `orchestration/benchcore.py` |
 | Orchestration | Python 3.10+, PyYAML ≥6.0 | `orchestration/requirements.txt` |
 
-Two `@hyperledger/fabric-gateway` versions coexist deliberately: the
+Two `@hyperledger/fabric-gateway` versions coexist on purpose: the
 **services** (gateway, anchor-client) pin `1.11.0` in their own images, while
 the **Caliper workspace** binds `^1.5.0` — the version its 0.6.0 fabric
 connector was released against — in `benchmark/node_modules`. They never share
@@ -368,7 +364,7 @@ sequenceDiagram
 | `GET /api/v1/evidence/:id/download` | stream from evidence-store; authz-gated with `{content:true}` — **admin bypass does not apply** (M18/§12-8: admins lose blob-content access off their own cases); auto-`AccessLog(download)` |
 | `GET /api/v1/evidence/:id/export` | `{record, auditTrail}` bundle; auto-`AccessLog(export)` |
 | `GET /api/v1/evidence/:id/audit[?proofs=1]` | `GetAuditTrail` (evaluate) — on the anchored variants (M26) the CoC events from the receipt-store index in receipt order, `?proofs=1` attaching each event's `proof {leafHash, siblingPath, batchId, leafIndex, rootRef}` verbatim (the gateway verifies nothing); authz-gated, never auto-logged |
-| `GET /api/v1/evidence/:id/verify?eventId=` | proxy → verification `/verify/:eventId`; not variant-restricted at the gateway itself — on Standard the call 502s because `verification:4004` only ships with the anchoring variants (not SSRF, tracked separately in `docs/reviews/owasp-top10-review.md` A10); the SPA never calls it under Standard |
+| `GET /api/v1/evidence/:id/verify?eventId=` | proxy → verification `/verify/:eventId`; not variant-restricted at the gateway itself — on Standard the call 502s because `verification:4004` only ships with the anchoring variants (not SSRF; assessed under OWASP A10 in the §9 review); the SPA never calls it under Standard |
 | `PATCH /api/v1/evidence/:id/details` | M19 forensic metadata (label/seizedAt/acquisitionLocation/handedOverBy); write-gated (contributor+), never auto-logged |
 | `GET/POST /api/v1/evidence/:id/notes` | M20 examiner notes — append-only, immutable-by-API; read/write case-role gated |
 | `PUT /api/v1/evidence/:id/flag` | M20 strict-enum triage flag (`HIGH_PRIORITY`/`PROCESSED`/`NEEDS_LEAD_REVIEW`); write-gated |
@@ -383,10 +379,10 @@ sequenceDiagram
 | `GET /internal/anchor-root/:scopeId/:batchId` | evaluate `ReadAnchorRoot` on `coc-main`; same service-only gate |
 | `GET /healthz` | `{ok:true, variant}` (unauthenticated) |
 
-Every response carries gateway-origin security headers (N2, §9) regardless
+Every response carries gateway-origin security headers (§9) regardless
 of auth outcome; a malformed request body gets a generic JSON error rather
-than a stack trace (N6, §9); sessions die at the earlier of an 8 h absolute
-TTL or a 30 min sliding idle timeout (N3, §9).
+than a stack trace (§9); sessions die at the earlier of an 8 h absolute
+TTL or a 30 min sliding idle timeout (§9).
 
 - **Dependencies:** `@grpc/grpc-js ^1.14.0`, `@hyperledger/fabric-gateway
   1.11.0`, `express ^4.21.2`, `multer ^2` (M13c). M26 adds two injected
@@ -450,7 +446,7 @@ TTL or a 30 min sliding idle timeout (N3, §9).
   receipts in index order (`[]` if none; 400 if missing/invalid),
   `GET /healthz`.
 - **Dependencies:** `express ^4.21.2` only.
-- **Deliberately un-hardened** (thesis-critical): no hash chains, no
+- **Un-hardened by design** (thesis-critical): no hash chains, no
   signatures, no replication — on the receipts **or** the index or the event
   copies. Its weaker-than-on-chain integrity guarantee is a *measured property
   of the anchoring design* — an availability exposure of the witness (index
@@ -635,7 +631,7 @@ admin operations run inside the `gleipnir-cli` fabric-tools container.
 | `reset-network.sh --variant V --channels C` | M26 **ledger-only reset** between runs: refuses without `GLEIPNIR_ALLOW_LEDGER_WIPE=1`; prints and removes only `gleipnir_{orderer0,orderer1,orderer2,peer0org1,peer0org2,peer0anchor}-ledger`, `gleipnir_receipt-data`, `gleipnir_verify-metrics`; deletes `network/channel-artifacts`, unsets the ccaas ids, re-runs `up.sh --skip-crypto`; never touches `gateway-auth-data`, `case-registry-data`, `evidence-blob-data`, CA state or `network/organizations` |
 | `backup-volumes.sh <dir> [--restore]` | tar every `gleipnir_*` named volume via `alpine` (one file each); `--restore` REPLACES each volume's contents and refuses while a container uses it — the desktop app runs it before every ledger reset |
 | `benchapp.pyw` + `benchcore.py` | the desktop benchmark app (M27, CONTRACTS §12-19): input boxes bound to `sweeps.yaml`, Preview/Run/Resume/Cancel per experiment through WSL, live per-round results, history, CSV export, suggested baselines, automatic backup/restore; `test_benchapp.py` |
-| `lib.sh` | shared helpers: `compose`/`cli`/`peer_env`, `create_channel`, `join_peer`, `app_channel` / `deploy_app_chaincode` (genesis → join → Raft wait → approve + commit, used by `up.sh` and `provision-channel.sh`), `package_ccaas`, `set_env_var`, `wait_raft_leader`, `wait_healthz` (accepts peers' permanent-503 docker check, audit F74) |
+| `lib.sh` | shared helpers: `compose`/`cli`/`peer_env`, `create_channel`, `join_peer`, `app_channel` / `deploy_app_chaincode` (genesis → join → Raft wait → approve + commit, used by `up.sh` and `provision-channel.sh`), `package_ccaas`, `set_env_var`, `wait_raft_leader`, `wait_healthz` (accepts peers' permanent-503 docker check) |
 | `provision-channel.sh case-NNN` | idempotent per-case channel provisioning (parallel variants) via `lib.sh` `app_channel`, reusing the package id up.sh installed (`CCAAS_ID_APP`); experiment.py calls it for channels the running stack lacks. It writes no Caliper config |
 | `smoke-standard.sh` | functional gate: create → transfer → access ×2 → audit==4 → dispose → head status `DISPOSED` → transfer-after-dispose must fail |
 | `rounds.py` (library, no CLI) | the ONLY renderer of Caliper benchconfigs and network configs from `sweeps.yaml`; nothing it renders is committed. `render_parallel_network()` writes `parallel-c{C}.yaml` into each parallel run's folder; library `render_round()` / `network_config()` / `smoke_rounds()` / `ops_rounds()` / `trace_round()` for experiment.py |
@@ -650,7 +646,7 @@ unless overridden; e0/ramp always 1 rep):
 | exp | variants | swept | fixed | rounds per run |
 |---|---|---|---|---|
 | `e0` | all 4 | — | `regimes.smoke` shape at 5 tx/s; parallel* on one channel per smoke case (10) | per-op smoke rounds (+ `smoke-access-shared-gate` on standard, `smoke-verify` on anchored) + `smoke-trace` + audit; regime `smoke` |
-| `ramp` | all 4 | send rate | `ramp.events_per_case_per_round` | one `rate<R>` round per send rate; prints throughput vs send rate + suggested `baseline.send_rate_tps` (confirm with D) |
+| `ramp` | all 4 | send rate | `ramp.events_per_case_per_round` | one `rate<R>` round per send rate; prints throughput vs send rate + suggested `baseline.send_rate_tps` (confirm with the supervisor) |
 | `e1` | anchoring (1 ch), parallel-anchored (`baseline.channels`) + standard/parallel **reference** runs (`levels.reference`) | `batch_sizes` | `baseline.send_rate_tps` | `workload.rounds` trace slices `slice<k>` |
 | `e2` | parallel | `channel_counts` | `baseline.send_rate_tps` | slices; cases = channels (one channel per case) |
 | `e3a` | all 4 | send rate | `baseline.batch_size`, `baseline.channels` | one `rate<R>` round per send rate, ascending |
@@ -874,50 +870,47 @@ These are experimental controls; each was audited as an invariant:
 
 ## 9. Security posture (`owasp-top10-review` branch)
 
-A prior systematic pass (`docs/reviews/security-review.md`, S1–S20) resolved
-every fixable web-app-tier finding. A follow-on OWASP Top 10 (2021) review
-(`docs/reviews/owasp-top10-review.md`, 2026-07-24) re-verified the S-fixes live
-against the running **standard** variant and found six residual gaps, all now
-fixed (N1–N6) and unit-tested — none touch the chaincode, the frozen
+A prior systematic security review resolved every fixable web-app-tier
+finding. A follow-on OWASP Top 10 (2021) review (2026-07-24) re-verified those
+fixes live against the running **standard** variant and found six residual
+gaps, all now fixed and unit-tested — none touch the chaincode, the frozen
 contracts, or the service-token/benchmark write path:
 
 | # | Category | Fix | Where |
 |---|---|---|---|
-| **N1** | A02 Cryptographic Failures | Service/internal bearer-token comparisons (`===`/`!==`) were the only non-constant-time secret comparisons in the codebase. Replaced with a length-guarded `safeEqual()` (fixed-digest hash → `crypto.timingSafeEqual`) in gateway, case-registry, evidence-store. | `gateway/src/auth.js`, `services/case-registry/src/index.js`, `services/evidence-store/src/index.js` |
-| **N2** | A05 Security Misconfiguration | The gateway's own origin (`:3000`) shipped bare responses — no security headers — if reached directly, bypassing the nginx edge. Added `nosniff` / `X-Frame-Options: DENY` / `Referrer-Policy: no-referrer` / strict `default-src 'none'` CSP middleware. | `gateway/src/app.js` |
-| **N3** | A07 Auth Failures | Sessions were absolute-TTL-only (8 h) — a token on an unattended terminal stayed valid the full window. Added a sliding idle timeout (30 min), refreshed per authenticated request, dying at the earlier of the two clocks. (Its `SESSION_IDLE_TTL_SECONDS` override was never set anywhere and was removed 2026-09-26, CONTRACTS §12-20.) | `gateway/src/sessions.js` |
-| **N4** | A09 Logging & Monitoring | No security-relevant *failure* was logged anywhere (failed logins, lockouts, authz denials, `/internal/anchor-root` probing) — only successful on-chain writes are visible in the audit trail. Added a structured JSON stderr sink; logs only failures, never secrets (unit-verified no-secret guarantee). | `gateway/src/securityLog.js` |
-| **N5** | A06 Vulnerable Components | First `npm audit` pass on the repo; patched non-pinned runtime advisories (`body-parser`, `protobufjs`) via lockfile-only `npm audit fix` across gateway/anchor-client/merkle-batcher/receipt-store/verification → 0 vulns. Pinned versions (`fabric-gateway 1.11.0`, `caliper-cli 0.6.0`) untouched. | lockfiles only |
-| **N6** | A05 / A09 | A malformed JSON request body returned Express's default HTML error page with a full stack trace and container filesystem paths — S15's per-route sanitizer never saw it because `express.json()` throws before routing. Added a terminal error-handling middleware: generic JSON body to the client, detail logged server-side. | `gateway/src/app.js` |
+| 1 | A02 Cryptographic Failures | Service/internal bearer-token comparisons (`===`/`!==`) were the only non-constant-time secret comparisons in the codebase. Replaced with a length-guarded `safeEqual()` (fixed-digest hash → `crypto.timingSafeEqual`) in gateway, case-registry, evidence-store. | `gateway/src/auth.js`, `services/case-registry/src/index.js`, `services/evidence-store/src/index.js` |
+| 2 | A05 Security Misconfiguration | The gateway's own origin (`:3000`) shipped bare responses — no security headers — if reached directly, bypassing the nginx edge. Added `nosniff` / `X-Frame-Options: DENY` / `Referrer-Policy: no-referrer` / strict `default-src 'none'` CSP middleware. | `gateway/src/app.js` |
+| 3 | A07 Auth Failures | Sessions were absolute-TTL-only (8 h) — a token on an unattended terminal stayed valid the full window. Added a sliding idle timeout (30 min), refreshed per authenticated request, dying at the earlier of the two clocks. (The 30 min idle window is fixed; there is no environment override — docs/CONTRACTS.md §12-20.) | `gateway/src/sessions.js` |
+| 4 | A09 Logging & Monitoring | No security-relevant *failure* was logged anywhere (failed logins, lockouts, authz denials, `/internal/anchor-root` probing) — only successful on-chain writes are visible in the audit trail. Added a structured JSON stderr sink; logs only failures, never secrets (unit-verified no-secret guarantee). | `gateway/src/securityLog.js` |
+| 5 | A06 Vulnerable Components | First `npm audit` pass on the repo; patched non-pinned runtime advisories (`body-parser`, `protobufjs`) via lockfile-only `npm audit fix` across gateway/anchor-client/merkle-batcher/receipt-store/verification → 0 vulns. Pinned versions (`fabric-gateway 1.11.0`, `caliper-cli 0.6.0`) untouched. | lockfiles only |
+| 6 | A05 / A09 | A malformed JSON request body returned Express's default HTML error page with a full stack trace and container filesystem paths — the per-route error sanitizer from the earlier review never saw it because `express.json()` throws before routing. Added a terminal error-handling middleware: generic JSON body to the client, detail logged server-side. | `gateway/src/app.js` |
 
 **Documented, not fixed — intentional design properties (do not "fix"):**
-D1 the receipt store's un-hardened witness (§4.4, §8) · D2 committed non-production
+the receipt store's un-hardened witness (§4.4, §8) · committed non-production
 default secrets in `network/compose/.env` (reproducible local-dev artifact) ·
-D3 plaintext HTTP + non-empty-only password policy (single-host,
-non-production posture) · D4 the §12-8 admin blob barrier is
-self-serviceable but fully auditable, not a hard prevention control · **C1
-(stop-and-ask, untouched)** the single shared `GLEIPNIR_TOKEN` authenticates
+plaintext HTTP + non-empty-only password policy (single-host,
+non-production posture) · the docs/CONTRACTS.md §12-8 admin blob barrier is
+self-serviceable but fully auditable, not a hard prevention control · **left
+unchanged:** the single shared `GLEIPNIR_TOKEN` authenticates
 every route including internal ones — frozen by the Caliper/smoke-script
 dependency on it; changing it needs an explicit contract amendment.
 
-Final verification (Chunk 11): gateway unit suites 45/45, evidence-store 9/9,
+Final verification: gateway unit suites 45/45, evidence-store 9/9,
 `smoke-library.sh` 17/17, a 79-check live functional battery 78/79 (the one
 gap a known harness-ordering artifact, not an app defect), and the manual
 23-exhibit test fixture confirmed untouched (0 events added by the review
-itself). Full detail, live-probe transcripts, and the OWASP-category-by-
-category writeup live in `docs/reviews/owasp-top10-review.md`.
+itself).
 
 ## 10. Repository layout
 
 ```
 Gleipnir/
-├── CLAUDE.md                 # build rulebook (invariants, pins, bans) — local, gitignored (a935b30)
 ├── README.md                 # entry point + docs map
 ├── chaincode/evidence/       # Go ccaas contract + Dockerfile
 ├── gateway/                  # BFF service (Node 20, express, fabric-gateway, auth/users/sessions)
 ├── services/
 │   ├── merkle-batcher/       # batching + Merkle tree construction
-│   ├── receipt-store/        # off-chain witness store (deliberately un-hardened)
+│   ├── receipt-store/        # off-chain witness store (un-hardened by design)
 │   ├── verification/         # RQ2 timed verification path
 │   ├── anchor-client/        # sole writer of the anchor channel
 │   ├── case-registry/        # M13a: off-chain Case entity + evidence read-model (SQLite, node:20.19-slim)
@@ -938,14 +931,14 @@ Gleipnir/
 │   ├── workload/             # trace replay + per-op + read + verify modules, lib/txlog.js
 │   ├── traces/               # generated <hash>.json traces (gitignored)
 │   └── results/              # <exp>/<variant>/<levels>/r<rep>/ + runlog.jsonl (gitignored)
-└── docs/                     # STATUS (living handoff), ARCHITECTURE (plan), CONTRACTS, this file, methodology/experiments.md, supervisor-brief-2026-09-22.md, reviews/, research/, design/
+└── docs/                     # ARCHITECTURE (plan), CONTRACTS, this file, methodology/experiments.md, research/, results/
 ```
 
 ## 11. Provenance & citation
 
 - **Code:** cite the repository at a commit SHA. The core architecture
   described in §1–§8 was live-verified at `8bb4c4e`; the security posture in
-  §9 was verified through the `owasp-top10-review` branch, chunk 11 final
+  §9 was verified through the `owasp-top10-review` branch, final
   commit `13e9685`. History is never rewritten; cited SHAs remain valid.
 - **Configuration:** every run manifest embeds `gitCommit` plus the git blob
   SHAs of `configtx.yaml`, `core.yaml`, `orderer.yaml` and the three compose
@@ -955,8 +948,6 @@ Gleipnir/
   transaction sequence that produced it.
 - **Stack:** all images and packages are version-pinned (§2); `:latest` is
   never used (it resolves to Fabric 3.x).
-- **Verification trail:** `docs/reviews/REPORT.md` consolidates the six-chunk
-  static audit, the chunk-7 live bring-up, and the step-2 variant smokes,
-  including every finding (F1–F76) and its resolution. `docs/reviews/
-  security-review.md` (S1–S20) and `docs/reviews/owasp-top10-review.md`
-  (N1–N6, §9 above) cover the security-specific passes.
+- **Verification trail:** the system was checked by a static code audit, a
+  live end-to-end bring-up, per-variant smoke runs and two security reviews
+  (§9 above); every finding was resolved or documented as a design property.

@@ -2,24 +2,21 @@
 
 // GLEIPNIR receipt-store (port 4002).
 // Persists each event's off-chain witness = { leafHash, siblingPath[], batchId,
-// leafIndex, rootRef } plus (since the supervisor brief 2026-09-22) the CoC
-// event body itself and its evidenceId, one JSON file per eventId under
-// DATA_DIR. A per-evidence index (DATA_DIR/idx/<evidenceId>.txt, one eventId
-// per line, first-PUT order) lets the gateway read an evidence's off-chain
-// trail in the anchored variants: GET /receipts?evidenceId=X.
+// leafIndex, rootRef } plus the CoC event body itself and its evidenceId, one
+// JSON file per eventId under DATA_DIR. A per-evidence index
+// (DATA_DIR/idx/<evidenceId>.txt, one eventId per line, first-PUT order) lets
+// the gateway read an evidence's off-chain trail in the anchored variants:
+// GET /receipts?evidenceId=X.
 //
-// DELIBERATELY UN-HARDENED. There are NO hash chains, NO signatures, NO
-// replication, NO integrity proofs on the stored receipts or on the index —
-// and there must not be. The receipt store carries a weaker-than-on-chain
-// guarantee ON PURPOSE: only the Merkle *root* is on-chain and tamper-evident;
-// the sibling path and the event copy live here, off-chain. Losing/corrupting
-// a receipt is an AVAILABILITY exposure of the witness (you can no longer
-// reconstruct a proof), NOT an integrity exposure of the ledger (the anchored
-// root still cannot be forged; a tampered event copy fails root verification).
-// This is a measured property of the design and a stated thesis caveat.
-//
-// Do not harden this service. The urge to add a hash chain / signature / replica
-// IS the finding — surface it in the thesis, do not code it away.
+// Intentionally not hardened: no hash chains, signatures, replication or
+// integrity proofs on the stored receipts or on the index, and none should be
+// added. Only the Merkle root is on-chain and tamper-evident; the sibling path
+// and the event copy live here, off-chain. Losing or corrupting a receipt is an
+// availability exposure of the witness (the proof can no longer be
+// reconstructed), not an integrity exposure of the ledger (the anchored root
+// still cannot be forged; a tampered event copy fails root verification).
+// This weaker guarantee is a measured property of the anchored designs, so
+// hardening the store would remove the thing being measured.
 
 const express = require('express');
 const fs = require('node:fs');
@@ -61,9 +58,10 @@ function createApp(overrides) {
 
   // Idempotent: every receipt is PUT twice (before/after the root txId), and
   // the index must list each eventId once.
-  // ponytail: check-then-append is not atomic across concurrent PUTs of the
-  // SAME eventId; the batcher PUTs a batch's receipts sequentially, so the
-  // only exposure is a cross-batch retry of one eventId. readIndex de-dupes.
+  // Known limit: check-then-append is not atomic across concurrent PUTs of the
+  // same eventId. The batcher PUTs a batch's receipts sequentially, so the only
+  // exposure is a cross-batch retry of one eventId, and readIndex de-dupes on
+  // read; if concurrent writers ever matter, serialise appends per evidenceId.
   async function indexAppend(evidenceId, eventId) {
     const listed = await readIndex(evidenceId);
     if (listed.includes(eventId)) return;

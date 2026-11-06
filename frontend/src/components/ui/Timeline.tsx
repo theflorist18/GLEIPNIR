@@ -10,7 +10,7 @@ export interface TimelineItem {
   content: ReactNode;
 }
 
-// Vertical rail timeline (M21): dot + connector per item, slot-rendered
+// Vertical rail timeline: dot + connector per item, slot-rendered
 // content. Used for audit trails and activity feeds.
 export function Timeline({ items }: { items: TimelineItem[] }) {
   return (

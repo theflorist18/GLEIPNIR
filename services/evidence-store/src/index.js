@@ -1,15 +1,14 @@
 'use strict';
 
-// GLEIPNIR evidence store (M13b). Persists evidence BINARIES off-chain — the
-// semantic invariant across all four variants is that binaries never go
-// on-chain; what the ledger holds is the ni-URI integrity proof this service
-// computes at ingest. Blobs are IMMUTABLE: one PUT per evidenceId, ever
-// (a second PUT is 409) — re-uploading different bytes under the same id would
-// silently break the on-chain proof, so the API forbids it.
+// GLEIPNIR evidence store. Persists evidence binaries off-chain: in all four
+// variants binaries never go on-chain; the ledger holds the ni-URI integrity
+// proof this service computes at ingest. Blobs are immutable: one PUT per
+// evidenceId (a second PUT is 409), because re-uploading different bytes
+// under the same id would silently break the on-chain proof.
 //
-// Direct architectural sibling of services/receipt-store: same Express shape,
-// same file-per-item persistence, same path-traversal guard. Filesystem only —
-// search lives in case-registry; this service knows nothing about cases.
+// Same shape as services/receipt-store: Express, file-per-item persistence,
+// the same path-traversal guard. Filesystem only; search lives in
+// case-registry, and this service knows nothing about cases.
 //
 // Internal-only: reached via the gateway, guarded by X-Gleipnir-Internal-Token.
 
@@ -19,7 +18,7 @@ const fsp = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
 
-// Charset per docs/CONTRACTS.md §6 — anything else could escape DATA_DIR.
+// Restricted charset (no path separators): anything else could escape DATA_DIR.
 const SAFE_EVIDENCE_ID = /^[A-Za-z0-9._:-]+$/;
 
 // Constant-time compare of the internal shared secret (OWASP A02): hash both
@@ -31,9 +30,8 @@ function safeEqual(a, b) {
   return crypto.timingSafeEqual(ah, bh);
 }
 
-// Copied byte-identically from gateway/src/ni.js — the SAME hashing scheme the
-// gateway used before this service existed (docs/CONTRACTS.md §4 discipline:
-// one canonical hash implementation, no reinvention).
+// Copied byte-identically from gateway/src/ni.js so both compute the same
+// proof (one canonical hash construction, as in docs/CONTRACTS.md §4).
 //   ni:///sha-256;<base64url( sha256(bytes) )>   (no padding, RFC 6920 §3)
 function niUri(bytes) {
   const digest = crypto.createHash('sha256').update(bytes).digest();
@@ -49,8 +47,8 @@ function loadConfig() {
   };
 }
 
-// Content-Disposition for a possibly-non-ASCII filename (B1). A raw Unicode
-// value in an HTTP header throws (header values must be latin1), so we emit BOTH
+// Content-Disposition for a possibly-non-ASCII filename. A raw Unicode
+// value in an HTTP header throws (header values must be latin1), so we emit both
 // an ASCII-only quoted `filename="..."` fallback (non-ASCII and quote/backslash/
 // CR/LF replaced with _) and an RFC 5987 `filename*=UTF-8''<pct>` that modern
 // browsers prefer and that carries the true name.
@@ -61,16 +59,16 @@ function contentDisposition(name) {
 }
 
 // The gateway percent-encodes x-original-filename so non-latin1 names survive
-// the HTTP header (B1); decode it back to the true filename for storage.
+// the HTTP header; decode it back to the true filename for storage.
 function decodeOriginalFilename(header) {
   if (!header) return null;
   try { return decodeURIComponent(header); } catch { return header; }
 }
 
-// 5xx without leaking internals (S16). Node fs errors embed absolute container
+// 5xx without leaking internals. Node fs errors embed absolute container
 // paths (e.g. "ENOENT ... open '/data/<id>'"); log them server-side and return
-// a generic body so the path never reaches the client (or the gateway's 502
-// detail, before the S15 fix strips that too).
+// a generic body so the path never reaches the client or the gateway's 502
+// detail.
 function serverError(res, label, err) {
   console.error(`[evidence-store] ${label}:`, (err && err.stack) || err);
   return res.status(500).json({ error: label });
@@ -87,8 +85,8 @@ function createApp(overrides) {
 
   app.get('/healthz', (_req, res) => res.json({ ok: true }));
 
-  // Shared-secret guard: this service trusts only the gateway. Constant-time
-  // compare (OWASP A02) — see safeEqual above.
+  // Shared-secret guard: this service trusts only the gateway (constant-time
+  // compare, see safeEqual).
   app.use((req, res, next) => {
     if (!safeEqual(req.get('x-gleipnir-internal-token'), cfg.internalToken)) {
       return res.status(401).json({ error: 'unauthorized' });
@@ -119,10 +117,10 @@ function createApp(overrides) {
       sizeBytes: bytes.length,
       integrityProof: niUri(bytes),
       storedAt: new Date().toISOString(),
-      // S9: DELETE is ingest-rollback-only (CONTRACTS §6). Enforce that server-
-      // side — the caller must present THIS token, returned only to whoever did
-      // the PUT, so holding the internal token alone cannot delete committed
-      // evidence. Stored in the sidecar, never served.
+      // DELETE is ingest-rollback-only (docs/CONTRACTS.md §6), enforced
+      // server-side: the caller must present this token, returned only to
+      // whoever did the PUT, so holding the internal token alone cannot delete
+      // committed evidence. Stored in the sidecar, never served.
       rollbackToken: crypto.randomBytes(16).toString('hex'),
     };
     try {
@@ -164,12 +162,12 @@ function createApp(overrides) {
     stream.pipe(res);
   });
 
-  // Orphan cleanup ONLY: the gateway calls this when an on-chain CreateEvidence
-  // fails AFTER the blob write succeeded. Committed evidence is never deleted.
-  // S9: enforce the rollback-only contract server-side — the caller must present
-  // the rollbackToken returned by THIS blob's PUT (x-gleipnir-rollback-token). So even
-  // with the internal token, a caller who did not perform the ingest cannot
-  // delete existing evidence. Read the sidecar first to compare.
+  // Orphan cleanup only: the gateway calls this when an on-chain CreateEvidence
+  // fails after the blob write succeeded. Committed evidence is never deleted.
+  // The caller must present the rollbackToken returned by this blob's PUT
+  // (x-gleipnir-rollback-token), so even with the internal token a caller who
+  // did not perform the ingest cannot delete existing evidence. The sidecar is
+  // read first to compare.
   app.delete('/blobs/:evidenceId', async (req, res) => {
     const { evidenceId } = req.params;
     let meta;

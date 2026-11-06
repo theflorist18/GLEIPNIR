@@ -1,13 +1,12 @@
-// fabric.js — the ONLY @hyperledger/fabric-gateway session to the anchor channel
+// fabric.js — the only @hyperledger/fabric-gateway session to the anchor channel
 // (ANCHOR_CHANNEL=anchor-main), under the fixed AnchorClientMSP identity.
 //
-// This module is a FACTORY: connectAnchorFabric() builds a small contract
-// adapter ({ submit, evaluate }) that src/index.js consumes. Tests never call
-// this factory; they inject a fake adapter with the same shape into createApp().
-// Keeping fabric.js out of index.js's static import graph means `node --test`
-// can run the HTTP routing without the grpc / fabric-gateway dependencies.
+// connectAnchorFabric() builds a small contract adapter ({ submit, evaluate })
+// that src/index.js consumes. Tests inject a fake adapter with the same shape
+// into createApp() instead. Keeping fabric.js out of index.js's static import
+// graph lets `node --test` run the HTTP routing without grpc / fabric-gateway.
 //
-// API facts pinned from docs/research/fabric-2.5.md §7 (fabric-gateway 1.11.0):
+// API usage per docs/research/fabric-2.5.md §7 (fabric-gateway 1.11.0):
 //   new grpc.Client(endpoint, createSsl(tlsRootCert), { 'grpc.ssl_target_name_override': hostAlias })
 //   connect({ client, identity:{mspId,credentials}, signer, hash }) -> getNetwork -> getContract
 
@@ -25,8 +24,8 @@ async function firstFile(dir) {
   return path.join(dir, entries[0]);
 }
 
-// Signing-key selection (audit F47/F56): re-enrollment over a live crypto tree
-// ADDS a hash-named key beside the old one, and hex names sort before priv_sk —
+// Signing-key selection: re-enrollment over a live crypto tree adds a
+// hash-named key beside the old one, and hex names sort before priv_sk —
 // so "alphabetically first" can pair a stale key with the fresh cert. Prefer
 // the normalized priv_sk copy (registerEnroll.sh refreshes it to the newest
 // key on every enrollment); otherwise fall back to the newest key by mtime.

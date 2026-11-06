@@ -46,8 +46,8 @@ def wsl_path(p):
 
 def wsl_argv(script):
     # --exec, NOT `--`: with `--` wsl.exe re-parses the command line through the default shell, which
-    # expands $vars / $(...) in `script` before bash -lc ever sees them (found live: backup's gzip loop
-    # and stack-up's "${P[@]}" came out empty).
+    # expands $vars / $(...) in `script` before bash -lc ever sees them (backup's gzip loop and
+    # stack-up's "${P[@]}" would come out empty).
     return ["wsl", "-d", DISTRO, "-u", "root", "--exec", "bash", "-lc",
             f"cd {shlex.quote(wsl_path(REPO))} && {script}"]
 

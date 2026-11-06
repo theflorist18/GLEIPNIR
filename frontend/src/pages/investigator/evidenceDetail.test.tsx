@@ -63,10 +63,10 @@ function renderPage(user: Partial<User>) {
 }
 
 describe('EvidenceDetailPage — the UI must not forge chain-of-custody events', () => {
-  // Regression: doDownload/doExport used to call the full refresh(), whose
-  // record read hits GET /evidence/:id — an endpoint that auto-appends
-  // ACCESS('view'). Every download therefore landed on the chain as
-  // "download + view", recording an access the examiner never performed.
+  // Regression guard: if doDownload/doExport called the full refresh(), its
+  // record read would hit GET /evidence/:id, which auto-appends
+  // ACCESS('view'), so every download would land on the chain as
+  // "download + view", an access the examiner never performed.
   // The trail-only refresh shows the new event without creating another.
   it('a download refreshes the trail only — it does not re-read the record (which would log a view)', async () => {
     const client = renderPage({ username: 'ivy', role: 'investigator' });

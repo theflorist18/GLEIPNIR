@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""GLEIPNIR experiment driver (docs/CONTRACTS.md §10, §11; supervisor brief 2026-09-22 §9).
+"""GLEIPNIR experiment driver (docs/CONTRACTS.md §10, §11; docs/methodology/experiments.md).
 
   experiment.py --exp e0|ramp|e1|e2|e3a|e3b|ops|cell [--variant V]* [--reps N]
                 [--resume] [--dry-run] [--reuse-network] [--no-monitor] [--no-audit]
@@ -11,7 +11,7 @@
                            [--flush-timeout-ms F] [--monitor-interval I]
 
 Plans (cells x repetitions; every run = ONE network lifetime):
-  ONE channel per case on the parallel variants, everywhere (author decision 2026-09-24):
+  ONE channel per case on the parallel variants, everywhere:
   a plan sets only the case count; parallel/parallel-anchored get that many case channels,
   standard/anchoring put the same cases on their one shared channel (same trace).
   e0    every variant, smoke shape at regimes.smoke.send_rate_tps, 1 rep — per-op
@@ -286,7 +286,7 @@ def make_run(sweeps, exp, variant, rep, kind, cases, batch, rates, events, round
         # rule divides by the channel count, so it would label the same ramp/ops
         # workload `steady` on the single-channel variants and `sub-floor` on the
         # multi-channel ones — mixed labels inside one table, and a pilot ramp
-        # citable as steady state. Documented in CLAUDE.md / CONTRACTS §12-14.
+        # citable as steady state. See docs/CONTRACTS.md §12-14.
         regime = "sub-floor"
     else:
         regime = "steady" if min_channel_events >= sweeps["regimes"]["steady"]["min_events_per_channel"] else "sub-floor"
@@ -386,7 +386,7 @@ def plan(sweeps, exp, variants, reps, cell=None):
                 runs.append(make_run(sweeps, exp, "parallel", r, "trace", ch, None,
                                      [rate] * n_rounds, events, n_rounds))
     elif exp == "e3a":
-        rates = sorted(sweeps["send_rates_tps"])   # brief §9: one round per send rate, ASCENDING
+        rates = sorted(sweeps["send_rates_tps"])   # one round per send rate, ascending
         for v in variants:
             for r in range(reps):
                 runs.append(make_run(sweeps, exp, v, r, "trace", b["channels"], batch,
@@ -484,7 +484,7 @@ def seed_run_json(run, sweeps, sweeps_path):
 
 
 def ensure_network(run, fresh):
-    """Step 2: every run gets its OWN ledger (brief §9; spec §5.5-6).
+    """Every run gets its own ledger (docs/CONTRACTS.md §12-15).
 
     The trace replays deterministic evidence ids, so a second run against the
     same ledger fails every CreateEvidence on the direct-write variants and
@@ -819,7 +819,8 @@ def execute(sweeps, run, args, env, tag=""):
 # ------------------------------------------------------------------ reporting helpers
 
 def ramp_summary(manifest):
-    """Throughput vs send rate for one ramp run + suggested sub-saturation baseline (confirm with D).
+    """Throughput vs send rate for one ramp run + suggested sub-saturation baseline
+    (a suggestion to review, not a value written to sweeps.yaml).
     The rule lives in report.ramp_suggestion, shared with the desktop app."""
     rows = REP.ramp_rows(manifest)
     print(f"\n--- ramp {manifest['variant']}: send rate (tx/s) | throughput (TPS) | ratio | p95 (ms)")
@@ -827,7 +828,7 @@ def ramp_summary(manifest):
         print(f"  {rate:>6} | {tps:>8.1f} | {ratio:5.2f} | {p95 if p95 is None else round(p95, 1)}")
     sat, suggested = REP.ramp_suggestion(rows)
     print(f"  saturation (throughput < {REP.SATURATION_RATIO}x send rate): {sat or 'not reached'}; "
-          f"suggested baseline.send_rate_tps = {suggested} (confirm with D)")
+          f"suggested baseline.send_rate_tps = {suggested}")
 
 
 def eta_seconds(exp, remaining):

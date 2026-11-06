@@ -1,4 +1,4 @@
-// Colour theme (Claude Design screen 05): follows prefers-color-scheme unless
+// Colour theme: follows prefers-color-scheme unless
 // the viewer picks light or dark, which sets [data-theme] on <html>. The choice
 // is a per-viewer convenience in localStorage — missing storage just means
 // "system".

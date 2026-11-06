@@ -2,7 +2,7 @@
 
 This file pins every **cross-module** name, port, schema, and algorithm so that modules
 written independently compose without drift. It is subordinate to `docs/ARCHITECTURE.md`
-(binding module contracts) and `CLAUDE.md` (rulebook); where those documents are silent
+(binding module contracts); where it is silent
 or ambiguous, **this file is the decision record**. Deviations from the architecture
 tables are listed in §12 with rationale — they extend, never contradict, the binding
 interface signatures.
@@ -135,7 +135,7 @@ these exact values):**
   - root `c859dbaf0c89a0c3d8acd14558d491171dd4381073d79935182301300d296d2f`
   - sibling path of L1: `[{"pos":"L","hash":L0},{"pos":"R","hash":L2}]`
 
-SHA-256 only. No Poseidon, no ZK, per CLAUDE.md.
+SHA-256 only. No Poseidon, no ZK: plain Merkle-root anchoring (docs/AS-BUILT.md §8).
 
 ## 5. Event & record shapes
 
@@ -192,8 +192,8 @@ the source of the **anchoring delay** metric, M26): `{"batchId","scopeId","leafC
 "committedAt","forced","delayMs":{"min","mean","max"}}`. Timestamps are ISO-8601:
 `openedAt` = first enqueue, `closedAt` = boundary, `committedAt` = the root submission
 *returned* to the batcher (the gateway / anchor-client await the Fabric commit, so the
-delay includes the submit round-trip — confirm with D that this is the paper's
-definition; `null` if the submit failed). `forced` = closed by `POST /flush` or the
+delay includes the submit round-trip — a documented default for the paper's
+definition, see §12-17; `null` if the submit failed). `forced` = closed by `POST /flush` or the
 `BATCH_FLUSH_MS` timer rather than by size. `delayMs` = `committedAt − enqueue time` over
 the batch's events (`null` when not committed).
 
@@ -206,7 +206,7 @@ the batch's events (`null` when not committed).
 | receipt-store | **4002** | `PUT /receipts/:eventId` (indexes into `DATA_DIR/idx/<evidenceId>.txt` when the body carries a valid `evidenceId`; 400 on an invalid one); `GET /receipts/:eventId` (404 if missing); **M26** `GET /receipts?evidenceId=X` → JSON array of full receipts in first-PUT (leaf) order, `[]` if none, 400 `{error:'evidenceId query required'}` if missing/invalid |
 | anchor-client | **4003** | `POST /roots` `{caseId,batchId,merkleRoot,meta}` → `201 {txId}` (submit on `anchor-main`); `GET /roots/:caseId/:batchId` (evaluate on `anchor-main`) |
 | verification | **4004** | `GET /verify/:eventId` → `{ok,reason?,latencyMs,leafSource:"event"\|"receipt",steps:{fetchMs,recomputeMs,compareRootMs}}`; **M26**: when `receipt.event` is present the leaf is recomputed from it inside `recomputeMs` (`leafSource:"event"`), else the stored `leafHash` is used (`"receipt"`, legacy); `reason`: `root-mismatch` (200, tamper signal), `missing-receipt`/`missing-anchor-root` (404, not yet anchored), `malformed-receipt` (422 — the un-hardened witness stored junk; the `leafHash` hex-64 shape check still runs even when `event` is present), 502 upstream. With `VERIFY_METRICS_PATH` set, one JSONL line per completed verify: `{ts,eventId,ok,leafSource,fetchMs,recomputeMs,compareRootMs,latencyMs}` |
-| case-registry | **4005** | internal-only (via gateway; `X-Gleipnir-Internal-Token` after `/healthz`): `POST/GET/PATCH /cases[/:caseId]`, `POST/PATCH/DELETE /cases/:caseId/participants[/:userId]` (PATCH = M25 in-place role change; policy in the gateway), `POST/DELETE /cases/:caseId/evidence[/:evidenceId]` (categorize; idempotent same-case, 409 cross-case; un-assign also clears `categoryId`), `POST/PATCH/DELETE /cases/:caseId/categories[/:categoryId]` (M19 taxonomy; name unique per case → 409; delete refused 409 while referenced; categories are read via `GET /cases/:caseId`, its `.categories` array), `POST /evidence-index` + `PATCH /evidence-index/:evidenceId` (accept the M19 metadata fields; `categoryId` must belong to the evidence's case; no single-row GET — rows are read through the search below), `GET /evidence-index?caseId=&q=&uploadedBy=&type=&from=&to=&visibleToUserId=`, `GET /internal/authz?userId=&evidenceId=` → `{allowed,caseId,roleInCase}`. `GET /cases` and the evidence-index search return at most 500 rows (S19 fixed cap; no `?limit`) |
+| case-registry | **4005** | internal-only (via gateway; `X-Gleipnir-Internal-Token` after `/healthz`): `POST/GET/PATCH /cases[/:caseId]`, `POST/PATCH/DELETE /cases/:caseId/participants[/:userId]` (PATCH = M25 in-place role change; policy in the gateway), `POST/DELETE /cases/:caseId/evidence[/:evidenceId]` (categorize; idempotent same-case, 409 cross-case; un-assign also clears `categoryId`), `POST/PATCH/DELETE /cases/:caseId/categories[/:categoryId]` (M19 taxonomy; name unique per case → 409; delete refused 409 while referenced; categories are read via `GET /cases/:caseId`, its `.categories` array), `POST /evidence-index` + `PATCH /evidence-index/:evidenceId` (accept the M19 metadata fields; `categoryId` must belong to the evidence's case; no single-row GET — rows are read through the search below), `GET /evidence-index?caseId=&q=&uploadedBy=&type=&from=&to=&visibleToUserId=`, `GET /internal/authz?userId=&evidenceId=` → `{allowed,caseId,roleInCase}`. `GET /cases` and the evidence-index search return at most 500 rows (fixed cap; no `?limit`) |
 | evidence-store | **4006** | internal-only (via gateway; `X-Gleipnir-Internal-Token` after `/healthz`): `PUT /blobs/:evidenceId` (raw body + `X-Content-Type`/`X-Original-Filename`) → `201 {integrityProof,sizeBytes,storedAt,rollbackToken}`, `409` if exists (immutable), `413` over `MAX_UPLOAD_BYTES`; `GET /blobs/:evidenceId` (attachment stream); `DELETE /blobs/:evidenceId` (ingest-rollback only; requires the `x-gleipnir-rollback-token` header carrying the token that blob's PUT returned — no query-string fallback) |
 | frontend (nginx) | **8081** | serves SPA; `GET /healthz`; proxies `/api/*` → `gateway:3000` |
 
@@ -439,7 +439,7 @@ into metaJSON last, making it authoritative. Per-case writes (direct **and** bat
 require a valid `case-NNN` caseId at the gateway — a missing caseId is a 400, never a
 silent fall-through to `shared`.
 
-## 10. Benchmark & experiment config (M26 — supervisor brief 2026-09-22, §12-14)
+## 10. Benchmark & experiment config (M26 — supervisor's review 2026-09-22, §12-14)
 
 - Single source of truth: **`benchmark/sweeps.yaml`** — that file, not this
   section, is the file of record. The block below is a condensed rendering of it:
@@ -660,7 +660,7 @@ orchestration/rounds.py                              # library only (no CLI): th
 orchestration/experiment.py --exp e0|ramp|e1|e2|e3a|e3b|ops|cell [--variant V]* [--reps N] [--resume] [--dry-run] [--reuse-network] [--no-monitor] [--no-audit] [--verbose] [--sweeps FILE] [--send-rate R [R ...]] [--batch-size B] [--cases N] [--seed S] [--workers W] [--rounds K] [--events-per-case E] [--evidence-per-case V] [--transfer-weight T] [--access-weight A] [--dispose-fraction D] [--payload-bytes P] [--audit-cases N] [--flush-timeout-ms F] [--monitor-interval I]   # the campaign driver; the factor AND control flags are --exp cell only (§12-18); prints [run i/n] + ETA and per-round result lines, rewrites results/<exp>/<exp>-results.csv after every run (plans cells × reps; one network lifetime per run; lifecycle in §10 / orchestration/README). A FRESH ledger per run is the default; --reuse-network opts out (warned, one ad-hoc run)
 orchestration/checkpoint.py <runPath> [--label tK]   # du -sb probes via docker exec, appends checkpoints.jsonl (runPath = <exp>/<variant>/<levels>/r<rep>)
 orchestration/collect.py <run-dir> [--baseline <run-dir>] | --selftest   # run dir → manifest.json (rounds, per-tx percentiles, failure classes, resources, storage regression, anchoring, audit)
-orchestration/report.py --exp e0|ramp|e1|e2|e3a|e3b|ops|cell [--out docs/results/<exp>] [--no-charts] [--decimal-comma]   # ALWAYS benchmark/results/<exp>/<exp>-results.csv (one row per run x round; supervisor column order send rate, throughput, latency min/max/avg/p95, CPU, memory, success, failure, failure rate; UTF-8 BOM; --decimal-comma = ';' + decimal comma); for e1..ops also CSV + Markdown tables (units in headers, mean ± SD over reps; Markdown = one table per variant with ONE latency column `avg (min–max), p95` of means, SDs in the CSV) + PNG charts (matplotlib optional); e3a also writes e3a-saturation.json (saturation = first send rate where successful throughput < 0.9 × send rate; latency knee alongside); ops → ops-writes.* and ops-reads.*; E1 reference rows carry no batch size and print `ref`, never the literal `None`; the per-round tables (e3a, ops) carry a header note that on-chain/off-chain bytes per event, audit time and anchoring delay are measured once per RUN and therefore repeat on every row
+orchestration/report.py --exp e0|ramp|e1|e2|e3a|e3b|ops|cell [--out docs/results/<exp>] [--no-charts] [--decimal-comma]   # ALWAYS benchmark/results/<exp>/<exp>-results.csv (one row per run x round; column order send rate, throughput, latency min/max/avg/p95, CPU, memory, success, failure, failure rate; UTF-8 BOM; --decimal-comma = ';' + decimal comma); for e1..ops also CSV + Markdown tables (units in headers, mean ± SD over reps; Markdown = one table per variant with ONE latency column `avg (min–max), p95` of means, SDs in the CSV) + PNG charts (matplotlib optional); e3a also writes e3a-saturation.json (saturation = first send rate where successful throughput < 0.9 × send rate; latency knee alongside); ops → ops-writes.* and ops-reads.*; E1 reference rows carry no batch size and print `ref`, never the literal `None`; the per-round tables (e3a, ops) carry a header note that on-chain/off-chain bytes per event, audit time and anchoring delay are measured once per RUN and therefore repeat on every row
 ```
 
 `experiment.py` shells out to: `bash reset-network.sh` (before every run unless
@@ -696,8 +696,8 @@ it is one GoLevelDB directory shared by all of a peer's channels).
 2. **4 CAs, not 2.** CA-based enrollment (per the §4.4 "enrolled via Fabric CA 1.5.19"
    requirement) needs a CA per org: org1, org2, orderer, anchor. The §3 table counted
    only the peer-org CAs.
-3. **Chaincode-as-a-Service.** CLAUDE.md pins Go 1.25.5, but the peer's in-image build
-   (`fabric-ccenv:2.5`) ships an older Go toolchain. CCaaS builds the chaincode in our
+3. **Chaincode-as-a-Service.** The stack pins Go 1.25.5 (docs/AS-BUILT.md §2), but the
+   peer's in-image build (`fabric-ccenv:2.5`) ships an older Go toolchain. CCaaS builds the chaincode in our
    own `golang:1.25.5` image, honoring the pin exactly, and is the fabric-samples-2.5
    supported pattern. Also gives the chaincode lifecycle a named deployable unit for the
    STRIDE mapping.
@@ -714,7 +714,7 @@ it is one GoLevelDB directory shared by all of a peer's channels).
    conflict on the head). The head's "counter high-watermark" is realized as
    last-event-sortKey updated only by the serial ops (Create/Transfer/Remove).
 7. **Evidence library (M12–M16) — scope and the two "case" concepts.** The library
-   reopens CLAUDE.md's auth deferral (authorized by the authors: real login +
+   reopens the architecture's auth deferral (authorized by the authors: real login +
    server-enforced roles) and targets **Standard and Anchoring only**; Parallel /
    Parallel-Anchored keep the benchmark path unchanged. The library **Case** entity
    is off-chain only (case-registry SQLite; no chaincode or Codex-Entry change) with
@@ -733,15 +733,15 @@ it is one GoLevelDB directory shared by all of a peer's channels).
 8. **Library RBAC v2 and the `name` rename (M17–M18, authorized by the authors).**
    The pinned User wire field `displayName` is renamed to **`name`** across the
    store, API payloads, and SPA. (The one-time in-place `users.json` upgrade was
-   removed 2026-09-26 in the ponytail refactor, §12-20: every live store had already
+   removed 2026-09-26 in the simplification refactor, §12-20: every live store had already
    been loaded, and so rewritten, by a post-M17 gateway, and the volume was re-seeded
    on 2026-07-24. A legacy record would now load with `name` unset; `passwordHash`
    handling is unchanged, so login still works.) The user role set is extended to **`admin` | `lead` |
    `investigator`** (UI labels "System Administrator" / "Lead Investigator" /
    "Investigator") and the per-case role set to **`viewer` | `contributor` |
    `lead`** (in the `case_participants` CHECK from CREATE; the one-time guarded
-   in-place table rebuild for pre-M18 databases was removed 2026-09-26 in the ponytail
-   refactor, §12-20, after every live volume had it). Case creation
+   in-place table rebuild for pre-M18 databases was removed 2026-09-26 in the
+   simplification refactor, §12-20, after every live volume had it). Case creation
    opens from admin-only to **admin-or-lead**: a lead who creates a case is
    auto-added to its roster as case `lead` and manages participants and
    evidence assignment **only on cases where they hold that role**; admins may
@@ -764,7 +764,7 @@ it is one GoLevelDB directory shared by all of a peer's channels).
    unique-enforced — the on-chain key stays the uuid), `categoryId`,
    `seizedAt`, `acquisitionLocation`, `handedOverBy`. The columns are declared in
    the `evidence_index` CREATE TABLE; the one-time `PRAGMA table_info` / ALTER guards
-   for pre-M19 databases were removed 2026-09-26 (ponytail refactor, §12-20) once every
+   for pre-M19 databases were removed 2026-09-26 (simplification refactor, §12-20) once every
    live volume carried the columns. Multipart ingest
    accepts the same fields and validates the category **before** any write
    (a bad category must not surface after the append-only chain commit).
@@ -780,13 +780,12 @@ it is one GoLevelDB directory shared by all of a peer's channels).
    the authors, and CASE/UCO JSON-LD remains banned). None of the
    collaboration routes write to the chain or auto-append `AccessLog`.
 
-Entries 10–17 below are **M26 — authorized by the supervisor brief 2026-09-22**
-(`docs/supervisor-brief-2026-09-22.md` §4–§7, decided in the build
-brief §1). Where an entry rests on one of the spec's OPEN questions it is a documented
-default marked **confirm with D**; the code implements it, labels it, and does not silently
-pick something else.
+Entries 10–17 below are **M26 — authorized by the supervisor's review (2026-09-22)**.
+Where an entry rests on one of that review's open questions it is a documented
+default marked **to be confirmed**; the code implements it, labels it, and does not
+silently pick something else.
 
-10. **`RemoveEvidence` → `DisposeEvidence`** (spec §4 item 11, RESOLVED). The fourth CoC op
+10. **`RemoveEvidence` → `DisposeEvidence`** (RESOLVED). The fourth CoC op
     is renamed; `OpRemove`→`OpDispose = "DISPOSE"`, `StatusRemoved`→`StatusDisposed =
     "DISPOSED"`; the ISO/IEC 27037 annotation reads "Preservation — disposition; nothing is
     deleted: a status transition". The gateway's `DELETE /evidence/:id` maps to it, the
@@ -796,15 +795,16 @@ pick something else.
     binding signature is amended accordingly rather than kept as a stale alias.
 
 11. **Off-chain event copy + leaf recompute** (the anchored variants' "fetch events →
-    recompute branches → verify roots" path, spec §5.2 audit-reconstruction row). The
+    recompute branches → verify roots" path, the audit-reconstruction metric). The
     receipt gains `evidenceId` and `event` (the CoC event as enqueued); the receipt store
     indexes receipts per evidence (`idx/<evidenceId>.txt`, first-PUT order) and lists them
     (`GET /receipts?evidenceId=`). The verification service and `reconstruct.js` recompute
     the leaf from `event` (inside `recomputeMs`) and fall back to the stored `leafHash` only
     for pre-M26 receipts (`leafSource`). The store stays **un-hardened**: the index is a
     text file, the copy is plain JSON, no hashes/signatures/replication — a tampered copy
-    fails root verification instead of being trusted (CLAUDE.md invariant preserved; the
-    off-chain trail is exactly as trustworthy as the receipt store).
+    fails root verification instead of being trusted (the un-hardened receipt store is a
+    design property, docs/ARCHITECTURE.md §4.3 and docs/AS-BUILT.md §8; the off-chain trail
+    is exactly as trustworthy as the receipt store).
 
 12. **Batched-variant reads come from the off-chain trail.** `ReadEvidence` /
     `GetAuditTrail` on Anchoring / Parallel-Anchored are served by the gateway from the
@@ -817,22 +817,21 @@ pick something else.
     a campaign starts from `reset-network.sh`. Receipt-store list order is first-PUT order;
     concurrent same-scope batches can interleave, so a strict timeline sorts by `event.ts`.
 
-13. **One batch-size grid for N and K** (spec §4 item 2 — identical-grid rule RESOLVED,
-    values **confirm with D**): `batch_sizes: [10, 25, 50, 100, 200]` replaces the paper's
+13. **One batch-size grid for N and K** (identical-grid rule RESOLVED,
+    values **default, to be confirmed**): `batch_sizes: [10, 25, 50, 100, 200]` replaces the paper's
     separate N ∈ {10,50,100,250} and K ∈ {5,10,25,50}. The batcher reads `BATCH_SIZE`
     (default 100) and `BATCH_FLUSH_MS` (0 = size-only, held constant); experiment.py writes
     both per run. (The `BATCH_N`/`BATCH_K` fallback was removed 2026-09-26, §12-20.) Channel
     calibration is Parallel-only, Parallel-Anchored inherits, and Standard/Anchoring are
-    code-enforced single-channel (`rounds.channels_for`; spec §4 item 18 — **confirm with
-    D**, it corrects N's "all except Standard" remark).
+    code-enforced single-channel (`rounds.channels_for`; **default, to be confirmed** — it
+    corrects an earlier "all except Standard" remark).
 
-14. **Three-experiment restructure + trace replay** (spec §4 items 1, 4, 7, 9, 12, 15–19;
-    §5.3–§5.5). The old N/K/channel sweep (`sweep.py`, `generate-rounds.js`, the
-    `steady-*.yaml` files) is replaced by E0 pilot → E1 batch calibration → E2 channel
+14. **Three-experiment restructure + trace replay** (docs/methodology/experiments.md).
+    The old N/K/channel sweep (`sweep.py`, `generate-rounds.js`, the `steady-*.yaml` files) is replaced by E0 pilot → E1 batch calibration → E2 channel
     calibration → E3a/E3b scalability + a per-operation breakdown, driven by
     `experiment.py` from the new `sweeps.yaml` schema (§10) and rendered only by
     `rounds.py`. The harness replays one seeded trace identically across variants (only
-    `mode` differs). Documented defaults **confirm with D**: send-rate grid
+    `mode` differs). Documented defaults, **to be confirmed**: send-rate grid
     `[10,25,50,75,100,150,200]` with saturation = successful throughput < 0.9 × send rate;
     `r = 3`, mean ± SD; the per-op breakdown at `(baseline.channels, baseline.send_rate_tps)`;
     `AccessLog` stays a WRITE custody event and reads (`ReadEvidence`, `GetAuditTrail`,
@@ -847,7 +846,7 @@ pick something else.
     count, so it would have labelled the same workload `steady` on the single-channel
     variants and `sub-floor` on the multi-channel ones, mixing labels inside one table);
     send rates are swept ASCENDING in both `ramp` and `e3a`; `run.json` records cores/memory. Cases-per-channel mapping
-    (spec §4 item 5, spec §6 Q3) — **RESOLVED by the authors 2026-09-24: ONE CHANNEL PER CASE on
+    — **RESOLVED by the authors 2026-09-24: ONE CHANNEL PER CASE on
     Parallel and Parallel-Anchored, in every plan (E0 included: its 10 smoke cases run on 10
     case channels).** A plan sets only the case count (`make_run` derives the channel count via
     `rounds.channels_for`, so the two cannot drift); `baseline.channels` is the set case count;
@@ -855,12 +854,12 @@ pick something else.
     their one shared channel, so the replayed trace stays like-for-like. Data-case c → channel
     `case-NNN`, NNN = c.
 
-15. **Ledger-only reset between runs** (spec §5.5-6: fresh ledgers for storage measurement
+15. **Ledger-only reset between runs** (fresh ledgers for storage measurement
     and independent repetitions). `reset-network.sh` removes exactly the six ledger volumes,
     `receipt-data` and `verify-metrics`, and refuses without `GLEIPNIR_ALLOW_LEDGER_WIPE=1`;
-    it never removes the library volumes, CA state or `network/organizations` (the standing
-    never-wipe-without-asking rule). `backup-volumes.sh` exists so the authors can snapshot
-    everything first. `experiment.py` calls it **before every run by default** — the trace
+    it never removes the library volumes, CA state or `network/organizations` (library data
+    and identities are never wiped without the operator's explicit request).
+    `backup-volumes.sh` exists so the authors can snapshot everything first. `experiment.py` calls it **before every run by default** — the trace
     replays deterministic evidence ids, so a second run on the same ledger duplicates
     `CreateEvidence` on the direct-write variants, appends duplicate events to the off-chain
     trail on the anchored ones, and starts the storage series dirty; that is validity, not
@@ -873,27 +872,27 @@ pick something else.
     are cleared first, because tx logs and checkpoints are APPENDED and a retry would
     otherwise be collected together with the previous attempt.
 
-16. **Per-transaction capture and the new metrics** (spec §4 item 12; §6 Q8 — **confirm with
-    D** that the custom capture is worth it vs avg (min–max) only). Every workload writes one
+16. **Per-transaction capture and the new metrics** (**default, to be confirmed**: whether
+    the custom capture is worth it vs avg (min–max) only). Every workload writes one
     JSONL line per timed transaction from Caliper's own `TxStatus`; collect.py derives p50/
     p95/p99, measured send rate, success/failure counts, failure rate and the six failure
     classes from it (fabric-mode failures classified from `caliper.log`, since the 0.6.0
     peer-gateway connector sets no error string). CPU/memory come from Caliper's docker
     monitor (per container + `fabric`/`offchain`/`all` groups); audit reconstruction time
-    (**confirm with D**, spec §6 Q9) from `reconstruct.js` (per case, Merkle verification
+    (**default, to be confirmed**) from `reconstruct.js` (per case, Merkle verification
     included, first `audit_cases` cases of the trace, evidence fetched sequentially — that IS
     "time to reconstruct one case"; root cache per case + an untimed warm-up since 2026-09-30,
     §12-23); anchoring delay from the batcher's batch records
-    (leafCount-weighted; forced batches also reported excluded); storage (**confirm with D**,
-    spec §6 Q10) from `t0..tN` checkpoints with an OLS bytes/event slope (≥ 3 points) and the
+    (leafCount-weighted; forced batches also reported excluded); storage (**default, to be
+    confirmed**) from `t0..tN` checkpoints with an OLS bytes/event slope (≥ 3 points) and the
     delta as cross-check, off-chain bytes shown alongside, over a denominator of timed
     successful writes PLUS `untimedWrites` (the untimed pool/verify seeding commits real
     transactions, so its bytes are in the series and its events must be in the divisor).
     report.py's
     run-level p95 is the mean of per-round p95s (e3a is reported per round, so exact there).
 
-17. **`committedAt` semantics** (**confirm with D** for the paper's anchoring-delay
-    definition): recorded when the root submission RETURNS to the batcher. The gateway /
+17. **`committedAt` semantics** (**default, to be confirmed** as the paper's
+    anchoring-delay definition): recorded when the root submission RETURNS to the batcher. The gateway /
     anchor-client await the Fabric commit before answering, so the delay = enqueue → commit
     acknowledged, submit round-trip included; the batcher does not observe the block commit
     independently. The verification service's `verify.jsonl` (`verify-metrics` volume) is a
@@ -916,7 +915,7 @@ pick something else.
     — report.py exports them to the per-round CSV only and builds no aggregated table: a cell
     is a probe, not an E1–E3 datapoint. Every parallel run (any channel count) gets its
     `parallel-c{C}.yaml` rendered by `rounds.py` into the run dir (none are committed).
-    **Controls** (author request 2026-09-24, brief §5.5-1 "parameterizable"): `--seed
+    **Controls** (author request 2026-09-24: controls must be parameterizable): `--seed
     --workers --rounds --events-per-case --evidence-per-case --transfer-weight --access-weight
     --dispose-fraction --payload-bytes --audit-cases --flush-timeout-ms --monitor-interval`,
     also `--exp cell` only (a campaign's controls stay those of `sweeps.yaml`, or of a
@@ -975,9 +974,9 @@ pick something else.
       (`ramp_suggestion`/`suggest_send_rate`, `suggest_batch_size`, `suggest_channels`)
       implementing docs/methodology/experiments.md §4.1–4.3 (thresholds `PLATEAU_REL` 5 %,
       `AUDIT_BOUND` 1.5×, `HEALTHY_TPS_RATIO` 0.95, `HEALTHY_MAX_FAIL_PCT` 1 %,
-      `HEALTHY_CPU_FRAC` 0.9 — **confirm with D**); the send-rate suggestion is the MINIMUM
+      `HEALTHY_CPU_FRAC` 0.9 — **defaults, to be confirmed**); the send-rate suggestion is the MINIMUM
       of the per-variant ramp suggestions because E1/E2/E3b run every variant at one rate
-      (**confirm with D**). `report.py --exp ramp|e1|e2` prints the same suggestion.
+      (**default, to be confirmed**). `report.py --exp ramp|e1|e2` prints the same suggestion.
     - **Backups before any ledger wipe.** Before a run the app stops the stack (`down.sh`,
       never `--wipe`), copies every `gleipnir_*` volume + `network/compose/.env` to
       `backups/<ts>/` (gitignored), `gzip -t`s every archive, and only then starts
@@ -999,8 +998,8 @@ pick something else.
     (process group incl. Caliper workers gone, runlog `failed`), Resume to completion
     (Parallel, 10 case channels), Parallel-Anchored after the anchor-org fix, Restore.
 
-20. **Ponytail audit + refactor** (2026-09-26, branch `ponytail-refactor`; every contract
-    change below signed off by the authors under CLAUDE.md ground rule 2). A whole-repo
+20. **Simplification audit + refactor** (2026-09-26; every contract
+    change below approved by the authors). A whole-repo
     over-engineering audit, then deletions and simplifications across every module. The
     contract-visible changes:
     - **benchmark/**: no generated file is committed any more — `benchmarks/smoke-*.yaml`,
@@ -1104,5 +1103,5 @@ pick something else.
     one untimed pass over case 1's first evidence item (trail + root reads, results discarded;
     never auto-logged) before timing. Output shape unchanged.
 
-Anything else that seems to require deviating from ARCHITECTURE.md or CLAUDE.md: STOP
-and ask the authors (per CLAUDE.md ground rule 2).
+Anything else that seems to require deviating from docs/ARCHITECTURE.md: stop
+and ask the authors; contract changes are never made silently.

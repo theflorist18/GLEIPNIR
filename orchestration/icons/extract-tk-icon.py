@@ -2,7 +2,7 @@
 
     py -3.11 orchestration/icons/extract-tk-icon.py [out.ico]
 
-The Bench app uses Tk's default icon on purpose (author's choice, 2026-09-29): this script writes
+The Bench app uses Tk's default icon as its own: this script writes
 it as `orchestration/icons/gleipnir-bench.ico` so `iconbitmap(default=…)` plus an AppUserModelID
 show the same quill in the title bar, every dialog, the taskbar and Alt-Tab (without the ICO the
 taskbar shows pythonw's / the py launcher's icon). Reads the RT_GROUP_ICON / RT_ICON resources

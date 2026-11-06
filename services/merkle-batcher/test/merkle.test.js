@@ -66,8 +66,8 @@ test('V2 — three leaves: leaves, parent, root, and L1 sibling path', () => {
   assert.equal(verifyPath(L1, pathL1, tree.root), true);
 });
 
-// CONTRACTS §4: the two merkle.js copies MUST be byte-identical. This is the
-// enforcement mechanism (audit F5) — semantic drift starts as byte drift.
+// docs/CONTRACTS.md §4: the two merkle.js copies must be byte-identical. This
+// test enforces it; semantic drift starts as byte drift.
 test('merkle.js is byte-identical to the verification service copy', () => {
   const here = fs.readFileSync(path.join(__dirname, '..', 'src', 'merkle.js'));
   const other = fs.readFileSync(

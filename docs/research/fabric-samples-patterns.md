@@ -1,7 +1,6 @@
 # fabric-samples patterns for GLEIPNIR (Fabric 2.5 LTS)
 
-Research digest, 2026-07-03. Every snippet below was fetched from raw file contents on GitHub
-(not recalled from memory). Source-of-truth commit is pinned; copy URLs verbatim.
+Research digest, 2026-07-03. Every snippet below was fetched from raw file contents on GitHub. Source-of-truth commit is pinned; copy URLs verbatim.
 
 ## 0. Branch reality check — there is NO `release-2.5` branch (VERIFIED)
 

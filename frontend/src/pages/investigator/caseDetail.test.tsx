@@ -3,7 +3,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CaseDetail, User } from '../../types';
 
-// Light render tests (M23): the page is driven by a mocked GatewayClient via
+// Light render tests: the page is driven by a mocked GatewayClient via
 // a mocked useAuth — no network, no real AuthProvider.
 const { mockUseAuth } = vi.hoisted(() => ({ mockUseAuth: vi.fn() }));
 vi.mock('../../auth/AuthContext', () => ({ useAuth: mockUseAuth }));
@@ -43,11 +43,11 @@ function renderAs(user: Partial<User>) {
   return client;
 }
 
-describe('CaseDetailPage (M23 tabs; M25 overview sections)', () => {
-  it('M25: Team lives on Overview — the lead expands it and gets management controls', async () => {
+describe('CaseDetailPage (tabs and overview sections)', () => {
+  it('Team lives on Overview — the lead expands it and gets management controls', async () => {
     renderAs({ username: 'lena', role: 'lead' });
     await waitFor(() => expect(screen.getByText('Op Nightjar')).toBeTruthy());
-    // No Team tab any more; the tab strip is Overview/Evidence/Activity.
+    // Team is not a tab; the tab strip is Overview/Evidence/Activity.
     expect(screen.queryByRole('tab', { name: /Team/ })).toBeNull();
     expect(screen.getByRole('tab', { name: /Evidence \(1\)/ })).toBeTruthy();
 
@@ -57,7 +57,7 @@ describe('CaseDetailPage (M23 tabs; M25 overview sections)', () => {
     expect(screen.getAllByText('Remove').length).toBe(2);
   });
 
-  it('M25: a contributor sees the Team roster read-only (no management controls)', async () => {
+  it('a contributor sees the Team roster read-only (no management controls)', async () => {
     renderAs({ username: 'ivy', role: 'investigator' });
     await waitFor(() => expect(screen.getByText('Op Nightjar')).toBeTruthy());
     fireEvent.click(screen.getByRole('button', { name: /Team \(2\)/ }));
@@ -67,7 +67,7 @@ describe('CaseDetailPage (M23 tabs; M25 overview sections)', () => {
     expect(screen.queryByLabelText('role of lena')).toBeNull();
   });
 
-  it('M25: Categories are collapsed until pressed, then the list shows', async () => {
+  it('Categories are collapsed until pressed, then the list shows', async () => {
     renderAs({ username: 'root', role: 'admin' });
     await waitFor(() => expect(screen.getByText('Op Nightjar')).toBeTruthy());
     expect(screen.queryByText('Disk Images')).toBeNull();
@@ -75,7 +75,7 @@ describe('CaseDetailPage (M23 tabs; M25 overview sections)', () => {
     expect(screen.getByText('Disk Images')).toBeTruthy();
   });
 
-  it('M25: evidence filters narrow the table and drive the CSV export count', async () => {
+  it('evidence filters narrow the table and drive the CSV export count', async () => {
     renderAs({ username: 'root', role: 'admin' });
     await waitFor(() => expect(screen.getByText('Op Nightjar')).toBeTruthy());
     fireEvent.click(screen.getByRole('tab', { name: /Evidence \(1\)/ }));
@@ -89,7 +89,7 @@ describe('CaseDetailPage (M23 tabs; M25 overview sections)', () => {
   });
 });
 
-describe('evidenceCsv (M25)', () => {
+describe('evidenceCsv', () => {
   it('emits a header + one quoted-when-needed row per filtered item', () => {
     const csv = evidenceCsv(DETAIL.evidence, () => 'Disk, Images');
     const lines = csv.trimEnd().split('\r\n');

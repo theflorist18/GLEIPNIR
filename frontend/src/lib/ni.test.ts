@@ -3,7 +3,7 @@ import { niUri } from './ni';
 
 // Vectors computed with the gateway implementation (node:crypto):
 //   require('./gateway/src/ni').niUri(Buffer.from(...))
-// The two implementations MUST stay byte-identical (CONTRACTS §4).
+// The two implementations must stay byte-identical (docs/CONTRACTS.md §4).
 const VECTORS: Array<[string, string]> = [
   ['abc', 'ni:///sha-256;ungWv48Bz-pBQUDeXa4iI7ADYaOWF3qctBD_YfIAFa0'],
   ['', 'ni:///sha-256;47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU'],

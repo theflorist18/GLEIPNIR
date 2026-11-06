@@ -2,8 +2,8 @@
 
 // transferCustody workload — per-operation round (ops breakdown), every variant.
 // Each worker seeds a pool of `pool` evidence items in initializeWorkloadModule
-// (NOT timed, via lib/pool), then transfers custody of the pooled items
-// round-robin — each transfer targets the SAME case its evidence lives on.
+// (untimed, via lib/pool), then transfers custody of the pooled items
+// round-robin; each transfer targets the same case its evidence lives on.
 // roundArguments: { mode, label, variant?, channels?, pool, payloadBytes? }.
 // Each timed tx is logged via lib/txlog (GLEIPNIR_TXLOG_DIR).
 

@@ -1,5 +1,5 @@
 # gleipnir.mplstyle — thesis figures for orchestration/report.py
-# Use: plt.style.use("orchestration/gleipnir.mplstyle"), then plot with VARIANT_STYLE (viz/variant_style.py).
+# Use: plt.style.use("orchestration/gleipnir.mplstyle"), then plot with VARIANT_STYLE (orchestration/variant_style.py).
 font.family: sans-serif
 font.sans-serif: Figtree, Segoe UI, DejaVu Sans
 font.size: 9

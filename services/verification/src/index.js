@@ -1,26 +1,25 @@
 'use strict';
 
-// GLEIPNIR verification service (port 4004) — THE audit-latency metric path.
+// GLEIPNIR verification service (port 4004): the audit-latency metric path.
 //
 // GET /verify/:eventId times three steps with process.hrtime.bigint():
 //   fetchMs        = GET the receipt (off-chain witness) from the receipt-store,
-//                    INCLUDING body download + JSON parse — the body scales
+//                    including body download + JSON parse; the body scales
 //                    with the O(log N) sibling path, so excluding it would
-//                    undercount exactly the N-dependent cost RQ2 measures (F55)
+//                    undercount exactly the N-dependent cost being measured
 //   recomputeMs    = leaf = SHA-256(canonical receipt.event) when the receipt
 //                    carries the event copy (else receipt.leafHash as stored),
 //                    then fold it up the sibling path to the implied root
-//   compareRootMs  = read the ANCHORED root and compare
+//   compareRootMs  = read the anchored root and compare
 // and returns { ok, latencyMs, leafSource:"event"|"receipt",
 //               steps:{fetchMs,recomputeMs,compareRootMs} }.
-// Recomputing the leaf from the event copy is what makes "fetch event ->
-// recompute branch -> verify root" real: a tampered off-chain event copy fails
-// verification instead of riding on a stored leafHash (brief 2026-09-22 §6).
+// Recomputing the leaf from the event copy makes the check a real
+// "fetch event -> recompute branch -> verify root": a tampered off-chain event
+// copy fails verification instead of riding on a stored leafHash.
 //
-// This is the numerator of the latency-vs-storage tradeoff the Anchoring study
-// exists to quantify (thesis RQ2). It deliberately does NOT verify signatures or
-// schema — those are separate concerns kept OFF the timed path so the number
-// isolates Merkle verification cost.
+// This latency is one side of the anchored variants' latency-vs-storage
+// tradeoff. Signatures and schema are not verified: they are kept off the
+// timed path so the number isolates Merkle verification cost.
 //
 // Contracts: docs/CONTRACTS.md §4/§6/§9; docs/ARCHITECTURE.md §4.5.
 
@@ -37,7 +36,7 @@ function loadConfig() {
     anchorClientUrl: process.env.ANCHOR_CLIENT_URL || 'http://anchor-client:4003',
     token: process.env.GLEIPNIR_TOKEN || 'dev-token',
     logLevel: process.env.LOG_LEVEL || 'info',
-    // RQ2: where to append the per-request step breakdown. Empty (the default)
+    // Where to append the per-request step breakdown. Empty (the default)
     // disables it — only the orchestrator sets it, so unit tests and ad-hoc
     // runs write nothing. experiment.py truncates the file before each verify
     // run; collect.py reads it after and summarises percentiles into the run
@@ -74,7 +73,7 @@ function createApp(overrides) {
     const steps = { fetchMs: 0, recomputeMs: 0, compareRootMs: 0 };
 
     // 1) fetch the receipt (the witness). fetchMs spans headers + body + parse:
-    // the body is the sibling path, whose size is the N-dependent quantity (F55).
+    // the body is the sibling path, whose size is the N-dependent quantity.
     let receipt;
     const t0 = process.hrtime.bigint();
     try {
@@ -95,11 +94,11 @@ function createApp(overrides) {
       return res.status(502).json({ ok: false, reason: 'receipt-store-error', latencyMs: steps.fetchMs, steps });
     }
 
-    // 1b) validate the witness shape BEFORE touching it — the receipt-store is
-    // deliberately un-hardened and stores any JSON, so a corrupt witness must
-    // yield a graceful verdict, not an unhandled throw that kills the process
-    // (F54). Deliberately OFF the timed path: shape checking is not part of the
-    // Merkle verification cost RQ2 isolates.
+    // 1b) validate the witness shape before touching it: the receipt-store is
+    // not hardened and stores any JSON, so a corrupt witness must yield a
+    // graceful verdict, not an unhandled throw that kills the process. Kept off
+    // the timed path: shape checking is not part of the Merkle verification
+    // cost being measured.
     const HEX64 = /^[0-9a-f]{64}$/;
     const pathOk = receipt && (receipt.siblingPath == null || (
       Array.isArray(receipt.siblingPath) &&
@@ -116,7 +115,7 @@ function createApp(overrides) {
     }
 
     // 2) recompute the root implied by leaf + siblingPath. The leaf is
-    // recomputed from the event copy when present (that hashing IS part of
+    // recomputed from the event copy when present (that hashing is part of
     // the audit cost, so it sits inside recomputeMs); older receipts without
     // an event copy fall back to the stored leafHash.
     const leafSource = receipt.event != null ? 'event' : 'receipt';
@@ -144,9 +143,9 @@ function createApp(overrides) {
       return res.status(404).json({ ok: false, reason: 'missing-anchor-root', latencyMs, steps });
     }
     const ok = anchoredRoot === recomputedRoot;
-    // RQ2: record the complete 3-step measurement (only the 200 path ran all
-    // three steps; error paths have partial timings and are not recorded).
-    // Fire-and-forget and OFF the timed path: the steps are already captured and
+    // Record the complete 3-step measurement (only the 200 path ran all three
+    // steps; error paths have partial timings and are not recorded).
+    // Fire-and-forget and off the timed path: the steps are already captured and
     // the async append never blocks, so it cannot perturb the latency it records.
     // Failures (e.g. no volume mounted) are ignored.
     if (cfg.metricsPath) {

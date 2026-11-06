@@ -9,7 +9,7 @@ import (
 
 // Composite-key object types (the first component of every CreateCompositeKey).
 // These namespaces partition the world state and drive the MVCC design
-// (CONTRACTS sect. 3):
+// (docs/CONTRACTS.md §3):
 //   - "evd"  head record, one per evidence  (serial writers only)
 //   - "evt"  append-only audit events        (distinct key per tx -> no conflict)
 //   - "root" anchor Merkle roots             (keyed by scope+batch)
@@ -20,7 +20,7 @@ const (
 )
 
 // defaultScopeID is the anchor-root scope used when metaJSON carries no caseId
-// (the single-channel Anchoring variant). CONTRACTS sect. 3.
+// (the single-channel Anchoring variant). See docs/CONTRACTS.md §3.
 const defaultScopeID = "shared"
 
 // sortKey builds the second component of an event composite key:
@@ -32,12 +32,12 @@ const defaultScopeID = "shared"
 // order equal numeric order.
 //
 // Both inputs come from the signed transaction proposal, so the sortKey is
-// deterministic across endorsers, unique per transaction, and ordered by the
-// client's PROPOSAL timestamp — not commit order; skewed client clocks can
-// reorder the trail (irrelevant on the single-host benchmark, one clock) —
-// WITHOUT any shared counter key (CONTRACTS sect. 3). Concurrent
-// AccessLog calls to the same evidence therefore write DISTINCT keys — zero
-// MVCC_READ_CONFLICT by construction, not by client-side retry.
+// deterministic across endorsers and unique per transaction, with no shared
+// counter key (docs/CONTRACTS.md §3). It orders by the client's proposal
+// timestamp, not commit order: skewed client clocks can reorder the trail
+// (not a concern on the single-host benchmark, which has one clock).
+// Concurrent AccessLog calls to the same evidence therefore write distinct
+// keys, so they cannot raise MVCC_READ_CONFLICT; no client-side retry needed.
 func sortKey(ts *timestamppb.Timestamp, txID string) string {
 	return fmt.Sprintf("%019d-%s", ts.AsTime().UnixNano(), txID[:min(len(txID), 12)])
 }

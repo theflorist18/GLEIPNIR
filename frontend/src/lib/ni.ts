@@ -1,6 +1,6 @@
-// RFC 6920 "ni" URI, byte-identical to gateway/src/ni.js (CONTRACTS §4
-// discipline):  ni:///sha-256;<base64url( sha256(bytes) )>  — no padding.
-// Computed client-side (M22) so the wizard can verify the server's
+// RFC 6920 "ni" URI, byte-identical to gateway/src/ni.js (docs/CONTRACTS.md §4
+// hashing rules):  ni:///sha-256;<base64url( sha256(bytes) )>  — no padding.
+// Computed client-side so the ingest wizard can verify the server's
 // integrityProof end-to-end. crypto.subtle requires a secure context;
 // localhost qualifies (the deployment posture — single host, no TLS).
 

@@ -1,9 +1,10 @@
 'use strict';
 
-// verify workload — VERIFICATION latency of one event (thesis RQ2), reported
-// in the reads table. Anchored variants only (rest mode).
+// verify workload — verification latency of one event (fetch, recompute the
+// Merkle branch, compare the root), reported in the reads table. Anchored
+// variants only (rest mode).
 //
-// initializeWorkloadModule (NOT timed): seed `seedCount` events through the
+// initializeWorkloadModule (untimed): seed `seedCount` events through the
 // gateway enqueue path (capturing eventIds from the 202 responses), then force
 // a batch boundary so roots are committed and receipts are complete. The timed
 // round then GETs /api/v1/evidence/:id/verify?eventId=... through the REST

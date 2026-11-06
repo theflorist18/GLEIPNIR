@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 
-// Controlled tab strip in the existing card idiom (M21). The caller owns the
+// Controlled tab strip in the existing card idiom. The caller owns the
 // active id and renders the matching panel itself. Keyboard support follows the
 // WAI-ARIA tablist pattern: roving tabIndex (only the active tab is a tab stop)
 // and Arrow/Home/End move between tabs with activation following focus.

@@ -81,10 +81,10 @@ test('GET streams bytes back with content headers from the sidecar', async (t) =
   assert.equal((await fetch(`${url}/blobs/ev-none`, { headers: HDR })).status, 404);
 });
 
-// B1: a non-ASCII filename arrives percent-encoded (the gateway encodes it),
-// is stored decoded, and is served back without throwing on the header — the
+// A non-ASCII filename arrives percent-encoded (the gateway encodes it), is
+// stored decoded, and is served back without throwing on the header: the
 // ASCII fallback is sanitised and the true name rides in filename*.
-test('B1: a Unicode filename round-trips and is served via RFC 5987', async (t) => {
+test('a Unicode filename round-trips and is served via RFC 5987', async (t) => {
   const url = await start(t);
   const name = '証拠 file.pdf';
   await putBlob(url, 'ev-uni', Buffer.from('x'), { 'x-original-filename': encodeURIComponent(name) });
@@ -96,7 +96,7 @@ test('B1: a Unicode filename round-trips and is served via RFC 5987', async (t) 
   assert.match(cd, /filename\*=UTF-8''%E8%A8%BC%E6%8B%A0%20file\.pdf/); // true name
 });
 
-test('DELETE is rollback-token-gated (S9); with the token removes blob + sidecar', async (t) => {
+test('DELETE is rollback-token-gated; with the token removes blob + sidecar', async (t) => {
   const url = await start(t);
   const { rollbackToken } = await (await putBlob(url, 'ev-d', Buffer.from('orphan'))).json();
   assert.match(rollbackToken, /^[0-9a-f]{32}$/);

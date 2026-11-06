@@ -222,7 +222,7 @@ test('data persists across reopen from the same dataDir', async (t) => {
   assert.equal((await json(await call(url, 'GET', '/evidence-index?q=ev-durable')))[0].evidenceId, 'ev-durable');
 });
 
-test('M18: participant-scoped case listings carry myRoleInCase; unscoped listings do not', async (t) => {
+test('participant-scoped case listings carry myRoleInCase; unscoped listings do not', async (t) => {
   const url = await start(t);
   const c = await makeCase(url);
   await call(url, 'POST', `/cases/${c.id}/participants`, { userId: 'lena', roleInCase: 'lead', addedBy: 'root' });
@@ -234,12 +234,12 @@ test('M18: participant-scoped case listings carry myRoleInCase; unscoped listing
   const unscoped = await json(await call(url, 'GET', '/cases'));
   assert.equal(unscoped[0].myRoleInCase, undefined);
 
-  // roleInCase validation now includes lead; junk is still rejected.
+  // roleInCase validation accepts lead; junk is rejected.
   const bad = await call(url, 'POST', `/cases/${c.id}/participants`, { userId: 'x', roleInCase: 'boss' });
   assert.equal(bad.status, 400);
 });
 
-test('M19: category CRUD — dup 409, cross-case 400, in-use delete 409', async (t) => {
+test('category CRUD — dup 409, cross-case 400, in-use delete 409', async (t) => {
   const url = await start(t);
   const c1 = await makeCase(url, 'cat case');
   const c2 = await makeCase(url, 'other case');
@@ -273,7 +273,7 @@ test('M19: category CRUD — dup 409, cross-case 400, in-use delete 409', async 
 
 const PRESETS = ['Archive', 'Audio', 'Document', 'Image', 'Other', 'PDF', 'Spreadsheet', 'Text', 'Video'];
 
-test('M25: new cases are seeded with the preset file-type categories', async (t) => {
+test('new cases are seeded with the preset file-type categories', async (t) => {
   const url = await start(t);
   const c = await makeCase(url, 'preset case');
   const cats = (await json(await call(url, 'GET', `/cases/${c.id}`))).categories;
@@ -284,7 +284,7 @@ test('M25: new cases are seeded with the preset file-type categories', async (t)
   assert.equal((await call(url, 'DELETE', `/cases/${c.id}/categories/${img.id}`)).status, 204);
 });
 
-test("M25: category listings sort alphabetically with 'Other' pinned last", async (t) => {
+test("category listings sort alphabetically with 'Other' pinned last", async (t) => {
   const url = await start(t);
   const c = await makeCase(url, 'order case');
   await call(url, 'POST', `/cases/${c.id}/categories`, { name: 'Zip Bombs', createdBy: 'root' });
@@ -293,7 +293,7 @@ test("M25: category listings sort alphabetically with 'Other' pinned last", asyn
   assert.ok(names.indexOf('Zip Bombs') < names.length - 1);
 });
 
-test('M25: participant role PATCH — in place, enum-validated, 404 unknown', async (t) => {
+test('participant role PATCH — in place, enum-validated, 404 unknown', async (t) => {
   const url = await start(t);
   const c = await makeCase(url);
   await call(url, 'POST', `/cases/${c.id}/participants`, { userId: 'ivy', roleInCase: 'viewer', addedBy: 'root' });
@@ -307,7 +307,7 @@ test('M25: participant role PATCH — in place, enum-validated, 404 unknown', as
   assert.equal((await call(url, 'PATCH', `/cases/${c.id}/participants/ghost`, { roleInCase: 'viewer' })).status, 404);
 });
 
-test('M19: metadata fields set at registration and via PATCH; uncategorize clears the category', async (t) => {
+test('metadata fields set at registration and via PATCH; uncategorize clears the category', async (t) => {
   const url = await start(t);
   const c = await makeCase(url, 'meta case');
   const cat = await json(await call(url, 'POST', `/cases/${c.id}/categories`, { name: 'Physical Media', createdBy: 'lena' }));
@@ -336,7 +336,7 @@ test('M19: metadata fields set at registration and via PATCH; uncategorize clear
   assert.equal(after.label, 'ITEM-002'); // non-case metadata survives
 });
 
-test('M20: notes are append-only — create/list work, no mutation routes exist', async (t) => {
+test('notes are append-only — create/list work, no mutation routes exist', async (t) => {
   const url = await start(t);
   await indexEvidence(url, 'ev-notes');
 
@@ -356,7 +356,7 @@ test('M20: notes are append-only — create/list work, no mutation routes exist'
   assert.equal((await call(url, 'POST', '/evidence-index/ev-ghost/notes', { author: 'ivy', body: 'x' })).status, 404);
 });
 
-test('M20: flag is a strict enum (or null) and searchable', async (t) => {
+test('flag is a strict enum (or null) and searchable', async (t) => {
   const url = await start(t);
   await indexEvidence(url, 'ev-flag');
 
@@ -371,7 +371,7 @@ test('M20: flag is a strict enum (or null) and searchable', async (t) => {
   assert.equal((await json(await call(url, 'GET', '/evidence-index?flag=HIGH_PRIORITY'))).length, 0);
 });
 
-test('M25b: the activity feed is the persistent audit log — ts-DESC, actor-attributed, complete', async (t) => {
+test('the activity feed is the persistent audit log — ts-DESC, actor-attributed, complete', async (t) => {
   const url = await start(t);
   const c = await makeCase(url, 'active case');
   const actorHdr = { 'x-gleipnir-actor': 'root' };

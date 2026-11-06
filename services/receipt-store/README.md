@@ -4,7 +4,7 @@
 (`{leafHash, siblingPath[], batchId, leafIndex, rootRef}`) **plus the CoC event copy**
 (`evidenceId`, `event`), one JSON file per `eventId`, and keep a plain per-evidence index
 so an evidence's off-chain trail can be listed back. Used by the **Anchoring** and
-**Parallel-Anchored** variants (supervisor brief 2026-09-22: the off-chain trail).
+**Parallel-Anchored** variants, whose audit trail is read back from this store.
 
 Port **4002**. Node 20, Express. Files under `DATA_DIR` (named volume `receipt-data`):
 `DATA_DIR/<eventId>.json` (receipt) and `DATA_DIR/idx/<evidenceId>.txt` (one `eventId` per
@@ -32,15 +32,15 @@ needing a strict timeline sort by `event.ts`.
 
 - **Harden.** No hash chains, no signatures, no replication, no integrity proofs on
   receipts **or on the index**. The index is a text file of ids and the `event` field is a
-  plain copy — nothing more. This weaker-than-on-chain guarantee is intentional and is a
-  **measured property of the design** (a stated thesis caveat), not a bug. The urge to
-  harden this store is itself the finding — record it in the thesis; do not code it away.
+  plain copy, nothing more. This weaker-than-on-chain guarantee is intentional and is a
+  **measured property of the design** (a stated caveat of the study), not a bug; hardening
+  the store would remove the property the benchmark measures.
 - Compute Merkle trees or verify proofs (batcher builds, verification checks — and the
   verification service recomputes the leaf from `event`, so a tampered copy here fails
   root verification rather than being trusted).
 - Sort, filter or reconcile the trail (the gateway assembles it).
 
-**Integrity caveat (belongs in the thesis):** only the Merkle *root* is on-chain and
+**Integrity caveat:** only the Merkle *root* is on-chain and
 tamper-evident. The sibling paths and event copies stored here are off-chain. Losing or
 corrupting a receipt is an **availability exposure of the witness** (the proof can no longer
 be reconstructed), **not an integrity exposure of the ledger** (the anchored root still
