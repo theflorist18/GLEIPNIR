@@ -1,6 +1,8 @@
 # GLEIPNIR experiment constants — SINGLE SOURCE OF TRUTH (docs/CONTRACTS.md §10).
-# Supervisor brief 2026-09-22: E1 batch calibration → E2 channel calibration → E3 scalability
-# (a: vs send rate, b: vs cases) + per-operation breakdown; E0 pilot is functional only.
+# E0 smoke test (functional only) → E1 batch-size calibration → E3 scalability (a: send rate up to
+# saturation, b: cases at a fixed total send rate, c: cases at a fixed per-case send rate) → the
+# per-operation breakdown (ops) and the sensitivity cells (sens). The ramp and E2 (channel-count
+# calibration) set the baselines below and stay runnable.
 seed: 20260922            # PRNG seed of the transaction trace — identical sequence across all variants
 workers: 4                # Caliper worker processes (constant)
 repetitions: 3            # r; results reported as mean ± SD over repetitions
@@ -8,30 +10,65 @@ repetitions: 3            # r; results reported as mean ± SD over repetitions
 # ---- swept grids ----
 batch_sizes: [10, 25, 50, 100, 200]               # E1 — ONE grid for Anchoring (N) and Parallel-Anchored (K)
 channel_counts: [5, 10, 20, 30, 40, 50]           # E2 — Parallel only; one channel per case, so cases = channels; bounded by host cores
-send_rates_tps: [10, 25, 50, 75, 100, 150, 200]   # E3a — send rate = CONFIGURED offered load (input, not output)
+send_rates_tps: [10, 25, 50, 75, 100, 150, 200]   # ramp — send rate = CONFIGURED offered load (input, not output)
 case_counts: [5, 10, 20, 30, 40, 50]              # E3b — all four variants (parallel*: one channel per case); trimmed to ≤ baseline.channels_max
 
 # ---- calibrated constants carried forward (filled from results; "baseline", never "optimal") ----
 baseline:
-  send_rate_tps: 100      # from E0 pilot (sub-saturation) → used by E1, E2, E3b, ops   [set from ramp 2026-10-01: no saturation up to the top level, half of it]
-  batch_size: 50          # from E1 (rule: docs/methodology/experiments.md §4) → E3, ops  [set by hand 2026-10-02: §4.1 selects no level (E1 on-chain B/event steps 47–60 %); the authors chose 50 — total on+off-chain bytes within 0.2 % of the N=25 minimum]
-  channels: 20            # the SET case count (= channels on parallel*, one per case): E2 MEDIAN → E1, E3a, ops, ramp, cell default  [set from e2 2026-10-02]
-  channels_max: 50        # from E2: top of the healthy range → E3b upper bound          [set from e2 2026-10-02]
+  send_rate_tps: 100      # from the ramp (sub-saturation) → used by E1, E2, E3b, ops, sens   [set from ramp 2026-10-01: no saturation up to the top level, half of it]
+  batch_size: 50          # from E1 (rule: docs/methodology/experiments.md §4) → E3, ops, sens  [set by hand 2026-10-02: §4.1 selects no level (E1 on-chain B/event steps 47–60 %); 50 keeps total on+off-chain bytes within 0.2 % of the N=25 minimum]
+  channels: 20            # the SET case count (= channels on parallel*, one per case): E2 MEDIAN → E1, E3a, ops, sens, ramp, cell default  [set from e2 2026-10-02]
+  channels_max: 50        # from E2: top of the healthy range → E3b/E3c upper bound          [set from e2 2026-10-02]
 
 # ---- controlled workload (identical across variants; recorded in every run.json) ----
 workload:
   evidence_per_case: 20
   events_per_case_per_round: 224  # per round; cases*this/workers must be an integer for EVERY case count in the grids (a multiple of 4 works)
-  rounds: 5                       # trace slices per run (E1/E2/E3b); E3a uses one slice per send rate
+  rounds: 5                       # trace slices per run (E1/E2/E3b/E3c/sens); E3a uses one slice per send rate
   mix: { transfer_weight: 0.15, access_weight: 0.85, dispose_fraction: 0.5 }  # CREATE = 1/evidence; DISPOSE ends dispose_fraction of evidence
   payload_bytes: 256              # synthetic Codex-Entry filler hashed into storage.integrity_proof
-  audit_cases: 5                  # cases reconstructed per run (audit reconstruction time)
+  audit_cases: 50                 # cases reconstructed per run (audit reconstruction time); >= the largest case count, so every case
 anchoring:
-  flush_timeout_ms: 0             # 0 = size-only batching; partial batch flushed at run end (constant across runs)
+  flush_timeout_ms: 0             # age timer: close a batch this long after its FIRST event; 0 = off
+  idle_timeout_ms: 0              # idle timer: close a batch this long after its LAST event (no cap); 0 = off. Both 0 = size-only batching, partial batch flushed at run end
+endorsement:
+  policy: any                     # chaincode endorsement on every app channel: any = OR(Org1, Org2 peer) (1-of-any), all = AND (2-of-2)
 monitor:
   interval_s: 5                   # Caliper docker resource monitor sampling interval
 regimes:
   smoke:  { cases: 10, evidence_per_case: 2, logs_per_case_min: 10, logs_per_case_max: 25, send_rate_tps: 5 }
   steady: { min_events_per_channel: 1000 }   # cumulative per run; a run below the floor is labelled "sub-floor", never "steady"
 ramp:                              # E0 short ramp to locate approximate saturation
-  events_per_case_per_round: 224    # = the E3a slice: an 800-tx round (40) would let Parallel's 2 s end-of-round block wait read as saturation at 50 tx/s
+  events_per_case_per_round: 224    # = the E3b slice: an 800-tx round (40) would let Parallel's 2 s end-of-round block wait read as saturation at 50 tx/s
+
+# ---- E3a: send rate up to saturation, at baseline.channels cases ----
+# One ledger per run, one round per send rate, ascending. A variant that keeps up at the top of
+# its last ladder climbs on (experiment.py, the climb rule in docs/methodology/experiments.md):
+# each step is judged on the mean over the repetitions. Finalized throughput = finalizations
+# per second while the load is still being sent (collect.py).
+e3a:
+  send_rates_tps: [100, 150, 200, 300, 400, 600, 800, 1000]   # the base ladder
+  events_per_case_per_round: 1500  # base-ladder rounds: 30,000 tx at 20 cases = 300 s of sending at 100 tx/s, 30 s at 1000 tx/s
+  saturation_ratio: 0.9            # saturated: finalized throughput < this x the configured send rate ...
+  generator_ratio: 0.95            # ... while the measured send rate >= this x configured; below it the load generator is the limit (stop)
+  climb:
+    factor: 1.25                   # next ladder: the last top rate x factor, x factor^2, ... (rounded to whole tx/s)
+    rates_per_ladder: 4            # rounds per extension run
+    min_send_s: 30                 # an extension round holds enough events for this many seconds at the run's top rate
+    max_send_rate_tps: 10000       # never plan a rate above this (the load generator tops out far below it)
+  # After the first saturated rate: one run at the rate halfway back to the last rate that kept
+  # up, with the saturated run's round size; then the variant stops.
+
+# ---- E3c: cases at a FIXED per-case send rate (E3b holds the TOTAL send rate instead) ----
+e3c:
+  send_rate_per_case_tps: 5        # send rate = cases x this (5 cases → 25 tx/s … 50 cases → 250 tx/s)
+  case_counts: [5, 10, 30, 40, 50] # 20 cases x 5 = the baseline cell: measured in the same campaign by sens/baseline
+
+# ---- sens: sensitivity cells at the baseline point (all run in ONE night, so they share a VM boot) ----
+# Each cell overrides sweeps.yaml paths. A cell that overrides only anchoring.* runs on the anchored
+# variants alone. Runs go repetition by repetition (every cell once, then again), so drift within
+# the night spreads evenly over the cells.
+sensitivity:
+  baseline: {}                                     # the reference cell
+  endorse-all: { endorsement.policy: all }         # 2-of-2 endorsement, all four variants
+  idle-5s: { anchoring.idle_timeout_ms: 5000 }     # 5 s idle batch timer, no cap: the anchored variants

@@ -7,7 +7,7 @@
 # is pinned to goleveldb and the alternate rich-query state backend is removed
 # (see ledger.state below). Version-controlled and referenced by commit SHA in
 # every run manifest (methodology hook). Peers mount this at FABRIC_CFG_PATH.
-# The settings that matter for the thesis:
+# The settings that matter for the benchmark:
 #   - peer.limits.concurrency.gatewayService: 500 (default; raising toward the
 #     LF-benchmark 20000 must be documented per run — ARCHITECTURE Key Finding 7)
 #   - chaincode.externalBuilders: ccaas_builder (chaincode runs as a service)
@@ -676,7 +676,7 @@ ledger:
 
   state:
     # GLEIPNIR pins the world-state database to goleveldb (key-value only). This
-    # is a deliberate external-validity limit (CLAUDE.md, ARCHITECTURE Key
+    # is a deliberate external-validity limit (docs/ARCHITECTURE.md, Key
     # Finding 6): it removes rich-query overhead and isolates ledger-write
     # performance. The alternative state backend is intentionally NOT configured
     # here — results do not generalize to that backend, and the chaincode never

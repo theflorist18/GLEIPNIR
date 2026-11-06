@@ -24,8 +24,9 @@ Per-transaction JSONL (written by the workloads from Caliper's own TxStatus
 timestamps) gives p50/p95/p99 latency, measured send rate, failure classes and
 the per-operation split — none of which the round summary can provide.
 
-Storage: per-channel block store from the hosting peer (org1
-for app channels, the anchor peer for anchor-main), world state once per
+Storage: per-channel block store from the hosting peer (org1; in runs of the
+earlier Parallel-Anchored design, which committed its roots to a separate
+anchor-main channel, that channel from the anchor peer), world state once per
 container, receipt store separately. bytes/event = OLS slope over the
 checkpoint series (>=3 points) with the t0->tN delta as cross-check. Compression
 vs the Standard baseline = reduction in on-chain bytes/event, never 1/N of
@@ -49,6 +50,10 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RESULTS_DIR = os.path.join(REPO_ROOT, "benchmark", "results")
 RESULTS_MARKER = "### All test results ###"
 WRITE_OPS = ("CREATE", "TRANSFER", "ACCESS", "DISPOSE")
+ANCHORED_VARIANTS = ("anchoring", "parallel-anchored")
+# The anchor channel and anchor-client of the earlier Parallel-Anchored design (roots on a
+# separate anchor-main channel). Kept so its run folders still collect to the same numbers;
+# current runs have neither, so the anchor-channel delta is 0.
 ANCHOR_CHANNEL = "anchor-main"
 CHANNEL_HOST = {ANCHOR_CHANNEL: "peer0.anchor.example.com"}
 DEFAULT_HOST = "peer0.org1.example.com"
@@ -307,9 +312,87 @@ def txlog_metrics(records):
     return out
 
 
+def _iso_ms(ts):
+    """The batcher's ISO-8601 time (`...Z`) -> epoch ms; None if absent. Python 3.10's
+    fromisoformat does not take the `Z` suffix."""
+    return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp() * 1000.0 if ts else None
+
+
+def batch_times(run_dir):
+    """{batchId: (closed ms, committed ms | None, leafCount)} from anchoring.json — the batcher's records."""
+    st = _load_json(os.path.join(run_dir, "anchoring.json")) or {}
+    return {b["batchId"]: (_iso_ms(b.get("closedAt")),
+                           _iso_ms(b.get("committedAt")) if b.get("rootStatus") == "committed" else None,
+                           b.get("leafCount") or 0)
+            for b in st.get("batches", []) if b.get("batchId")}
+
+
+def _rate(points):
+    """Least-squares slope (per second) of the cumulative count over time; points = [(ms, count)],
+    ascending. 0.0 with fewer than two points: nothing measurable was finalized."""
+    if len(points) < 2 or points[0][0] == points[-1][0]:
+        return 0.0
+    xs, ys, total = [], [], 0
+    for t, n in points:
+        total += n
+        xs.append(t / 1000.0)
+        ys.append(total)
+    return round(statistics.linear_regression(xs, ys).slope, 3)
+
+
+def finalization_metrics(records, anchored, batches):
+    """Integrity finalization of a round's successful timed writes: submission (Caliper's create
+    time) -> the event is protected by the ledger. Standard/Parallel: its own commit (tFinal).
+    Anchored: the commit of the Merkle root of the batch the 202 named (anchoring.json), so the
+    time an event waits in an open batch counts; an event whose batch never committed is not
+    finalized. None when the round sent no timed write, or (anchored) when no write carries a
+    batchId: runs logged before the batch link existed have no finalization data.
+
+    finalizedTps = the rate at which finalizations happened while the load was still being sent:
+    the least-squares slope of the cumulative finalizations over [the first finalization after the
+    round's first submission, its last submission]. Anchored, that counts every root committed in
+    the window with its leafCount (a batch carried over from the previous round included), because
+    root commits come in whole batches. A system that keeps up reads about the send rate whatever
+    its latency; a saturated one reads its finalization capacity. A round whose writes all failed
+    reads 0.
+
+    Known limit: on the anchored variants an event left in an open batch when a round ends waits
+    for the next round's events, a timer or the run-end flush; `pausedEvents` counts them (their
+    batch closed after the round's last accepted write), and their latency includes that pause."""
+    sent = [r for r in records if is_timed(r) and r.get("op") in WRITE_OPS and isinstance(r.get("tCreate"), (int, float))]
+    if not sent:
+        return None
+    writes = [r for r in sent if r.get("ok") is True]
+    if anchored and writes and not any("batchId" in r for r in writes):
+        return None
+    first_submit, last_submit = min(r["tCreate"] for r in sent), max(r["tCreate"] for r in sent)
+    last_accept = max((r["tFinal"] for r in writes if isinstance(r.get("tFinal"), (int, float))), default=last_submit)
+    done, paused = [], 0
+    for r in writes:
+        if anchored:
+            closed, final, _n = batches.get(r.get("batchId"), (None, None, 0))
+            paused += int(final is not None and closed is not None and closed > last_accept)
+        else:
+            final = r.get("tFinal")
+        if isinstance(final, (int, float)):
+            done.append((r["tCreate"], final))
+    if anchored:
+        commits = sorted((c, n) for _closed, c, n in batches.values() if c is not None and first_submit <= c <= last_submit)
+    else:
+        commits = sorted((f, 1) for _, f in done if f <= last_submit)
+    return {"basis": "root-commit" if anchored else "commit", "finalized": len(done),
+            "notFinalized": len(writes) - len(done), "pausedEvents": paused,
+            "latencyMs": summarize([f - c for c, f in done]),
+            "finalizedTps": _rate(commits),
+            "windowS": round((last_submit - commits[0][0]) / 1000.0, 3) if commits else None}
+
+
 # ------------------------------------------------------------------ rounds
 
-def collect_rounds(run_dir):
+def collect_rounds(run_dir, anchored=False, expect_link=False):
+    """expect_link: an anchored run whose tx logs must name the batch of every accepted write (every
+    run seeded by the current experiment.py); without it a round with no batch link is merely old."""
+    batches = batch_times(run_dir) if anchored else {}
     rounds = []
     for rdir in sorted(glob.glob(os.path.join(run_dir, "rounds", "*"))):
         if not os.path.isdir(rdir):
@@ -329,6 +412,12 @@ def collect_rounds(run_dir):
         rnd["slice"] = meta.get("slice")
         records = load_txlog(rdir)
         rnd["txlog"] = txlog_metrics(records)
+        rnd["finalization"] = finalization_metrics(records, anchored, batches)
+        fin = rnd["finalization"]
+        ok = sum(1 for r in records if is_timed(r) and r.get("ok") is True and r.get("op") in WRITE_OPS)
+        if ok and ((fin is None and expect_link) or (fin is not None and fin["finalized"] == 0)):
+            print(f"  ! round {label}: {ok} successful timed writes, none finalized — "
+                  "no batchId in the tx log, or no committed batch in anchoring.json?")
         rnd["untimedWrites"] = sum(1 for r in records
                                    if not is_timed(r) and r.get("ok") is True and r.get("op") in WRITE_OPS)
         rnd["failureClasses"] = rnd["txlog"]["failureClasses"] if rnd["txlog"] else None
@@ -485,11 +574,22 @@ def anchoring_metrics(run_dir):
                 "maxS": round(max(b["delayMs"]["max"] for b in with_delay) / 1000, 3),
                 "batches": len(with_delay)}
 
+    # Exact per-event delays where the batch records carry each event's enqueue time.
+    per_event = [_iso_ms(b["committedAt"]) - t for b in batches
+                 if b.get("committedAt") and isinstance(b.get("enqueuedAtMs"), list) for t in b["enqueuedAtMs"]]
+    reasons = {}
+    for b in st.get("batches", []):
+        if b.get("closeReason"):
+            reasons[b["closeReason"]] = reasons.get(b["closeReason"], 0) + 1
     return {"batchSize": st.get("batchSize"), "flushTimeoutMs": st.get("flushTimeoutMs"),
+            "idleTimeoutMs": st.get("idleTimeoutMs"),
             "batches": len(st.get("batches", [])), "committedBatches": len(batches),
             "forcedBatches": sum(1 for b in st.get("batches", []) if b.get("forced")),
+            "closeReasons": reasons or None,
             "delay": delay(batches), "delayExcludingForced": delay([b for b in batches if not b.get("forced")]),
-            "note": "delay = committedAt - event enqueue time (batcher), leafCount-weighted mean over committed batches"}
+            "delayPerEventMs": summarize(per_event),
+            "note": "delay = committedAt - event enqueue time (batcher), leafCount-weighted mean over committed "
+                    "batches; delayPerEventMs = the same per event (enqueuedAtMs)"}
 
 
 def audit_metrics(run_dir):
@@ -541,7 +641,9 @@ def collect(run_dir, baseline=None):
         manifest[k] = v
     levels = manifest.get("levels") or {}
 
-    rounds = collect_rounds(run_dir)
+    anchored = manifest.get("variant") in ANCHORED_VARIANTS
+    # Runs seeded by the current experiment.py record controls.endorsement; their tx logs carry the batch link.
+    rounds = collect_rounds(run_dir, anchored, anchored and "endorsement" in (manifest.get("controls") or {}))
     annotate_channels(rounds, levels.get("channels"))
     checkpoints, storage = storage_metrics(run_dir, rounds)
     manifest["rounds"] = rounds
@@ -630,10 +732,12 @@ def selftest():
                         "channel": None, "blockstoreBytes": None, "stateBytes": None, "receiptBytes": receipt})
         with open(os.path.join(run, "checkpoints.jsonl"), "w", encoding="utf-8") as fh:
             fh.write("\n".join(json.dumps(c) for c in cps) + "\n")
-        _dump(os.path.join(run, "anchoring.json"), {"batchSize": 50, "flushTimeoutMs": 0, "batches": [
-            {"batchId": "b1", "leafCount": 50, "rootStatus": "committed", "forced": False,
+        commit = _iso_ms("2026-11-06T00:00:01.000Z")
+        _dump(os.path.join(run, "anchoring.json"), {"batchSize": 50, "flushTimeoutMs": 0, "idleTimeoutMs": 0, "batches": [
+            {"batchId": "b1", "leafCount": 50, "rootStatus": "committed", "forced": False, "closeReason": "size",
+             "committedAt": "2026-11-06T00:00:01.000Z", "enqueuedAtMs": [commit - 300, commit - 100],
              "delayMs": {"min": 100, "mean": 200, "max": 300}},
-            {"batchId": "b2", "leafCount": 40, "rootStatus": "committed", "forced": True,
+            {"batchId": "b2", "leafCount": 40, "rootStatus": "committed", "forced": True, "closeReason": "flush",
              "delayMs": {"min": 50, "mean": 650, "max": 900}},
             {"batchId": "b3", "leafCount": 10, "rootStatus": "failed", "forced": False,
              "delayMs": {"min": 1, "mean": 1, "max": 1}}]})
@@ -681,6 +785,46 @@ def selftest():
         assert a["batches"] == 3 and a["committedBatches"] == 2 and a["forcedBatches"] == 1, a
         assert a["delay"] == {"minS": 0.05, "meanS": 0.4, "maxS": 0.9, "batches": 2}, a["delay"]
         assert a["delayExcludingForced"] == {"minS": 0.1, "meanS": 0.2, "maxS": 0.3, "batches": 1}
+        # Per-event delays exist only where a batch record carries enqueuedAtMs (here b1 only).
+        assert a["closeReasons"] == {"size": 1, "flush": 1} and a["idleTimeoutMs"] == 0, a
+        assert a["delayPerEventMs"]["n"] == 2 and a["delayPerEventMs"]["min"] == 100 \
+            and a["delayPerEventMs"]["max"] == 300, a["delayPerEventMs"]
+        # The fixture's tx log names no batch (a run logged before the batch link): no finalization record.
+        assert r["finalization"] is None, r["finalization"]
+        # Finalization: an anchored write times to its batch's root commit, a direct one to tFinal.
+        recs = [{"op": "ACCESS", "ok": True, "tCreate": 0, "tFinal": 5, "batchId": "bA"},
+                {"op": "ACCESS", "ok": True, "tCreate": 1000, "tFinal": 1005, "batchId": "bA"},
+                {"op": "CREATE", "ok": True, "tCreate": 2000, "tFinal": 2005, "batchId": "bB"},
+                {"op": "CREATE", "ok": True, "tCreate": 3000, "tFinal": 3004, "batchId": "bX"},
+                {"op": "ACCESS", "ok": False, "tCreate": 3000, "tFinal": 3001},
+                {"op": "READ_TRAIL", "ok": True, "tCreate": 3500, "tFinal": 3510},
+                {"op": "CREATE", "ok": True, "tCreate": None, "tFinal": None, "timed": False}]
+        # bA committed before the last submission (3000); bB closed after the last accepted write (3004),
+        # so its event waited past the round (paused); bX never committed.
+        f = finalization_metrics(recs, True, {"bA": (1500, 2500, 2), "bB": (3600, 4000, 1), "bX": (3200, None, 1)})
+        assert (f["basis"], f["finalized"], f["notFinalized"], f["pausedEvents"]) == ("root-commit", 3, 1, 1), f
+        assert f["latencyMs"]["min"] == 1500 and f["latencyMs"]["max"] == 2500 and f["latencyMs"]["mean"] == 2000
+        assert f["windowS"] == 0.5 and f["finalizedTps"] == 0.0, f   # one root inside the window: no slope yet
+        f = finalization_metrics(recs, False, {})
+        assert (f["basis"], f["finalized"], f["notFinalized"], f["pausedEvents"]) == ("commit", 4, 0, 0), f
+        assert f["latencyMs"]["mean"] == 4.75, f
+        assert finalization_metrics([recs[5]], False, {}) is None   # a read-only round has nothing to finalize
+        unlinked = [{k: v for k, v in recs[0].items() if k != "batchId"}]
+        assert finalization_metrics(unlinked, True, {}) is None   # anchored, no batch link (an older run)
+        dead = finalization_metrics([recs[4]], False, {})   # writes sent, none succeeded: finalized nothing
+        assert (dead["finalized"], dead["finalizedTps"], dead["latencyMs"]) == (0, 0.0, None), dead
+        # finalizedTps = the least-squares slope of cumulative finalizations while the load is sent:
+        # 100 writes at 10 tx/s (every 100 ms); keeping up (each final 500 ms later) reads 10/s,
+        # finalizing at 5/s (backlog grows) reads 5/s, whatever the lag.
+        keep = [{"op": "ACCESS", "ok": True, "tCreate": 100 * i, "tFinal": 100 * i + 500} for i in range(100)]
+        slow = [{"op": "ACCESS", "ok": True, "tCreate": 100 * i, "tFinal": 200 * i + 500} for i in range(100)]
+        assert finalization_metrics(keep, False, {})["finalizedTps"] == 10.0
+        assert finalization_metrics(slow, False, {})["finalizedTps"] == 5.0
+        # Anchored: a 10-event batch closes every second and its root commits 500 ms later -> 10/s.
+        recs = [{"op": "ACCESS", "ok": True, "tCreate": 100 * i, "tFinal": 100 * i + 5, "batchId": f"b{i // 10}"}
+                for i in range(100)]
+        bt = {f"b{k}": (100 * (10 * k + 9), 100 * (10 * k + 9) + 500, 10) for k in range(10)}
+        assert finalization_metrics(recs, True, bt)["finalizedTps"] == 10.0
         assert m["audit"]["cases"] == 1 and m["audit"]["summary"]["msPerCase"]["mean"] == 12.0
         assert to_mb("1.2GB") == 1228.8 and to_mb("512KB") == 0.5 and to_mb("123.4MB") == 123.4 and to_mb("-") is None
         assert classify_err("HTTP 404") == "HTTP_4XX" and classify_err(None) == "OTHER"

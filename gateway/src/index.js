@@ -46,7 +46,6 @@ async function main() {
     fabric,
     batcher,
     receipts,
-    anchorClientUrl: process.env.ANCHOR_CLIENT_URL || 'http://anchor-client:4003',
     users,
     sessions,
     caseRegistry,

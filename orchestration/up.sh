@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 #
 # GLEIPNIR bring-up (docs/CONTRACTS.md §8, §11; docs/ARCHITECTURE.md §4.6).
-#   up.sh --variant <standard|anchoring|parallel|parallel-anchored> [--channels N] [--skip-crypto]
+#   up.sh --variant <standard|anchoring|parallel|parallel-anchored> [--channels N]
+#         [--endorsement any|all] [--skip-crypto]
 #
 # Maps variant -> compose profiles, enrolls crypto, starts the network, creates
 # channels via osnadmin (asserting HTTP 201 on all three orderers), deploys the
 # evidence chaincode as a service, and starts the off-chain services.
+# --endorsement sets the chaincode endorsement policy on every app channel:
+# any = 1-of-any (default), all = 2-of-2 (lib.sh endorsement_policy).
 #
 # Prereqs: docker + compose v2; fabric-ca-client + curl + jq on PATH (host).
 
@@ -16,47 +19,42 @@ source "${SCRIPT_DIR}/lib.sh"
 
 VARIANT="standard"
 CHANNELS=1
+ENDORSEMENT="any"
 SKIP_CRYPTO="false"
 while [ $# -gt 0 ]; do
   case "$1" in
     --variant) VARIANT="$2"; shift 2 ;;
     --channels) CHANNELS="$2"; shift 2 ;;
+    --endorsement) ENDORSEMENT="$2"; shift 2 ;;
     --skip-crypto) SKIP_CRYPTO="true"; shift ;;
     *) echo "unknown arg $1" >&2; exit 1 ;;
   esac
 done
 
-# variant -> compose profiles + crypto flags
+# variant -> compose profiles (the anchored variants add the batcher,
+# receipt-store and verification services)
 PROFILE_ARGS=()
-ENABLE_ANCHOR_ORG="false"
 case "${VARIANT}" in
-  standard)          ;;
+  standard|parallel) ;;
   anchoring)         PROFILE_ARGS=(--profile anchoring) ;;
-  parallel)          ;;
-  parallel-anchored) PROFILE_ARGS=(--profile parallel-anchored); ENABLE_ANCHOR_ORG="true" ;;
+  parallel-anchored) PROFILE_ARGS=(--profile parallel-anchored) ;;
   *) echo "invalid --variant ${VARIANT}" >&2; exit 1 ;;
 esac
-export ENABLE_ANCHOR_ORG
+case "${ENDORSEMENT}" in
+  any|all) ;;
+  *) echo "invalid --endorsement ${ENDORSEMENT} (any|all)" >&2; exit 1 ;;
+esac
 
-echo "== GLEIPNIR up: variant=${VARIANT} channels=${CHANNELS} =="
+echo "== GLEIPNIR up: variant=${VARIANT} channels=${CHANNELS} endorsement=${ENDORSEMENT} =="
 set_env_var VARIANT "${VARIANT}"
+set_env_var ENDORSEMENT "${ENDORSEMENT}"
 
 # 1) CAs + crypto
 if [ "${SKIP_CRYPTO}" != "true" ]; then
   echo "== enrolling crypto (CAs) =="
   compose up -d ca-org1 ca-org2 ca-orderer
-  [ "${ENABLE_ANCHOR_ORG}" = "true" ] && compose "${PROFILE_ARGS[@]}" up -d ca-anchor
   sleep 3
-  ENABLE_ANCHOR_ORG="${ENABLE_ANCHOR_ORG}" bash "${REPO_ROOT}/network/crypto/registerEnroll.sh"
-elif [ "${ENABLE_ANCHOR_ORG}" = "true" ] && [ -z "$(ls "${REPO_ROOT}/network/organizations/peerOrganizations/anchor.example.com/peers/peer0.anchor.example.com/msp/signcerts" 2>/dev/null)" ]; then
-  # --skip-crypto reuses existing crypto, but a stack first brought up as another variant has
-  # no anchor org (docker may even have created its bind-mount dirs empty): enroll ONLY the
-  # anchor org; org1/org2/orderer material is left untouched.
-  echo "== enrolling the missing anchor-org crypto (other orgs reused) =="
-  rm -rf "${REPO_ROOT}/network/organizations/peerOrganizations/anchor.example.com"
-  compose "${PROFILE_ARGS[@]}" up -d ca-anchor
-  sleep 3
-  bash "${REPO_ROOT}/network/crypto/registerEnroll.sh" anchor-only
+  bash "${REPO_ROOT}/network/crypto/registerEnroll.sh"
 fi
 
 # 2) network
@@ -67,7 +65,10 @@ echo "== waiting for orderers/peers to report healthy =="
 wait_healthz 9443 orderer0
 wait_healthz 9446 peer0-org1
 wait_healthz 9447 peer0-org2
-[ "${VARIANT}" = "parallel-anchored" ] && wait_healthz 9448 peer0-anchor
+# A peer's operations /healthz answers before its gRPC endpoint serves; the
+# first lifecycle command below would then fail to connect.
+wait_peer_grpc org1
+wait_peer_grpc org2
 
 # 3) channels + chaincode
 # Chaincode install is org-scoped, not channel-scoped: package + install happen
@@ -89,53 +90,24 @@ peer lifecycle chaincode install ${CTN_ARTIFACTS}/${CC_NAME}-${pkg_host}.tar.gz"
   compose "${PROFILE_ARGS[@]}" up -d ccaas-evidence
 }
 
-deploy_anchor_chaincode() {  # anchor-main
-  local channel="anchor-main"
-  local pkg_host="ccaas-evidence-anchor"
-  local pkgid
-  pkgid="$(package_ccaas "${pkg_host}" | tail -1 | tr -d '\r')"
-  echo "    anchor package id = ${pkgid}"
-  set_env_var CCAAS_ID_ANCHOR "${pkgid}"
-  cli "$(peer_env anchor)
-peer lifecycle chaincode install ${CTN_ARTIFACTS}/${CC_NAME}-${pkg_host}.tar.gz"
-  compose "${PROFILE_ARGS[@]}" up -d ccaas-evidence-anchor
-  local policy="AND('AnchorClientMSP.member')"
-  cli "$(peer_env anchor)
-peer lifecycle chaincode approveformyorg -o ${ORDERER0} --ordererTLSHostnameOverride orderer0.example.com \
-  --channelID ${channel} --name ${CC_NAME} --version ${CC_VERSION} --package-id ${pkgid} --sequence 1 \
-  --signature-policy \"${policy}\" --tls --cafile ${ORDERER0_CA}
-peer lifecycle chaincode commit -o ${ORDERER0} --ordererTLSHostnameOverride orderer0.example.com \
-  --channelID ${channel} --name ${CC_NAME} --version ${CC_VERSION} --sequence 1 --signature-policy \"${policy}\" \
-  --tls --cafile ${ORDERER0_CA} \
-  --peerAddresses peer0.anchor.example.com:11051 --tlsRootCertFiles ${CTN_ORG}/peerOrganizations/anchor.example.com/peers/peer0.anchor.example.com/tls/ca.crt"
-}
-
+install_app_chaincode
 case "${VARIANT}" in
   standard|anchoring)
-    install_app_chaincode
     app_channel coc-main "${APP_PKGID}"
     ;;
   parallel|parallel-anchored)
-    install_app_chaincode
     for i in $(seq 1 "${CHANNELS}"); do
       app_channel "$(printf 'case-%03d' "${i}")" "${APP_PKGID}"
     done
-    if [ "${VARIANT}" = "parallel-anchored" ]; then
-      create_channel anchor-main AnchorChannel
-      join_peer anchor anchor-main
-      wait_raft_leader anchor anchor-main
-      deploy_anchor_chaincode
-    fi
     ;;
 esac
 
 # 4) off-chain services (gateway/frontend/case-registry/evidence-store always;
-#    batcher/receipt/verification/anchor per profile)
+#    batcher/receipt-store/verification on the anchored variants)
 echo "== starting services =="
 compose "${PROFILE_ARGS[@]}" up -d gateway frontend case-registry evidence-store
 if [ "${VARIANT}" = "anchoring" ] || [ "${VARIANT}" = "parallel-anchored" ]; then
   compose "${PROFILE_ARGS[@]}" up -d merkle-batcher receipt-store verification
 fi
-[ "${VARIANT}" = "parallel-anchored" ] && compose "${PROFILE_ARGS[@]}" up -d anchor-client
 
 echo "== GLEIPNIR up complete (variant=${VARIANT}). Gateway :3000, frontend :8081 =="

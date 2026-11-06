@@ -42,15 +42,19 @@ The variants form a 2 × 2 design: anchoring on or off, parallel channels on or 
   receipt store, so it can later be verified against the on-chain root.
 - **Parallel**: one Fabric channel per case (`case-001`, `case-002`, ...), one
   transaction per event.
-- **Parallel-Anchored**: per-case channels plus per-case Merkle batching. An
-  off-chain anchor-client commits each case's roots to a dedicated anchor
-  channel, `anchor-main`.
+- **Parallel-Anchored**: per-case channels plus per-case Merkle batching. Each
+  case's roots are committed on that case's own channel.
 
 The variant changes only how audit events reach the ledger. The chaincode
 interface, the client API, the transaction trace and the Caliper workload
-modules are the same for all four, so the results compare like for like.
-Evidence files are always stored off-chain; the ledger records only their
-integrity proof (a hash).
+modules are the same for all four, so the results compare like for like. All
+ledger writes use one chaincode package and one endorsement policy on the
+application channels. Evidence files are always stored off-chain; the ledger
+records only their integrity proof (a hash).
+
+In the design of the five published campaigns, Parallel-Anchored committed its
+roots to a separate anchor channel (`anchor-main`) through an extra
+anchor-client service. That design is git commit `573017b`.
 
 The chaincode has four operations: `CreateEvidence`, `TransferCustody`,
 `AccessLog` and `DisposeEvidence`. Each audit event is written under its own
@@ -69,9 +73,7 @@ flowchart LR
   GW -->|"fabric-gateway"| PEERS["Fabric 2.5 peers<br/>Org1, Org2<br/>+ 3 Raft orderers"]
   GW --> MB["merkle-batcher<br/>(:4001)"]
   MB --> RS["receipt-store<br/>(:4002)"]
-  MB -->|"Anchoring: root"| GW
-  MB -->|"Parallel-Anchored: root"| AC["anchor-client<br/>(:4003)"]
-  AC --> ANCH["anchor-main channel"]
+  MB -->|"Merkle root"| GW
   GW --> VER["verification<br/>(:4004)"]
   GW --> CR["case-registry<br/>(:4005, SQLite)"]
   GW --> ES["evidence-store<br/>(:4006, blobs)"]
@@ -79,10 +81,10 @@ flowchart LR
 
 | Component | Role |
 |---|---|
-| Fabric network | Fabric 2.5.15, two peer organisations, three etcdraft orderers, GoLevelDB world state. Channels are created with the channel-participation API (`osnadmin channel join`). Parallel-Anchored adds an anchor organisation with its own peer and CA. |
+| Fabric network | Fabric 2.5.15, two peer organizations, three etcdraft orderers, GoLevelDB world state. Channels are created with the channel-participation API (`osnadmin channel join`). Each organization's peer is its anchor peer on every channel, so a 2-of-2 endorsement policy can be used. |
 | Chaincode | Go chaincode, run as an external service (chaincode-as-a-service). |
-| API gateway | Node.js backend-for-frontend. The web app and the REST workloads reach Fabric only through it. It routes each write by variant and holds the web app's user sessions and roles. |
-| Off-chain services | merkle-batcher, receipt-store, verification, anchor-client (anchored variants); case-registry and evidence-store (evidence library). |
+| API gateway | Node.js backend-for-frontend. The web app and the REST workloads reach Fabric only through it. It routes each write by variant, commits the anchored variants' Merkle roots, and holds the web app's user sessions and roles. |
+| Off-chain services | merkle-batcher, receipt-store, verification (anchored variants); case-registry and evidence-store (evidence library). |
 | Web app | React + Vite single-page app behind nginx; talks only to the gateway. |
 | Benchmark | Caliper 0.6.0 workspace: seeded trace generator, workload modules, a REST connector, per-transaction logging, the audit-reconstruction harness. |
 | Orchestration | Bash scripts for the network lifecycle, a Python experiment driver, metric collection and reporting, and a Windows desktop app that drives it all. |
@@ -119,8 +121,10 @@ PyYAML (matplotlib for charts).
 **Hardware.** One fully loaded channel needs about one CPU core, so the core
 count limits how many channels the Parallel variants can use (the channel grid
 goes up to 50). The published campaigns ran in a WSL2 VM with 32 cores and
-about 10 GB of memory. A full campaign is about 150 runs and takes roughly two
-days of machine time.
+about 10 GB of memory. Each of them was about 150 runs and about 30 hours of
+run time; a campaign of the current experiment set is at least 222 runs (E3a
+adds runs as it climbs), roughly 45 hours or more. `experiment.py --dry-run`
+prints an estimate for each plan from the run times already logged.
 
 **Pinned images and libraries** (change none of them; `:latest` Fabric images
 are Fabric 3.x):
@@ -185,7 +189,8 @@ maps Windows paths to `/mnt/<drive>/...`.
    service secret (`GLEIPNIR_INTERNAL_TOKEN`) and the first web-app admin
    account (`ADMIN_USERNAME`, `ADMIN_PASSWORD`). Change the secrets before you
    run the stack anywhere but your own machine. The scripts write `VARIANT`,
-   `BATCH_*` and `CCAAS_ID_*` themselves; do not edit those by hand.
+   `ENDORSEMENT`, `BATCH_*` and `CCAAS_ID_*` themselves; do not edit those by
+   hand.
 
 6. **Images.** `up.sh` builds the service images on first start with Docker
    Compose. Behind a TLS-intercepting proxy the builds cannot fetch packages;
@@ -206,8 +211,9 @@ bash orchestration/smoke-standard.sh    # create -> transfer -> access x2 -> aud
 ```
 
 `up.sh` enrolls the crypto material, starts the orderers, peers and CAs,
-creates the channels (and checks for HTTP 201 from all three orderers), deploys
-the chaincode, and starts the off-chain services the variant needs.
+waits until both peers serve gRPC, creates the channels (and checks for HTTP
+201 from all three orderers), deploys the chaincode, and starts the off-chain
+services the variant needs.
 
 | Variant | Command |
 |---|---|
@@ -215,6 +221,9 @@ the chaincode, and starts the off-chain services the variant needs.
 | Anchoring | `bash orchestration/up.sh --variant anchoring` |
 | Parallel | `bash orchestration/up.sh --variant parallel --channels 10` (channels `case-001` ... `case-010`) |
 | Parallel-Anchored | `bash orchestration/up.sh --variant parallel-anchored --channels 10` |
+
+`--endorsement all` commits the chaincode with a 2-of-2 policy (a peer of each
+organization must endorse); the default, `any`, needs one peer of either.
 
 Once the stack is up:
 
@@ -287,11 +296,15 @@ run unless `GLEIPNIR_ALLOW_LEDGER_WIPE=1` is set.
 Each run records its provenance in `run.json`: the git commit, the blob SHAs of
 the network configuration files and of `sweeps.yaml`, the trace hash and
 parameters, the Caliper and Fabric versions, and the host's cores and memory.
+It also records the run's controls, including the batch timers and the
+endorsement policy.
 
 ### Experiments
 
 Run them in this order; each calibration step fills a `baseline` value in
-`sweeps.yaml` that the later experiments use.
+`sweeps.yaml` that the later experiments use. The baselines are already set
+(from the first published campaign), so a campaign of the current design runs
+`e1`, `e3a`, `e3b`, `e3c`, `ops` and `sens`; `ramp` and `e2` stay available.
 
 | `--exp` | Variants | Varies | Purpose |
 |---|---|---|---|
@@ -299,10 +312,16 @@ Run them in this order; each calibration step fills a `baseline` value in
 | `ramp` | all four | send rate | Finds a sub-saturation send rate: suggests `baseline.send_rate_tps`. |
 | `e1` | Anchoring, Parallel-Anchored (+ Standard and Parallel reference runs) | batch size | Batch-size calibration: suggests `baseline.batch_size`. |
 | `e2` | Parallel | channel count | Channel-count calibration: suggests `baseline.channels` (the median of the healthy range) and `baseline.channels_max`. |
-| `e3a` | all four | send rate | Scalability against load. |
-| `e3b` | all four | case count | Scalability against the number of cases (one channel per case on the Parallel variants). |
+| `e3a` | all four | send rate | Scalability against load: one round per send rate from 100 tx/s up. A variant that keeps up climbs to higher send rates until it saturates or the load generator reaches its limit. |
+| `e3b` | all four | case count | Scalability against the number of cases at a fixed total send rate: the cost of adding channels (one channel per case on the Parallel variants). |
+| `e3c` | all four | case count | The same at a fixed send rate per case (5 tx/s), so the load grows with the cases. |
 | `ops` | all four | operation type | Per-operation breakdown at the E3 operating point: writes, reads, and (anchored variants) verification. |
+| `sens` | all four (the idle-timer cell: anchored variants) | the cell | Sensitivity cells at the baseline point: a baseline cell, 2-of-2 endorsement and a 5 s idle batch timer, run repetition by repetition. |
 | `cell` | all four, or `--variant` | your own levels | One ad-hoc cell at the factor levels you pass; a probe, not an E1–E3 data point. |
+
+E3a judges each send rate on the finalized throughput (below) and writes its
+progress, per variant, to `benchmark/results/e3a/e3a-climb.json` after every
+step; the rule is in docs/methodology/experiments.md §4.5.
 
 Every cell runs `repetitions` times (3 by default; results are mean ± SD). Only
 runs with at least 10³ write events per channel are labelled `steady` and used
@@ -335,8 +354,9 @@ Other useful flags: `--variant V` (repeatable), `--reps N`, `--no-monitor`,
 `--no-audit`, `--verbose` (show Caliper's full output), `--sweeps FILE` (use
 another constants file; its SHA is recorded). For `--exp cell`, the factor
 flags are `--send-rate R [R ...]`, `--batch-size B` and `--cases N`, and the
-workload can be changed per run (`--seed`, `--workers`, `--rounds`,
-`--events-per-case`, `--payload-bytes`, ...). A changed workload is recorded in
+workload and run settings can be changed per run (`--seed`, `--workers`,
+`--rounds`, `--events-per-case`, `--payload-bytes`, `--idle-timeout-ms`,
+`--endorsement any|all`, ...). A changed workload is recorded in
 `run.json` under `overrides` and gets its own results directory, so it never
 mixes with the defaults. `python3 orchestration/experiment.py --help` lists
 everything.
@@ -351,7 +371,10 @@ latency). Caliper's full log is kept in each round's `caliper.log`.
 Double-click it, or run `pyw -3.11 orchestration\benchapp.pyw`. It runs
 `experiment.py` inside the `Ubuntu-22.04` WSL distro and gives you:
 
-- an input box for every `sweeps.yaml` value, and one tab per experiment;
+- an input box for the workload, grid and baseline values of `sweeps.yaml`
+  and for the E3a base ladder (the E3a ratios and climb rule, `e3c`,
+  `sensitivity` and `endorsement` are edited in the file), and one tab per
+  experiment;
 - Preview (the dry-run plan), Run, Resume and Cancel;
 - a live panel with the current run, round and per-round results;
 - the run history, CSV export, and table and chart generation;
@@ -366,16 +389,17 @@ Double-click it, or run `pyw -3.11 orchestration\benchapp.pyw`. It runs
 benchmark/results/
   runlog.jsonl                              one line per run: id, experiment, variant, levels, status, wall time
   <exp>/<exp>-results.csv                   per-round export for Excel, rewritten after every run
+  e3a/e3a-climb.json                        E3a: the rule and every variant's points, verdict and next step
   <exp>/<variant>/<levels>/r<rep>/          one directory per run, e.g. e1/anchoring/batch50-ch1-cases20/r1/
     run.json                                identity, controls and provenance
     rounds/<label>/                         bench.yaml, round.json, caliper.log, report.html, tx-w<i>.jsonl
     checkpoints.jsonl                       storage checkpoints t0..tN
-    anchoring.json                          batcher status after the final flush (anchored variants)
+    anchoring.json                          batcher status after the final flush, with each event's enqueue time (anchored variants)
     audit.json                              audit-reconstruction result
     manifest.json                           every metric of the run (what report.py reads)
   benchapp-logs/                            raw logs of runs started from the desktop app
 benchmark/traces/<hash>.json                generated transaction traces
-docs/results/<exp>/                         report.py output: CSV + Markdown tables, PNG charts
+docs/results/<exp>/                         report.py output: CSV + Markdown tables, PNG charts (e3a also e3a-saturation.json)
 backups/<timestamp>/                        desktop-app volume backups
 ```
 
@@ -392,9 +416,14 @@ What `manifest.json` reports per run and per round:
   input; "throughput" is the measured output.
 - **Latency**: min, average and max from Caliper, plus p50, p95 and p99 from
   the per-transaction logs, per round and per operation type. For the anchored
-  variants a REST write is acknowledged when the event is queued, so their write
-  latency is enqueue latency; the time until the root is on the ledger is
-  reported separately as the **anchoring delay**.
+  variants a REST write is acknowledged (HTTP 202) when the event is queued, so
+  their write latency is acceptance latency.
+- **Finalization**: the **integrity finalization latency** runs from submission
+  to the commit that protects the event (its own commit, or the commit of its
+  batch's Merkle root), and the **finalized throughput** counts finalizations
+  per second while the load is still being sent. These two compare all four
+  variants on one basis. The **anchoring delay** (batcher enqueue until root
+  commit) is reported too, per batch and per event.
 - **Failures**: success and failure counts, failure rate, and the classes
   `MVCC_READ_CONFLICT`, `ENDORSEMENT_POLICY_FAILURE`, `TIMEOUT`, `HTTP_4XX`,
   `HTTP_5XX`, `OTHER`.
@@ -403,9 +432,10 @@ What `manifest.json` reports per run and per round:
 - **Storage**: block store per channel, GoLevelDB state and receipt store,
   measured with `du` on named Docker volumes at every checkpoint; bytes per
   event from a linear regression over the checkpoints.
-- **Audit**: reconstruction time per case (fetch every evidence trail, verify
-  every event's Merkle branch, read each root once), and for the anchored
-  variants the verification latency of single events.
+- **Audit**: reconstruction time per case and per event (fetch every evidence
+  trail, verify every event's Merkle branch, read each root once; every case of
+  the run is audited), and for the anchored variants the verification latency
+  of single events.
 
 The full metric definitions are in [orchestration/README.md](orchestration/README.md)
 and [docs/CONTRACTS.md](docs/CONTRACTS.md) §10.
@@ -429,6 +459,16 @@ python3 orchestration/experiment.py --exp e3a --dry-run
 With a stack up: `bash orchestration/smoke-standard.sh` and
 `bash orchestration/smoke-library.sh`, or `--exp e0` for all four variants.
 
+With an anchored stack up (Anchoring, or Parallel-Anchored with channel
+`case-001`), two fault-injection checks show documented limits of the design.
+They are functional checks, not benchmark runs; `--out FILE` saves the JSON
+result, and each exits 0 when every outcome is the documented one:
+
+```bash
+bash orchestration/crash-test.sh     # events accepted (HTTP 202) are lost when the batcher crashes before their batch closes
+bash orchestration/tamper-test.sh    # what a changed, deleted or replayed receipt does to verification and to the trail
+```
+
 ## Repository layout
 
 | Path | Contents |
@@ -438,7 +478,6 @@ With a stack up: `bash orchestration/smoke-standard.sh` and
 | [`gateway/`](gateway/README.md) | API gateway: REST API, sessions and roles, variant routing |
 | [`services/merkle-batcher/`](services/merkle-batcher/README.md) | Batches events off-chain and builds the Merkle trees |
 | [`services/receipt-store/`](services/receipt-store/README.md) | Stores each event's receipt (leaf hash, sibling path, event copy) |
-| [`services/anchor-client/`](services/anchor-client/README.md) | Commits per-case roots to the anchor channel |
 | [`services/verification/`](services/verification/README.md) | Verifies one event: fetch, recompute the branch, compare with the on-chain root |
 | [`services/case-registry/`](services/case-registry/README.md) | Evidence library: cases, participants, categories, evidence index (SQLite) |
 | [`services/evidence-store/`](services/evidence-store/README.md) | Evidence library: immutable evidence files and their integrity proofs |
@@ -466,6 +505,13 @@ With a stack up: `bash orchestration/smoke-standard.sh` and
   figure; GLEIPNIR reports successful-only throughput instead. The Caliper
   peer-gateway connector records no error text for failed Fabric
   transactions, so their failure classes come from a scan of `caliper.log`.
+- **Batcher crash**: on the anchored variants an event accepted with HTTP 202
+  waits in the batcher's memory until its batch closes. If the batcher dies
+  before that, the event is lost: no receipt, no trail entry, no root
+  (`orchestration/crash-test.sh` shows it).
+- **Endorsement**: the default 1-of-any policy lets one organization endorse
+  alone. It isolates the cost of each architecture; it is not a production
+  policy. `--endorsement all` gives 2-of-2.
 - **Security**: the tokens and passwords in `.env` are development defaults,
   the receipt store is intentionally not hardened (its weaker integrity
   guarantee is one of the measured properties), and everything runs on one

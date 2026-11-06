@@ -35,7 +35,8 @@ FIELDS = BC.FIELDS
 WORKLOAD = ["seed", "workers", "repetitions", "workload.evidence_per_case", "workload.events_per_case_per_round",
             "workload.rounds", "workload.mix.transfer_weight", "workload.mix.access_weight",
             "workload.mix.dispose_fraction", "workload.payload_bytes", "workload.audit_cases",
-            "anchoring.flush_timeout_ms", "monitor.interval_s", "regimes.steady.min_events_per_channel"]
+            "anchoring.flush_timeout_ms", "anchoring.idle_timeout_ms", "monitor.interval_s",
+            "regimes.steady.min_events_per_channel"]
 BASELINES = ["baseline.send_rate_tps", "baseline.batch_size", "baseline.channels", "baseline.channels_max"]
 # The last two are measured once per RUN (ledger growth over its rounds): filled in when the run is
 # collected, the same value on each of its round rows — as in the CSV export.
@@ -491,13 +492,16 @@ class App:
         self.e3_mode = tk.StringVar(value="e3a")
         m = ttk.LabelFrame(f, text="experiment", padding=6)
         m.grid(row=0, column=0, sticky="nw", padx=4, pady=4)
-        for v, t in (("e3a", "E3a — scalability vs send rate (one round per send rate)"),
-                     ("e3b", "E3b — scalability vs cases (Parallel: one channel per case)"),
-                     ("ops", "per-operation breakdown (writes and reads in separate tables)")):
+        for v, t in (("e3a", "E3a — send rate up to saturation (base ladder, then the climb)"),
+                     ("e3b", "E3b — scalability vs cases at a fixed TOTAL send rate (Parallel: one channel per case)"),
+                     ("e3c", "E3c — scalability vs cases at a fixed PER-CASE send rate"),
+                     ("ops", "per-operation breakdown (writes and reads in separate tables)"),
+                     ("sens", "sensitivity cells — baseline, 2-of-2 endorsement, 5 s idle timer")):
             Tip(ttk.Radiobutton(m, text=t, value=v, variable=self.e3_mode), H.MODE_HELP[v]).widget.pack(anchor="w")
         self.fields(f, ["case_counts"], "E3b grid", 0, 1)
+        self.fields(f, ["e3a.send_rates_tps", "e3a.events_per_case_per_round"], "E3a base ladder", 0, 2)
         self.e3_vars = self.variant_boxes(f, R.VARIANTS, row=1, col=0)
-        self.readonly(f, BASELINES + ["send_rates_tps"], "held fixed — the baselines from E0/E1/E2", 1, 1)
+        self.readonly(f, BASELINES, "held fixed — the baselines from E0/E1/E2", 1, 1)
         self.e3_warn = tk.StringVar()   # banner: warning tint + 3 px left bar, shown only while a baseline is a placeholder
         self.e3_banner = tk.Frame(f, background="#B7791F")
         self.e3_banner.grid(row=2, column=0, columnspan=3, sticky="w", padx=4, pady=2)
@@ -831,7 +835,7 @@ class App:
         exp = self.chosen_exp()
         if not exp:
             return
-        if exp not in REP.EXPS:
+        if exp not in REP.TABLE_EXPS:
             messagebox.showinfo("CSV only", f"{exp} is not an E1–E3 experiment: use the per-round CSV.")
             return
         d = filedialog.askdirectory(title=f"Folder for the {exp} summary tables")
@@ -840,7 +844,7 @@ class App:
 
     def gen_charts(self):
         exp = self.chosen_exp()
-        if exp and exp in REP.EXPS:
+        if exp and exp in REP.TABLE_EXPS:
             out = os.path.join(BC.REPO, "docs", "results", exp)
             self.report(exp, out, charts=True)
             self.h_charts.delete(0, "end")

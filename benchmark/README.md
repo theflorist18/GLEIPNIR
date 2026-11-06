@@ -23,9 +23,9 @@ Q1). Node 18 or 20 (0.6.0 support window).
 
 | Path | What |
 |---|---|
-| `sweeps.yaml` | **single source of truth** for the E1/E2/E3 grids, baseline constants, workload shape (docs/CONTRACTS.md §10) |
+| `sweeps.yaml` | **single source of truth** for the grids (ramp, E1, E2, the E3a ladder and climb rule, the E3b/E3c case grids), the sensitivity cells, baseline constants, workload shape and run settings (batch timers, endorsement policy) (docs/CONTRACTS.md §10) |
 | `trace/generate.js` | seeded (mulberry32) transaction-trace generator — `npm run gen:trace` |
-| `workload/trace.js` | mixed-workload round: replays one slice of the pre-generated trace (E1/E2/E3) |
+| `workload/trace.js` | mixed-workload round: replays one slice of the pre-generated trace (the ramp, E1, E2, E3a–E3c, sens) |
 | `workload/{createEvidence,transferCustody,accessLog,disposeEvidence}.js` | per-operation WRITE rounds (ops breakdown) |
 | `workload/read.js`, `workload/verify.js` | READ rounds (ReadEvidence / GetAuditTrail; VerifyEvent for anchored variants) |
 | `workload/lib/payloads.js` | shared builders: Codex-Entry head, REST bodies, fabric request, `opRequest` (the four writes on either path), `case-NNN` selector, payload filler |
@@ -34,7 +34,7 @@ Q1). Node 18 or 20 (0.6.0 support window).
 | `connectors/rest/` | custom `ConnectorBase` connector driving the gateway REST path |
 | `audit/reconstruct.js`, `audit/merkle.js` | audit-reconstruction harness — `npm run audit`; merkle.js is a pinned byte-identical copy of the services' file |
 | `networks/coc-main.yaml`, `rest-gateway.yaml` | Caliper network configs. Nothing generated is committed: Parallel's `parallel-c{C}.yaml` is rendered (`rounds.py`) into the run dir, and every round — smoke included — into `results/…/rounds/<label>/bench.yaml` |
-| `test/` | `npm test` — trace determinism, merkle identity, reconstruct against a fake gateway |
+| `test/` | `npm test` — trace determinism, merkle identity, reconstruct against a fake gateway, the REST connector's 202 → tx-log `batchId` link |
 | `traces/` | generated trace files `<hash>.json` (gitignored) |
 | `results/` | run outputs (gitignored, never edited by hand) |
 
@@ -74,7 +74,7 @@ campaign shapes (≥ 5 cases × 224 events/case/round) that happens only in a wo
 ≤ `headGap` items (at most 72 measured); cells with ≤ 4 cases fall back earlier (docs/CONTRACTS.md §12-22).
 `caseId` is the channel routing key `case-NNN`, `NNN = ((dataCase−1) mod channels)+1`. DISPOSE ends `round(dispose_fraction × owned)`
 of each worker's evidence; the weighted interleave ends every lifecycle near the end of the
-sequence, so all DISPOSEs fall in the last round (E3a and the ramp: the top send-rate level) —
+sequence, so all DISPOSEs fall in the last round (E3a and the ramp: each run's top send-rate level) —
 trace-based DISPOSE latency comes only from that round; the per-operation breakdown comes from
 `ops`. TRANSFER/ACCESS are drawn by `transfer_weight : access_weight`.
 CREATE's `detail.payload` is `payloadBytes` deterministic characters (`lib/payloads.filler`)
@@ -127,6 +127,12 @@ unset → nothing is written):
 {"round":"e1-slice0","op":"CREATE","caseId":"case-003","evidenceId":"ev-c003-e007","tCreate":1790000000000,"tFinal":1790000000210,"latencyMs":210,"ok":true,"err":null,"timed":true}
 ```
 
+An anchored write that the batcher accepted (HTTP 202) also carries the Merkle batch and leaf
+the 202 named, appended at the end of the line: `…,"timed":true,"batchId":"case-003-<epoch>-b000004","leafIndex":17}`.
+The REST connector copies them onto the `TxStatus` (`status.Set`); `collect.py` joins `batchId`
+to that batch's root commit time in `anchoring.json` for the integrity finalization latency. Every
+other line (fabric mode, failed or non-202 answers) is unchanged.
+
 `timed` separates the two kinds of line. `timed: true` is a measured transaction. `timed: false`
 is a ledger write the round performed but never measured: `lib/pool.seedPool`'s pool seeding
 (logged through the connector with the trailing `timed` argument of `log(...)`) and `verify.js`'s
@@ -140,7 +146,9 @@ Caliper's own `TxStatus` (`GetTimeCreate`/`GetTimeFinal`), `ok = IsCommitted()`,
 `GetErrMsg()` entry. `submitTransaction` awaits `sendRequests`, logs, then returns the status —
 Caliper does not await `submitTransaction`, so the log never throttles the send rate; lines are
 buffered and appended off the event loop, with a synchronous flush at process exit. This log is
-the source of p95 latency, success/failure counts and failure classes (`collect.py`).
+the source of p95 latency, success/failure counts, failure classes, the measured send rate and,
+with `anchoring.json` on the anchored variants, the finalization latency and finalized
+throughput (`collect.py`).
 
 Known limit: the Caliper 0.6.0 peer-gateway connector records **no error string** on failed
 fabric-mode transactions (it only logs them), so `err` is `null` there; `collect.py` classifies
@@ -154,7 +162,8 @@ GLEIPNIR_TOKEN=dev-token node audit/reconstruct.js --variant anchoring \
   --trace traces/<hash>.json --cases 5 --gateway http://localhost:3000 --out audit.json
 ```
 
-Takes the first `cases` data-cases of the trace and, per case, timed with `hrtime`:
+Takes the first `cases` data-cases of the trace (`experiment.py` passes
+`min(workload.audit_cases, cases)`, i.e. every case of the run) and, per case, timed with `hrtime`:
 Standard/Parallel fetch `GET /api/v1/evidence/:id/audit[?caseId=]` for every evidence item
 (verified = on-chain, no Merkle step); Anchoring/Parallel-Anchored fetch `…/audit?proofs=1`,
 recompute `leafHash(canonical(event))` per event, fold its sibling path (`audit/merkle.js`),
@@ -173,13 +182,19 @@ gateway response is a thrown error (loud), a root mismatch or missing root is a 
 Caliper's `Throughput (TPS)` numerator is `Succ + Fail`, so a round with 0 successes can
 still show positive throughput. GLEIPNIR does **not** report that number as-is. `collect.py`
 recomputes **successful-only** throughput = `Succ / (lastFinishTime − firstCreateTime)`.
+It also computes the **finalized throughput** from the tx log and the batch records: the
+least-squares slope of the cumulative finalizations while the load is still being sent (from
+the first finalization to the last submission of the round), the measure E3a's saturation rule uses.
 `MVCC_READ_CONFLICT` is tabulated as its own failure class (issue #1397); the append-only
 sub-key design should keep it near zero. "Send rate" is the configured `fixed-rate tps`
 (input); "throughput" is what was measured (output); TPS is only a unit.
 
 **REST-connector latency is the BFF path**: for the anchored variants a "committed" write is
-the gateway's `202` enqueue acknowledgement, not a block commit — the ledger commit lag is the
-separate **anchoring delay** metric (batcher `/status`). Keep rest-mode numbers labelled
+the gateway's `202` acceptance, not a block commit. The time until the event is protected is
+the **integrity finalization latency** (submission → the commit of the root of the batch the 202
+named); the batcher-side **anchoring delay** (enqueue → root commit, batcher `/status?events=1`)
+is reported too. The connector parses the 202 body only after `SetStatusSuccess()` has stamped
+`time_final`, so the parsing is not part of the measured latency. Keep rest-mode numbers labelled
 distinctly from fabric-connector numbers.
 
 ## Does NOT
@@ -196,6 +211,7 @@ distinctly from fabric-connector numbers.
 - `trace: generated for W workers but the round has …` / `sliceSize … != trace sliceSize` — benchconfig and trace disagree; re-render.
 - `… exhausted …` — `txNumber` exceeds `sliceSize × workers` (trace) or `pool × workers` (dispose).
 - `GET … -> HTTP 4xx/5xx` from reconstruct — gateway down, wrong token, or the variant's `/audit?proofs=1` / `/anchor-roots` route missing.
+- An anchored write whose 202 body names no batch gets no `batchId` in its tx-log line; `collect.py` counts it as not finalized.
 
 ## Verify (no live SUT)
 

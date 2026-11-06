@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # GLEIPNIR ledger-only reset between benchmark runs (one run = one network
 # lifetime, docs/methodology/experiments.md §5).
-#   GLEIPNIR_ALLOW_LEDGER_WIPE=1 reset-network.sh --variant V --channels C
+#   GLEIPNIR_ALLOW_LEDGER_WIPE=1 reset-network.sh --variant V --channels C [--endorsement any|all]
 #
 # Fresh ledgers are required for storage measurement and independent repetitions.
 # This removes only the ledger/witness volumes listed below, then re-runs up.sh
@@ -17,21 +17,28 @@ source "${SCRIPT_DIR}/lib.sh"
 
 VARIANT=""
 CHANNELS=1
+ENDORSEMENT="any"
 while [ $# -gt 0 ]; do
   case "$1" in
     --variant) VARIANT="$2"; shift 2 ;;
     --channels) CHANNELS="$2"; shift 2 ;;
+    --endorsement) ENDORSEMENT="$2"; shift 2 ;;
     *) echo "unknown arg $1" >&2; exit 1 ;;
   esac
 done
 case "${VARIANT}" in
   standard|anchoring|parallel|parallel-anchored) ;;
-  *) echo "usage: reset-network.sh --variant <standard|anchoring|parallel|parallel-anchored> [--channels N]" >&2; exit 1 ;;
+  *) echo "usage: reset-network.sh --variant <standard|anchoring|parallel|parallel-anchored> [--channels N] [--endorsement any|all]" >&2; exit 1 ;;
+esac
+# Checked here, not only in up.sh: a bad value must fail before any volume is removed.
+case "${ENDORSEMENT}" in
+  any|all) ;;
+  *) echo "invalid --endorsement ${ENDORSEMENT} (any|all)" >&2; exit 1 ;;
 esac
 
 LEDGER_VOLUMES=(
   gleipnir_orderer0-ledger gleipnir_orderer1-ledger gleipnir_orderer2-ledger
-  gleipnir_peer0org1-ledger gleipnir_peer0org2-ledger gleipnir_peer0anchor-ledger
+  gleipnir_peer0org1-ledger gleipnir_peer0org2-ledger
   gleipnir_receipt-data gleipnir_verify-metrics
 )
 
@@ -46,7 +53,7 @@ if [ ! -d "${REPO_ROOT}/network/organizations/peerOrganizations" ]; then
   exit 1
 fi
 
-echo "== reset-network: variant=${VARIANT} channels=${CHANNELS} =="
+echo "== reset-network: variant=${VARIANT} channels=${CHANNELS} endorsement=${ENDORSEMENT} =="
 echo "volumes to remove (ledgers + off-chain witness only):"
 printf '  %s\n' "${LEDGER_VOLUMES[@]}"
 echo "kept: gleipnir_gateway-auth-data gleipnir_case-registry-data gleipnir_evidence-blob-data, CA state, network/organizations"
@@ -66,8 +73,7 @@ done
 
 rm -rf "${REPO_ROOT}/network/channel-artifacts"
 set_env_var CCAAS_ID_APP unset
-set_env_var CCAAS_ID_ANCHOR unset
 
-echo "== up.sh --variant ${VARIANT} --channels ${CHANNELS} --skip-crypto =="
-bash "${SCRIPT_DIR}/up.sh" --variant "${VARIANT}" --channels "${CHANNELS}" --skip-crypto
+echo "== up.sh --variant ${VARIANT} --channels ${CHANNELS} --endorsement ${ENDORSEMENT} --skip-crypto =="
+bash "${SCRIPT_DIR}/up.sh" --variant "${VARIANT}" --channels "${CHANNELS}" --endorsement "${ENDORSEMENT}" --skip-crypto
 echo "== reset-network complete =="

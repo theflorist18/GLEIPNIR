@@ -36,7 +36,6 @@ _BASE_CONTAINERS = [
     "/ccaas-evidence", "/gleipnir-gateway",
 ]
 _ANCHORING_CONTAINERS = ["/gleipnir-merkle-batcher", "/gleipnir-receipt-store", "/gleipnir-verification"]
-_PARALLEL_ANCHORED_CONTAINERS = ["/peer0.anchor.example.com", "/ccaas-evidence-anchor", "/gleipnir-anchor-client"]
 
 # The identity/connection-profile block of networks/coc-main.yaml, copied verbatim.
 _ORG1_IDENTITY_BLOCK = """organizations:
@@ -72,8 +71,6 @@ def monitor_containers(variant):
     names = list(_BASE_CONTAINERS)
     if variant in ANCHORED_VARIANTS:
         names += _ANCHORING_CONTAINERS
-    if variant == "parallel-anchored":
-        names += _PARALLEL_ANCHORED_CONTAINERS
     return names
 
 

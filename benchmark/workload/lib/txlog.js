@@ -6,9 +6,12 @@
 // Env GLEIPNIR_TXLOG_DIR (set by the orchestrator per round); absent → every
 // call is a no-op. Each worker appends to `${dir}/tx-w${workerIndex}.jsonl`:
 //   {"round":label,"op":..,"caseId":..,"evidenceId":..,"tCreate":ms,"tFinal":ms,
-//    "latencyMs":n,"ok":bool,"err":string|null,"timed":bool}
+//    "latencyMs":n,"ok":bool,"err":string|null,"timed":bool[,"batchId":..,"leafIndex":n]}
 // taken from Caliper's own TxStatus (GetTimeCreate/GetTimeFinal/IsCommitted/
-// GetErrMsg) — the same timestamps behind Caliper's min/avg/max.
+// GetErrMsg) — the same timestamps behind Caliper's min/avg/max. batchId and
+// leafIndex appear only on an anchored write the batcher accepted: the rest
+// connector copies them from the 202, and collect.py joins them to the batch's
+// root commit time for the finalization latency.
 //
 // `timed: false` marks a write the round performed but did not measure — the
 // untimed pool seeding of the pool workloads and verify.js. Those writes still
@@ -92,8 +95,11 @@ const entry = (round, op, caseId, evidenceId, tCreate, tFinal, ok, err, timed) =
 // timed=false for untimed pool seeding (still a ledger write; see the header).
 function log(workerIndex, round, op, caseId, evidenceId, status, timed = true) {
   if (!dir || !status) return;
-  write(workerIndex, entry(round, op, caseId, evidenceId, status.GetTimeCreate(), status.GetTimeFinal(),
-    status.IsCommitted(), errText(status), Boolean(timed)));
+  const line = entry(round, op, caseId, evidenceId, status.GetTimeCreate(), status.GetTimeFinal(),
+    status.IsCommitted(), errText(status), Boolean(timed));
+  const batchId = status.Get ? status.Get('batchId') : undefined;
+  if (batchId !== undefined) Object.assign(line, { batchId, leafIndex: status.Get('leafIndex') });
+  write(workerIndex, line);
 }
 
 // An untimed ledger write performed OUTSIDE the connector (verify.js seeds over

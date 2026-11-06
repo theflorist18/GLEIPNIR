@@ -79,7 +79,7 @@ def main():
         assert E.network_config_path({**run, "variant": "standard"}) == "networks/coc-main.yaml"
 
     # Channels == cases in EVERY plan for the parallel variants; 1 for standard/anchoring.
-    for exp in ("e0", "ramp", "e1", "e2", "e3a", "e3b", "ops"):
+    for exp in ("e0", "ramp", "e1", "e2", "e3a", "e3b", "e3c", "ops", "sens"):
         for r in E.plan(SW, exp, R.VARIANTS, 1):
             want = r["levels"]["cases"] if r["variant"] in R.MULTI_CHANNEL_VARIANTS else 1
             assert r["levels"]["channels"] == want, (exp, r["runId"])
@@ -152,7 +152,148 @@ def main():
            "runId": f"e1/anchoring/batch{b}-ch1-cases20/r0"} for b in (100, 10, 25)]
     assert [m["levels"]["batchSize"] for m in sorted(ms, key=REP._export_order)] == [10, 25, 100]
     baseline_rules()
+    new_plans()
+    e3a_climb()
     print("test_experiment: all checks passed")
+
+
+def new_plans():
+    e, ws = SW["e3a"], SW["workers"]
+    # E3a base ladder: one round per rate, ascending, rounds of e3a.events_per_case_per_round, rate-labelled.
+    runs = E.plan(SW, "e3a", R.VARIANTS, 3)
+    assert len(runs) == 12 and all(r["rates"] == sorted(e["send_rates_tps"]) for r in runs)
+    assert runs[0]["runId"] == f"e3a/standard/ch1-cases{B['channels']}/r0", runs[0]["runId"]
+    assert runs[0]["trace"]["events_per_case_per_round"] == e["events_per_case_per_round"]
+    assert runs[0]["trace"]["rounds"] == len(e["send_rates_tps"]) and runs[0]["regime"] == "steady"
+    assert [s["label"] for s in E.build_rounds(SW, runs[0], "t.json")][:2] == ["rate100", "rate150"]
+
+    # E3c: the per-case send rate is fixed, so the total grows with the cases; 20 cases is sens/baseline.
+    runs = E.plan(SW, "e3c", R.VARIANTS, 3)
+    per_case = SW["e3c"]["send_rate_per_case_tps"]
+    assert len(runs) == 4 * 3 * len(SW["e3c"]["case_counts"]) and B["channels"] not in SW["e3c"]["case_counts"]
+    assert all(r["rates"] == [r["levels"]["cases"] * per_case] * SW["workload"]["rounds"] for r in runs)
+    assert {r["levels"]["cases"]: r["rates"][0] for r in runs}[50] == 250
+    assert {r["regime"] for r in runs} == {"steady"}
+
+    # sens: repetition by repetition; the idle cell only on the anchored variants; each run carries
+    # its own effective constants, the cell's overrides and the cell name in its dir.
+    runs = E.plan(SW, "sens", R.VARIANTS, 3)
+    assert len(runs) == 3 * (4 + 4 + 2), len(runs)
+    assert [r["rep"] for r in runs] == sorted(r["rep"] for r in runs), "rep-major order"
+    by = {(r["cell"], r["variant"], r["rep"]): r for r in runs}
+    assert ("idle-5s", "standard", 0) not in by and ("idle-5s", "parallel-anchored", 2) in by
+    ea, idle, base = by[("endorse-all", "parallel", 1)], by[("idle-5s", "anchoring", 0)], by[("baseline", "standard", 0)]
+    assert ea["sweeps"]["endorsement"]["policy"] == "all" and ea["overrides"] == {"endorsement.policy": "all"}
+    assert idle["sweeps"]["anchoring"]["idle_timeout_ms"] == 5000 and idle["sweeps"]["endorsement"]["policy"] == "any"
+    assert base["sweeps"]["anchoring"]["idle_timeout_ms"] == 0 and base["overrides"] == {}
+    assert idle["runId"] == f"sens/anchoring/batch{B['batch_size']}-ch1-cases{B['channels']}-idle-5s/r0", idle["runId"]
+    assert SW["endorsement"]["policy"] == "any" and SW["anchoring"]["idle_timeout_ms"] == 0, "sweeps.yaml unchanged"
+    assert all(r["rates"] == [B["send_rate_tps"]] * SW["workload"]["rounds"] for r in runs)
+
+    # A cell may move the point itself: its levels come from its own copy of the constants.
+    moved = copy.deepcopy(SW)
+    moved["sensitivity"] = {"fast": {"baseline.send_rate_tps": 150, "workload.rounds": 2}}
+    (run,) = E.plan(moved, "sens", ["standard"], 1)
+    assert run["rates"] == [150, 150] and run["trace"]["rounds"] == 2 and run["cell"] == "fast", run["rates"]
+
+    # Overrides: an unknown sweeps.yaml path or an unknown endorsement policy stops the plan.
+    for bad in ({"anchoring.idle_timeout": 1}, {"endorsement.policy": "majority"}, {"no.such.path": 1}):
+        try:
+            E.with_overrides(SW, bad)
+            raise AssertionError(f"accepted {bad}")
+        except SystemExit:
+            pass
+    # The two new cell controls.
+    ctl = cell_args(endorsement="all", idle_timeout_ms=5000)
+    for flag, *_ in E.CONTROL_FLAGS:
+        setattr(ctl, E._dest(flag), getattr(ctl, E._dest(flag), None))
+    sw, ov = E.apply_controls(ctl, SW)
+    assert ov == {"anchoring.idle_timeout_ms": 5000, "endorsement.policy": "all"}, ov
+    assert E.fit_events_up(20, 3662, ws) == 3662 and E.fit_events_up(5, 3, ws) == 4
+
+
+def e3a_manifest(v, rates, rep, ratio=lambda r: 1.0, gen=lambda r: 1.0, events=None, tag=""):
+    """A complete e3a run: finalized throughput and measured send rate as ratios of each round's rate."""
+    lv = f"batch{B['batch_size']}-" if v in R.ANCHORED_VARIANTS else ""
+    rate_dir = "" if rates == sorted(SW["e3a"]["send_rates_tps"]) else "-rate" + "-".join(map(str, rates))
+    return {"variant": v, "repetition": rep, "runId": f"e3a/{v}/{lv}ch1-cases{B['channels']}{rate_dir}{tag}/r{rep}",
+            "levels": {"sendRateTps": rates[0] if len(rates) == 1 else None},
+            "trace": {"params": {"eventsPerCasePerRound": events or SW["e3a"]["events_per_case_per_round"]}},
+            "rounds": [{"index": i, "sendRateTps": r, "throughputSuccessfulOnlyTps": r,
+                        "txlog": {"sendRateMeasuredTps": r * gen(r)}, "finalization": {"finalizedTps": r * ratio(r)}}
+                       for i, r in enumerate(rates)]}
+
+
+def e3a_climb():
+    base, reps = sorted(SW["e3a"]["send_rates_tps"]), 3
+
+    def step(ms, variants=("standard",)):
+        return E.e3a_next_runs(SW, list(variants), reps, ms)
+
+    # Kept up everywhere -> the next ladder from the top rate, sized for >= min_send_s at its top rate.
+    ms = [e3a_manifest("standard", base, r) for r in range(reps)]
+    runs, out = step(ms)
+    assert [r["rates"] for r in runs] == [[1250, 1562, 1953, 2441]] * reps, [r["rates"] for r in runs]
+    assert runs[0]["trace"]["events_per_case_per_round"] == 3662 and runs[0]["trace"]["rounds"] == 4
+    assert runs[0]["runId"] == "e3a/standard/ch1-cases20-rate1250-1562-1953-2441/r0", runs[0]["runId"]
+    assert out["standard"]["keptUpTo"] == 1000 and out["standard"]["saturatedAt"] is None
+
+    # A partly finished step (one rep missing) is planned again before anything is judged.
+    ladder = [1250, 1562, 1953, 2441]
+    part = ms + [e3a_manifest("standard", ladder, r, events=3662) for r in (0, 1)]
+    runs, out = step(part)
+    assert [(r["rates"], r["rep"]) for r in runs] == [(ladder, 0), (ladder, 1), (ladder, 2)], runs
+    assert "missing repetitions" in out["standard"]["decision"]
+
+    # Saturated at 800 (finalized < 0.9 x) -> ONE run at 700, halfway back, with the saturated run's round size.
+    sat = [e3a_manifest("parallel", base, r, ratio=lambda x: 0.5 if x >= 800 else 1.0) for r in range(reps)]
+    runs, out = step(sat, ("parallel",))
+    assert [r["rates"] for r in runs] == [[700]] * reps and runs[0]["runId"].endswith("-rate700-midpoint/r0"), runs
+    assert runs[0]["trace"]["events_per_case_per_round"] == SW["e3a"]["events_per_case_per_round"]
+    assert [s["label"] for s in E.build_rounds(SW, runs[0], "t.json")] == ["rate700"]
+    assert (out["parallel"]["saturatedAt"], out["parallel"]["keptUpTo"]) == (800, 600)
+    # ...after which the variant is done, whatever the midpoint showed.
+    done = sat + [e3a_manifest("parallel", [700], r, tag="-midpoint") for r in range(reps)]
+    runs, out = step(done, ("parallel",))
+    assert runs == [] and out["parallel"]["saturatedAt"] == 800 and out["parallel"]["keptUpTo"] == 700, out
+
+    # The load generator tops out (measured < 0.95 x configured) -> stop, never judged as saturation.
+    gen = [e3a_manifest("anchoring", base, r, ratio=lambda x: 0.5 if x >= 600 else 1.0,
+                        gen=lambda x: 0.9 if x >= 600 else 1.0) for r in range(reps)]
+    runs, out = step(gen, ("anchoring",))
+    assert runs == [] and out["anchoring"]["generatorLimitAt"] == 600 and out["anchoring"]["saturatedAt"] is None
+
+    # Saturated at the lowest rate: nothing kept up, so no midpoint.
+    low = [e3a_manifest("standard", base, r, ratio=lambda x: 0.5) for r in range(reps)]
+    runs, out = step(low)
+    assert runs == [] and out["standard"]["saturatedAt"] == base[0] and out["standard"]["keptUpTo"] is None
+
+    # Variants climb independently in one step.
+    runs, out = step(ms + sat, ("standard", "parallel"))
+    assert {(r["variant"], tuple(r["rates"])) for r in runs} == {("standard", tuple(ladder)), ("parallel", (700,))}
+
+    # Rounds whose writes succeeded but finalized nothing (a lost batch link) stop the climb.
+    lost = [dict(m, rounds=[dict(r, finalization=None, txlog={**r["txlog"], "perOp": {"ACCESS": {"ok": 9}}})
+                            for r in m["rounds"]]) for m in ms]
+    assert exits(lambda: step(lost))
+
+    # Pre-flight: a complete base ladder previews the climb's next step instead of "nothing to do";
+    # --reuse-network is refused; so is a fresh start over an earlier invocation's climb runs.
+    nxt = E.e3a_preflight(SW, ["standard"], reps, [], True, False, ms)
+    assert [r["rates"] for r in nxt] == [ladder] * reps
+    assert E.e3a_preflight(SW, ["standard"], reps, ["base run"], True, False, ms) == []
+    assert exits(lambda: E.e3a_preflight(SW, ["standard"], reps, [], True, True, ms))
+    climbed = ms + [e3a_manifest("standard", ladder, r, events=3662) for r in range(reps)]
+    assert exits(lambda: E.e3a_preflight(SW, ["standard"], reps, ["base run"], False, False, climbed))
+    assert E.e3a_preflight(SW, ["parallel"], reps, ["base run"], False, False, climbed) == []   # other variant
+
+
+def exits(fn):
+    try:
+        fn()
+    except SystemExit:
+        return True
+    return False
 
 
 def row(v, x, ref=False, n=3, **met):

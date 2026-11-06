@@ -1,10 +1,11 @@
 # gateway
 
 **Responsibility:** the backend-for-frontend (BFF). It holds the only
-`@hyperledger/fabric-gateway` sessions to the **application** channels (`coc-main`,
-`case-*`), computes evidence `integrity_proof` ni-URIs, and encapsulates **variant
-routing**. Used by **all four variants**; the frontend and Caliper's REST path talk only to
-this service, never to Fabric directly.
+`@hyperledger/fabric-gateway` sessions to the ledger: the **application** channels
+(`coc-main`, `case-*`), which carry the event records of the direct variants and the Merkle
+roots of the anchored ones. It computes evidence `integrity_proof` ni-URIs and encapsulates
+**variant routing**. Used by **all four variants**; the frontend and Caliper's REST path talk
+only to this service, never to Fabric directly.
 
 Port **3000**. Node 20, Express.
 
@@ -56,7 +57,7 @@ service token is never sufficient there.
 | `GET` | `/evidence/:id/export` | `{record, auditTrail}` JSON bundle; user sessions: authz-gated + auto `AccessLog(export)` |
 | `GET` | `/evidence/:id/audit?proofs=1` | `GetAuditTrail` (batched variants: CoC events from the receipt store in receipt order; `?proofs=1` adds each event's `proof {leafHash, siblingPath, batchId, leafIndex, rootRef}` — ignored on direct variants); authz-gated, not auto-logged |
 | `GET` | `/evidence/:id/verify?eventId=` | proxy → verification service |
-| `GET` | `/anchor-roots/:scopeId/:batchId` | anchor-root record for audit reconstruction; any authenticated principal. anchoring → `ReadAnchorRoot` on `coc-main`; parallel-anchored → proxy anchor-client `GET /roots/:scopeId/:batchId` (status passed through); standard/parallel → `404 {error:'no anchor roots in this variant'}` |
+| `GET` | `/anchor-roots/:scopeId/:batchId` | anchor-root record for audit reconstruction; any authenticated principal. `ReadAnchorRoot(scopeId, batchId)` on the channel that holds the scope (`variantRouter.rootChannel`): anchoring → `coc-main`; parallel-anchored → the case's own channel, `scopeId` = `case-NNN` (any other scope → 400, nothing read); a batch not anchored yet → 404 (chaincode not-found); standard/parallel → `404 {error:'no anchor roots in this variant'}` |
 | `GET` | `/evidence/search?caseId=&q=&uploadedBy=&type=&from=&to=` | evidence-index search, participant-scoped unless admin |
 | `POST`/`GET`/`PATCH` | `/cases`, `/cases/:id`, `/cases/search` | proxy → case-registry; create admin-or-lead (lead creator auto-added as case lead; admin may pass `leadUserId`), update admin-or-case-lead; list/detail participant-scoped unless admin |
 | `POST`/`PATCH`/`DELETE` | `/cases/:id/participants[/:userId]` | proxy, admin-or-case-lead; `roleInCase: lead` grants require a global-`lead` target; removing (or PATCH-demoting) the last case lead is 409 (admin may) |
@@ -75,18 +76,40 @@ Caliper read workloads must not mutate the ledger. Per-evidence authz
 token bypasses it entirely, and admins bypass it for metadata/trails but not
 for blob content (`/download`, docs/CONTRACTS.md §12-8).
 
-Internal (no `/api/v1` prefix, still bearer-authed): `POST /internal/anchor-root` and
-`GET /internal/anchor-root/:scopeId/:batchId` — the Anchoring variant's root sink on
-`coc-main`. `GET /healthz` is unauthenticated.
+Internal (no `/api/v1` prefix, still bearer-authed, service principal only): `POST
+/internal/anchor-root` and `GET /internal/anchor-root/:scopeId/:batchId` — the root sink of
+both anchored variants (the merkle-batcher commits, the verification service reads).
+`POST {batchId, merkleRoot, meta}` submits `CommitAnchorRoot(batchId, merkleRoot,
+JSON(meta))` on `rootChannel(VARIANT, meta.caseId)` and answers `201 {txId}`:
+
+- Anchoring sends `meta = {scopeId: 'shared', leafCount}`. There is no caseId, so the
+  chaincode scope is `shared` and the channel `coc-main`.
+- Parallel-Anchored sends `meta = {scopeId, leafCount, caseId}` with caseId = scopeId =
+  `case-NNN`. The root is committed on that case's channel, where the chaincode keys it by
+  `meta.caseId`. A meta without a `case-NNN` caseId is a 400: a root never falls through to
+  another channel.
+- The direct variants answer 404.
+
+The `GET` is the same handler as the public `/anchor-roots`. `GET /healthz` is
+unauthenticated.
 
 ## Variant routing (docs/CONTRACTS.md §9)
 
 `src/variantRouter.js` decides per active `VARIANT`:
 - **standard** → `submit` on `coc-main`.
-- **anchoring** → enqueue the CoC event to the merkle-batcher (`202`); root committed at the
-  batch boundary via `/internal/anchor-root`.
+- **anchoring** → enqueue the CoC event to the merkle-batcher (`202 {batchId, leafIndex, …}`);
+  at the batch boundary the batcher commits the root via `/internal/anchor-root` on `coc-main`.
 - **parallel** → `submit` on `case-<id>` (from `caseId`; validated `^case-\d{3}$`).
-- **parallel-anchored** → enqueue per-case to the merkle-batcher (`202`).
+- **parallel-anchored** → enqueue per-case to the merkle-batcher (`202`; `caseId` validated the
+  same way); each case's roots are committed via `/internal/anchor-root` on that case's own
+  channel.
+
+`rootChannel(variant, scopeId, defaultChannel)` resolves the channel that holds a scope's
+roots: 404 for standard/parallel, the default channel for anchoring, the case channel for
+parallel-anchored (400 unless `case-NNN`), so a library `CASE-<uuid>` id can never name a
+channel. There is no anchor channel: the earlier Parallel-Anchored design (campaigns
+1–5, git commit `573017b`) committed its roots to `anchor-main` through a separate
+anchor-client service, which this gateway proxied for `/anchor-roots`.
 
 Reads: **standard / parallel** evaluate the chaincode directly, on `coc-main` or
 the `?caseId=` case channel. **anchoring / parallel-anchored** keep no per-event
@@ -105,12 +128,12 @@ on-chain root (`?proofs=1` + `/anchor-roots`) — the gateway does not do that.
 ## Inputs / outputs
 
 - **In:** REST/JSON requests; env config.
-- **Out:** Fabric submit/evaluate on app channels; enqueue POSTs to the batcher;
-  receipt-store index reads (batched variants); anchor-client root reads
-  (parallel-anchored); verification proxy.
+- **Out:** Fabric submit/evaluate on app channels (event records, Merkle-root commits and
+  reads); enqueue POSTs to the batcher; receipt-store index reads (batched variants);
+  verification proxy.
 
 Env: `PORT=3000`, `GLEIPNIR_TOKEN`, `VARIANT`, `BATCHER_URL`, `VERIFICATION_URL`,
-`RECEIPT_STORE_URL=http://receipt-store:4002`, `ANCHOR_CLIENT_URL=http://anchor-client:4003`,
+`RECEIPT_STORE_URL=http://receipt-store:4002`,
 `PEER_ENDPOINT`, `PEER_HOST_ALIAS`, `MSP_ID`, `CRYPTO_PATH`, `TLS_CERT_PATH`,
 `DEFAULT_CHANNEL=coc-main`, `CC_NAME=evidence`,
 `AUTH_DATA_DIR=/data/auth`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`,
@@ -126,8 +149,8 @@ still starts with user login disabled (service token unaffected).
   is hashed to an ni-URI then **discarded**.
 - Write the library `caseId` on-chain — case linkage is case-registry's,
   off-chain only.
-- Build Merkle trees, verify proofs, or write the anchor channel (batcher / verification /
-  anchor-client own those).
+- Build Merkle trees or verify proofs (the batcher and the verification service own those). It
+  commits a root only when the batcher submits one to `/internal/anchor-root`.
 - Verify Merkle branches or roots itself — `?proofs=1` and `/anchor-roots` only hand the
   witness and the root to the caller (verification service / `benchmark/audit`).
 - Execute or track benchmark runs — there is no runs API; the benchmark is driven
@@ -139,20 +162,24 @@ still starts with user login disabled (service token unaffected).
   or a session whose user was deactivated.
 - `429` — login throttled after repeated failures (`Retry-After` header set).
 - `403` — role gate: non-admin (or service-token) caller on an admin route.
-- `400` — parallel variant without a valid `caseId`; invalid user fields;
+- `400` — parallel variant without a valid `caseId`; on parallel-anchored, an
+  `/anchor-roots` scope or an `/internal/anchor-root` `meta.caseId` that is not `case-NNN`;
+  `/internal/anchor-root` without `batchId` / `merkleRoot`; invalid user fields;
   multipart without a `file` part; unsafe evidenceId.
 - `409` — duplicate username; multipart ingest of an existing evidenceId.
 - `413` — multipart file over `MAX_UPLOAD_BYTES`.
 - `503` — login attempted while the users store is unavailable.
 - `404` — read of an unknown key (mapped from the chaincode not-found error); batched
-  variant `ReadEvidence` with no off-chain events; `/anchor-roots` on a direct variant
-  (no roots exist) or an unknown `(scopeId, batchId)`.
-- `502` — Fabric submit/evaluate error, batcher / receipt-store / anchor-client
-  unreachable, or verification proxy error.
+  variant `ReadEvidence` with no off-chain events; `/anchor-roots` or `/internal/anchor-root`
+  on a direct variant (no roots exist), or an unknown `(scopeId, batchId)`.
+- `502` — Fabric submit/evaluate error (e.g. a root commit for a `(scope, batchId)` that already
+  has one: roots are write-once), batcher / receipt-store unreachable, or verification proxy
+  error.
 
 ## Test
 
 ```bash
 npm install && npm test    # node:test — variant matrix, ni-URI vector, auth 401, create-vs-enqueue,
-                           # off-chain reads (trail/proofs/fold/404), anchor-roots per variant
+                           # off-chain reads (trail/proofs/fold/404), anchor-root commit + read per
+                           # variant (coc-main vs the case channel, 400/404 paths)
 ```

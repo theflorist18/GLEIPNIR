@@ -44,7 +44,6 @@ peer_env() {
   case "$1" in
     org1) msp=Org1MSP port=7051 ;;
     org2) msp=Org2MSP port=9051 ;;
-    anchor) msp=AnchorClientMSP port=11051 ;;
     *) echo "unknown org $1" >&2; return 1 ;;
   esac
   cat <<EOF
@@ -85,11 +84,25 @@ join_peer() {
 peer channel join -b ${CTN_ARTIFACTS}/${channel}.block"
 }
 
+# Endorsement policy of the evidence chaincode on every app channel, from
+# ENDORSEMENT in .env (up.sh --endorsement writes it, so channels that
+# provision-channel.sh adds later get the same one): any = 1-of-any (the
+# default), all = 2-of-2 (every transaction needs a peer of each org).
+endorsement_policy() {
+  case "$(grep -E '^ENDORSEMENT=' "${COMPOSE_DIR}/.env" | cut -d= -f2 | tr -d '\r')" in
+    ""|any) echo "OR('Org1MSP.peer','Org2MSP.peer')" ;;
+    all) echo "AND('Org1MSP.peer','Org2MSP.peer')" ;;
+    *) echo "ENDORSEMENT in ${COMPOSE_DIR}/.env must be any or all" >&2; return 1 ;;
+  esac
+}
+
 # Approve (org1 + org2) and commit the app chaincode on one channel. Install is
 # org-scoped, not channel-scoped: up.sh installs once, before any channel.
 # args: <channel> <package-id>
 deploy_app_chaincode() {
-  local channel="$1" pkgid="$2" policy="OR('Org1MSP.peer','Org2MSP.peer')"
+  local channel="$1" pkgid="$2" policy
+  policy="$(endorsement_policy)"
+  echo "    endorsement policy ${policy}"
   for org in org1 org2; do
     cli "$(peer_env ${org})
 peer lifecycle chaincode approveformyorg -o ${ORDERER0} --ordererTLSHostnameOverride orderer0.example.com \
@@ -190,4 +203,22 @@ wait_healthz() {
     sleep 2
   done
   echo "    ${name} healthy (:${port})"
+}
+
+# Wait until a peer serves gRPC. Its operations /healthz can answer while the
+# gRPC endpoint is not up yet, and a lifecycle command sent in that window
+# fails to connect ("context deadline exceeded"); `peer channel list` succeeds
+# exactly when the peer answers gRPC calls. args: <org>
+wait_peer_grpc() {
+  local org="$1" tries=0
+  until cli "$(peer_env "${org}")
+peer channel list" >/dev/null 2>&1; do
+    tries=$((tries + 1))
+    if [ "${tries}" -gt 30 ]; then
+      echo "timeout waiting for peer0-${org} to serve gRPC" >&2
+      return 1
+    fi
+    sleep 2
+  done
+  echo "    peer0-${org} serves gRPC"
 }

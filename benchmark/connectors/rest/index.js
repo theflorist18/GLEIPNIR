@@ -48,9 +48,20 @@ class RestGatewayConnector extends ConnectorBase {
     }
     try {
       const resp = await fetch(url, init);
-      await resp.text().catch(() => '');         // drain body
+      const text = await resp.text().catch(() => '');   // drain body
       if (resp.ok) {
         status.SetStatusSuccess();
+        // An anchored write's 202 names the Merkle batch that holds the event;
+        // workload/lib/txlog.js records it so collect.py can time the event to
+        // its root commit (finalization latency). Parsed after SetStatusSuccess
+        // stamped time_final, so it is not part of the measured latency.
+        if (resp.status === 202) {
+          try {
+            const body = JSON.parse(text);
+            status.Set('batchId', body.batchId);
+            status.Set('leafIndex', body.leafIndex);
+          } catch { /* no batch placement: finalization stays unknown for this event */ }
+        }
       } else {
         // The error string is what workload/lib/txlog.js records as `err`,
         // so collect.py can classify HTTP_4XX / HTTP_5XX failures.

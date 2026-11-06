@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LEDGER = "/var/hyperledger/production/ledgersData"
-PEERS = ["peer0.org1.example.com", "peer0.org2.example.com", "peer0.anchor.example.com"]
+PEERS = ["peer0.org1.example.com", "peer0.org2.example.com"]
 
 
 def docker_exec(container, cmd):

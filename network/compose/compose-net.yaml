@@ -1,5 +1,5 @@
-# GLEIPNIR core network — 3 orderers (etcdraft), 2 peers (+ anchor peer),
-# the ccaas chaincode servers, and a tools/cli container.
+# GLEIPNIR core network — 3 orderers (etcdraft), 2 peers, the ccaas chaincode
+# server, and a tools/cli container.
 # Ports, hostnames and named volumes per docs/CONTRACTS.md §1, §8.
 # Images are PINNED (never :latest — that resolves to Fabric 3.x, docs/research §1).
 #
@@ -17,9 +17,8 @@ volumes:
   orderer2-ledger:
   peer0org1-ledger:
   peer0org2-ledger:
-  peer0anchor-ledger:
 
-# Settings shared by the three orderers / three peers (merged in with `<<:`; only
+# Settings shared by the three orderers / two peers (merged in with `<<:`; only
 # the per-node addresses, ports and crypto mounts stay under each service).
 # Bracketed values are quoted: unquoted they parse as YAML lists.
 x-orderer: &orderer
@@ -167,32 +166,7 @@ services:
       - ../organizations/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls:/etc/hyperledger/fabric/tls
       - peer0org2-ledger:/var/hyperledger/production
 
-  # Anchor-org peer — only for Parallel-Anchored (endorses anchor-main roots).
-  peer0-anchor:
-    <<: *peer
-    container_name: peer0.anchor.example.com
-    profiles: ["parallel-anchored"]
-    environment:
-      <<: *peer-env
-      CORE_PEER_ID: peer0.anchor.example.com
-      CORE_PEER_ADDRESS: peer0.anchor.example.com:11051
-      CORE_PEER_LISTENADDRESS: 0.0.0.0:11051
-      CORE_PEER_CHAINCODEADDRESS: peer0.anchor.example.com:11052
-      CORE_PEER_CHAINCODELISTENADDRESS: 0.0.0.0:11052
-      CORE_PEER_GOSSIP_BOOTSTRAP: peer0.anchor.example.com:11051
-      CORE_PEER_GOSSIP_EXTERNALENDPOINT: peer0.anchor.example.com:11051
-      CORE_PEER_LOCALMSPID: AnchorClientMSP
-      CORE_OPERATIONS_LISTENADDRESS: 0.0.0.0:9448
-    ports:
-      - "11051:11051"
-      - "9448:9448"
-    volumes:
-      - ../core.yaml:/etc/hyperledger/peercfg/core.yaml
-      - ../organizations/peerOrganizations/anchor.example.com/peers/peer0.anchor.example.com/msp:/etc/hyperledger/fabric/msp
-      - ../organizations/peerOrganizations/anchor.example.com/peers/peer0.anchor.example.com/tls:/etc/hyperledger/fabric/tls
-      - peer0anchor-ledger:/var/hyperledger/production
-
-  # ------------------------------------------------------- ccaas chaincode servers
+  # -------------------------------------------------------- ccaas chaincode server
   # One evidence chaincode server for the org1+org2 peers (both install the same
   # package, so both dial this address with the same package id CCAAS_ID_APP).
   ccaas-evidence:
@@ -202,17 +176,6 @@ services:
     environment:
       - CHAINCODE_SERVER_ADDRESS=0.0.0.0:9999
       - CHAINCODE_ID=${CCAAS_ID_APP:-unset}
-    networks: [gleipnir-net]
-
-  # Separate server for anchor-main (different install package -> different id).
-  ccaas-evidence-anchor:
-    container_name: ccaas-evidence-anchor
-    profiles: ["parallel-anchored"]
-    build:
-      context: ../../chaincode/evidence
-    environment:
-      - CHAINCODE_SERVER_ADDRESS=0.0.0.0:9999
-      - CHAINCODE_ID=${CCAAS_ID_ANCHOR:-unset}
     networks: [gleipnir-net]
 
   # ------------------------------------------------------------------- tools/cli

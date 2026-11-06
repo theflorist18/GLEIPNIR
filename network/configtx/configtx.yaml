@@ -5,9 +5,17 @@
 # (docs/research/fabric-2.5.md §5, §6). Capabilities: Channel/Orderer V2_0,
 # Application V2_5 (the only sets that exist at 2.5.x).
 #
-# Two profiles:
-#   AppChannel    — Org1MSP + Org2MSP (coc-main, case-*)      1-of-any endorsement
-#   AnchorChannel — AnchorClientMSP only (anchor-main)        single-org endorsement
+# One profile, AppChannel — Org1MSP + Org2MSP — for coc-main and every case-*
+# channel. The chaincode endorsement policy is not set here: orchestration/lib.sh
+# sets it when it commits the chaincode on a channel (1-of-any by default,
+# 2-of-2 as a run setting).
+#
+# Each peer org names its anchor peer. configtxgen -outputBlock encodes an
+# Application org's AnchorPeers into the channel's genesis block, so every new
+# channel starts with cross-org gossip: the gateway peer (peer0.org1) discovers
+# Org2's peer, which a 2-of-2 endorsement policy needs. Each peer also sets
+# CORE_PEER_GOSSIP_EXTERNALENDPOINT (compose-net.yaml), without which discovery
+# would not list it.
 #
 # TLS cert paths point under ../organizations/... exactly where
 # network/crypto/registerEnroll.sh writes them.
@@ -50,6 +58,9 @@ Organizations:
       Endorsement:
         Type: Signature
         Rule: "OR('Org1MSP.peer')"
+    AnchorPeers:
+      - Host: peer0.org1.example.com
+        Port: 7051
 
   - &Org2
     Name: Org2MSP
@@ -68,24 +79,9 @@ Organizations:
       Endorsement:
         Type: Signature
         Rule: "OR('Org2MSP.peer')"
-
-  - &AnchorOrg
-    Name: AnchorClientMSP
-    ID: AnchorClientMSP
-    MSPDir: ../organizations/peerOrganizations/anchor.example.com/msp
-    Policies:
-      Readers:
-        Type: Signature
-        Rule: "OR('AnchorClientMSP.member')"
-      Writers:
-        Type: Signature
-        Rule: "OR('AnchorClientMSP.member')"
-      Admins:
-        Type: Signature
-        Rule: "OR('AnchorClientMSP.admin')"
-      Endorsement:
-        Type: Signature
-        Rule: "OR('AnchorClientMSP.peer')"
+    AnchorPeers:
+      - Host: peer0.org2.example.com
+        Port: 9051
 
 Capabilities:
   Channel: &ChannelCapabilities
@@ -183,36 +179,5 @@ Profiles:
       Organizations:
         - *Org1
         - *Org2
-      Capabilities:
-        <<: *ApplicationCapabilities
-
-  # anchor-main: the dedicated cross-channel root sink. Single-org (AnchorClientMSP)
-  # so the anchoring cost is a controlled variable held constant across runs.
-  AnchorChannel:
-    <<: *ChannelDefaults
-    Orderer:
-      <<: *OrdererDefaults
-      Organizations:
-        - *OrdererOrg
-      Capabilities:
-        <<: *OrdererCapabilities
-      EtcdRaft:
-        Consenters:
-          - Host: orderer0.example.com
-            Port: 7050
-            ClientTLSCert: ../organizations/ordererOrganizations/example.com/orderers/orderer0.example.com/tls/server.crt
-            ServerTLSCert: ../organizations/ordererOrganizations/example.com/orderers/orderer0.example.com/tls/server.crt
-          - Host: orderer1.example.com
-            Port: 8050
-            ClientTLSCert: ../organizations/ordererOrganizations/example.com/orderers/orderer1.example.com/tls/server.crt
-            ServerTLSCert: ../organizations/ordererOrganizations/example.com/orderers/orderer1.example.com/tls/server.crt
-          - Host: orderer2.example.com
-            Port: 9050
-            ClientTLSCert: ../organizations/ordererOrganizations/example.com/orderers/orderer2.example.com/tls/server.crt
-            ServerTLSCert: ../organizations/ordererOrganizations/example.com/orderers/orderer2.example.com/tls/server.crt
-    Application:
-      <<: *ApplicationDefaults
-      Organizations:
-        - *AnchorOrg
       Capabilities:
         <<: *ApplicationCapabilities

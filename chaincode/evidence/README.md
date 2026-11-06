@@ -43,7 +43,10 @@ These annotations live as comments on the four ops in `contract.go`; keep them o
   `sortKey = fmt.Sprintf("%019d", txTimestampUnixNanos) + "-" + txID[:12]`. Both parts come from the
   signed proposal (`GetTxTimestamp`/`GetTxID`), so keys are deterministic across endorsers,
   unique per tx, and commit-ordered — **without a shared counter key**.
-- **Anchor root** `("root", [scopeId, batchId])`, `scopeId = meta.caseId || "shared"`.
+- **Anchor root** `("root", [scopeId, batchId])`, `scopeId = meta.caseId || "shared"`,
+  write-once per key, `leafCount` recorded from the meta. Anchoring's batcher sends no caseId
+  (scope `shared`, committed on `coc-main`); Parallel-Anchored's sends `meta.caseId` = the
+  case, and the gateway commits the root on that case's own channel (`case-NNN`).
 
 **Why `AccessLog` never reads or writes the head:** any head access, even a "reject if
 disposed" guard, would reintroduce a read-write conflict point, so concurrent access
@@ -52,16 +55,23 @@ appended under its own distinct event key: conflict avoidance is structural, not
 loop. As a consequence, an access logged *after* `DisposeEvidence` is recorded as an audit
 event rather than rejected (auditability over gatekeeping).
 
-## Endorsement policies (constant across all runs; applied at commit, docs/CONTRACTS.md §3)
+## Endorsement policies (applied at commit, docs/CONTRACTS.md §3)
 
-- App channels `coc-main`, `case-*`: `OR('Org1MSP.peer','Org2MSP.peer')`.
-- Anchor channel `anchor-main`: `AND('AnchorClientMSP.member')`.
+- App channels `coc-main`, `case-*`: `OR('Org1MSP.peer','Org2MSP.peer')` (1-of-any, the
+  default) or `AND('Org1MSP.peer','Org2MSP.peer')` (2-of-2), a run setting
+  (`endorsement.policy` in `benchmark/sweeps.yaml`; `orchestration/lib.sh`
+  `endorsement_policy` applies the same policy on every app channel of a stack). Event
+  records and Merkle roots alike use this one chaincode package and policy.
+- The earlier design (campaigns 1–5, git commit `573017b`) also deployed this chaincode on an
+  anchor channel `anchor-main` with `AND('AnchorClientMSP.member')`, for Parallel-Anchored's
+  roots. That channel no longer exists; the chaincode itself did not change.
 
 ## Does NOT
 
 - Store evidence binaries (always off-chain, every variant).
 - Hash payloads, compute `integrity_proof`, or sign (the gateway does hashing/ni-URIs).
-- Reach other channels (cross-channel roots are submitted by the anchor-client).
+- Reach other channels: a root is committed on the channel the gateway submits it to
+  (`coc-main`, or the case's own channel on Parallel-Anchored).
 - Run rich/range CouchDB queries (GoLevelDB; `GetAuditTrail` uses a partial-composite-key
   scan only).
 

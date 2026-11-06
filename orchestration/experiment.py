@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """GLEIPNIR experiment driver (docs/CONTRACTS.md §10, §11; docs/methodology/experiments.md).
 
-  experiment.py --exp e0|ramp|e1|e2|e3a|e3b|ops|cell [--variant V]* [--reps N]
+  experiment.py --exp e0|ramp|e1|e2|e3a|e3b|e3c|ops|sens|cell [--variant V]* [--reps N]
                 [--resume] [--dry-run] [--reuse-network] [--no-monitor] [--no-audit]
                 [--verbose] [--sweeps FILE]
                 cell only: [--send-rate R [R ...]] [--batch-size B] [--cases N]
                            [--seed S] [--workers W] [--rounds K] [--events-per-case E]
                            [--evidence-per-case V] [--transfer-weight T] [--access-weight A]
                            [--dispose-fraction D] [--payload-bytes P] [--audit-cases N]
-                           [--flush-timeout-ms F] [--monitor-interval I]
+                           [--flush-timeout-ms F] [--idle-timeout-ms F] [--endorsement any|all]
+                           [--monitor-interval I]
 
 Plans (cells x repetitions; every run = ONE network lifetime):
   ONE channel per case on the parallel variants, everywhere:
@@ -23,12 +24,23 @@ Plans (cells x repetitions; every run = ONE network lifetime):
         baseline.send_rate_tps, workload.rounds slices; PLUS reference runs standard (1 ch)
         and parallel (baseline.channels) x reps at the same point (levels.reference).
   e2    parallel x channel_counts x reps at baseline.send_rate_tps (cases = channels).
-  e3a   4 variants x reps; batch = baseline.batch_size; parallel* channels =
-        baseline.channels; ONE round per send rate, ascending (slices 0..n-1).
+  e3a   4 variants x reps at baseline.channels cases; batch = baseline.batch_size; ONE round
+        per send rate, ascending: first the base ladder (e3a.send_rates_tps, rounds of
+        e3a.events_per_case_per_round), then the climb — a variant that kept up at the top of
+        its last ladder gets the next one (e3a.climb), a saturated one a single run halfway
+        back to the last rate that kept up, a load-generator limit ends it. Each step is
+        judged on the reps' mean (report.e3a_verdict); the verdicts and points are written
+        to results/e3a/e3a-climb.json after every step. --resume re-derives the climb from
+        the complete runs.
   e3b   4 variants x case_counts (<= baseline.channels_max) x reps at baseline.send_rate_tps;
         parallel* channels = cases; standard/anchoring channels = 1.
+  e3c   as e3b over e3c.case_counts, but at a FIXED per-case send rate: send rate =
+        cases x e3c.send_rate_per_case_tps.
   ops   4 variants x reps at the E3 point; rounds create/transfer/access/dispose
         (writes), read-evidence/read-trail (reads), verify-event (anchored only).
+  sens  the sensitivity cells (sweeps.yaml `sensitivity`: a name -> sweeps.yaml path
+        overrides) at the baseline point, repetition by repetition; a cell overriding only
+        anchoring.* runs on the anchored variants alone. The cell name tags the levels dir.
   cell  ONE ad-hoc cell x variants x reps, factor levels from the CLI: --send-rate
         (configured send rate, tx/s; several -> one round per rate, ascending, as e3a;
         one -> workload.rounds slices, as e1/e2/e3b), --batch-size (anchored only),
@@ -36,7 +48,7 @@ Plans (cells x repetitions; every run = ONE network lifetime):
         ones; default baseline.channels). An omitted factor takes its sweeps.yaml
         baseline. The controlled
         workload (seed, workers, rounds, events/case, evidence/case, mix, payload, audit
-        cases, flush timeout, monitor interval) is also CLI-settable for a cell only:
+        cases, batch timers, endorsement, monitor interval) is also CLI-settable for a cell only:
         applied to an in-memory copy of sweeps.yaml, recorded in run.json `overrides`,
         and tagged into the run dir (`-x<hash>`) so it never shares a dir with the
         defaults. A factor no selected variant uses is rejected, never ignored. Results
@@ -51,17 +63,18 @@ log is always in rounds/<label>/caliper.log. After every completed run the per-r
 CSV benchmark/results/<exp>/<exp>-results.csv is rewritten (report.export_rounds).
 
 Per run: (1) stale artifacts cleared + run.json seeded (identity + controls +
-provenance) -> (2) anchored: BATCH_SIZE/BATCH_FLUSH_MS/fresh BATCH_EPOCH in .env ->
+provenance) -> (2) anchored: BATCH_SIZE/BATCH_FLUSH_MS/BATCH_IDLE_MS/fresh BATCH_EPOCH in .env ->
 (3) trace generated/looked up BEFORE the reset (pure + cheap, so a bad control fails
 first); a `steady` plan label is re-checked against the trace's ACTUAL per-channel
 write events (least-loaded channel; below the floor -> `sub-floor`) -> (4) network:
-reset-network.sh by DEFAULT (needs GLEIPNIR_ALLOW_LEDGER_WIPE=1; it removes only the
-ledger/receipt/verify-metrics volumes, never the library data). --reuse-network
+reset-network.sh by DEFAULT with the run's endorsement policy (needs
+GLEIPNIR_ALLOW_LEDGER_WIPE=1; it removes only the ledger/receipt/verify-metrics volumes,
+never the library data). --reuse-network
 keeps the running ledger for ONE ad-hoc run and then the stack must match (.env
 VARIANT, exactly the case channels the cell uses) -> (5) anchored: batcher recreated
 -> checkpoint t0 -> (6) per round: render bench.yaml,
 `npx caliper launch manager` (tee caliper.log), anchored: settle the batcher (last
-round: POST /flush + GET /status -> anchoring.json), checkpoint t<k+1> ->
+round: POST /flush + GET /status?events=1 -> anchoring.json), checkpoint t<k+1> ->
 (7) audit reconstruct -> (8) collect.py -> manifest.json (status complete) ->
 (9) one line in results/runlog.jsonl.
 
@@ -105,7 +118,8 @@ ENV_PATH = os.path.join(COMPOSE_DIR, ".env")
 RESULTS_DIR = os.path.join(BENCH_DIR, "results")
 TRACES_DIR = os.path.join(BENCH_DIR, "traces")
 RUNLOG = os.path.join(RESULTS_DIR, "runlog.jsonl")
-EXPS = ["e0", "ramp", "e1", "e2", "e3a", "e3b", "ops", "cell"]
+EXPS = ["e0", "ramp", "e1", "e2", "e3a", "e3b", "e3c", "ops", "sens", "cell"]
+ENDORSEMENTS = ("any", "all")
 CELL_FLAGS = (("send_rate", "--send-rate"), ("batch_size", "--batch-size"), ("cases", "--cases"))
 # The controlled workload — settable from the CLI for --exp cell ONLY (a campaign's controls
 # stay those of sweeps.yaml): (flag, sweeps.yaml path, type, min, max, help).
@@ -124,7 +138,12 @@ CONTROL_FLAGS = (
      "fraction of evidence that ends with DisposeEvidence"),
     ("--payload-bytes", "workload.payload_bytes", int, 0, None, "synthetic Codex-Entry filler per event (B)"),
     ("--audit-cases", "workload.audit_cases", int, 1, None, "cases reconstructed for the audit time"),
-    ("--flush-timeout-ms", "anchoring.flush_timeout_ms", int, 0, None, "batcher flush timeout (0 = size-only)"),
+    ("--flush-timeout-ms", "anchoring.flush_timeout_ms", int, 0, None,
+     "batcher age timer: close a batch this long after its first event (0 = off)"),
+    ("--idle-timeout-ms", "anchoring.idle_timeout_ms", int, 0, None,
+     "batcher idle timer: close a batch this long after its last event (0 = off)"),
+    ("--endorsement", "endorsement.policy", str, None, None,
+     "chaincode endorsement policy: any = 1-of-any, all = 2-of-2"),
     ("--monitor-interval", "monitor.interval_s", int, 1, None, "docker resource monitor sampling interval (s)"),
 )
 # Anywhere in the line, so Node's raw TypeError/RangeError and "(node:N) Warning" crash text shows too.
@@ -232,11 +251,11 @@ def levels_dir(levels, rates=None, tag=None):
     if levels.get("batchSize") is not None:
         parts.append(f"batch{levels['batchSize']}")
     parts += [f"ch{levels['channels']}", f"cases{levels['cases']}"]
-    if rates:   # cell only: the send rate is a free factor there, so two cells must not share a dir
+    if rates:   # cell and e3a climb runs: their send rates vary, so two of them must not share a dir
         parts.append("rate" + "-".join(str(r) for r in rates))
     if levels.get("reference"):
         parts.append("ref")
-    if tag:     # cell with CLI control overrides: never shares a dir with the sweeps.yaml defaults
+    if tag:     # a cell's control-override hash, a sens cell name or the e3a midpoint: never a shared dir
         parts.append(tag)
     return "-".join(parts)
 
@@ -254,7 +273,10 @@ def fit_events(cases, wanted, workers):
 
 
 def make_run(sweeps, exp, variant, rep, kind, cases, batch, rates, events, rounds_n, reference=False,
-             overrides=None):
+             overrides=None, tag=None, rates_in_dir=False):
+    """One planned run. `sweeps` is the run's own effective constants (a sens cell or a cell with
+    CLI controls carries its overrides); tag names the levels dir suffix (default: the overrides
+    hash); rates_in_dir puts the send rates into the dir name (cell runs, e3a climb runs)."""
     w = sweeps["workload"]
     # One channel per case on the parallel variants — structural: a plan passes only the case
     # count, so channels can never drift from cases. Standard/Anchoring: 1 (rounds.channels_for).
@@ -290,10 +312,11 @@ def make_run(sweeps, exp, variant, rep, kind, cases, batch, rates, events, round
         regime = "sub-floor"
     else:
         regime = "steady" if min_channel_events >= sweeps["regimes"]["steady"]["min_events_per_channel"] else "sub-floor"
-    lv_dir = levels_dir(levels, sorted(set(rates)) if exp == "cell" else None, overrides_tag(overrides))
+    lv_dir = levels_dir(levels, sorted(set(rates)) if (exp == "cell" or rates_in_dir) else None,
+                        tag or overrides_tag(overrides))
     run_id = f"{exp}/{variant}/{lv_dir}/r{rep}"
     return {"runId": run_id, "exp": exp, "variant": variant, "rep": rep, "kind": kind, "levels": levels,
-            "overrides": dict(overrides or {}),
+            "overrides": dict(overrides or {}), "cell": tag if exp == "sens" else None, "sweeps": sweeps,
             "regime": regime, "rates": list(rates), "trace": trace, "writeEventsPerChannel": min_channel_events,
             "audit": trace is not None, "dir": os.path.join(RESULTS_DIR, *run_id.split("/"))}
 
@@ -313,16 +336,26 @@ def apply_controls(args, sweeps):
     if args.exp != "cell":
         sys.exit(f"{', '.join(g[0] for g in given)} only apply to --exp cell; a campaign's controls come from "
                  f"sweeps.yaml (edit it, or pass --sweeps <file>)")
-    sw, overrides = copy.deepcopy(sweeps), {}
-    for flag, path, val, lo, hi in given:
-        if val < lo or (hi is not None and val > hi):
+    for flag, _path, val, lo, hi in given:
+        if lo is not None and (val < lo or (hi is not None and val > hi)):
             sys.exit(f"{flag} must be in [{lo}, {'inf' if hi is None else hi}] (got {val})")
+    return with_overrides(sweeps, {path: val for _flag, path, val, _lo, _hi in given})
+
+
+def with_overrides(sweeps, overrides):
+    """An in-memory COPY of sweeps.yaml with {dotted sweeps.yaml path: value} applied (the file is
+    never rewritten). Returns (copy, overrides) — the dict goes into every run.json."""
+    sw = copy.deepcopy(sweeps)
+    for path, val in overrides.items():
         node, keys = sw, path.split(".")
         for k in keys[:-1]:
-            node = node[k]
+            node = node.get(k) if isinstance(node, dict) else None
+        if not isinstance(node, dict) or keys[-1] not in node:
+            sys.exit(f"override {path}: no such key in sweeps.yaml")
         node[keys[-1]] = val
-        overrides[path] = val
-    return sw, overrides
+    if sw["endorsement"]["policy"] not in ENDORSEMENTS:
+        sys.exit(f"endorsement.policy must be one of {', '.join(ENDORSEMENTS)} (got {sw['endorsement']['policy']})")
+    return sw, dict(overrides)
 
 
 def cell_levels(args, sweeps, variants):
@@ -386,22 +419,40 @@ def plan(sweeps, exp, variants, reps, cell=None):
                 runs.append(make_run(sweeps, exp, "parallel", r, "trace", ch, None,
                                      [rate] * n_rounds, events, n_rounds))
     elif exp == "e3a":
-        rates = sorted(sweeps["send_rates_tps"])   # one round per send rate, ascending
+        # The base ladder: one round per send rate, ascending; the climb adds runs (e3a_next_runs).
+        e = sweeps["e3a"]
+        rates = sorted(e["send_rates_tps"])
         for v in variants:
             for r in range(reps):
                 runs.append(make_run(sweeps, exp, v, r, "trace", b["channels"], batch,
-                                     rates, events, len(rates)))
-    elif exp == "e3b":
-        for cases in [c for c in sweeps["case_counts"] if c <= b["channels_max"]]:
+                                     rates, e["events_per_case_per_round"], len(rates)))
+    elif exp in ("e3b", "e3c"):
+        # e3b: the TOTAL send rate stays at the baseline; e3c: the per-case send rate does.
+        grid = sweeps["case_counts"] if exp == "e3b" else sweeps["e3c"]["case_counts"]
+        for cases in [c for c in grid if c <= b["channels_max"]]:
+            r_tps = rate if exp == "e3b" else cases * sweeps["e3c"]["send_rate_per_case_tps"]
             for v in variants:
                 for r in range(reps):
                     runs.append(make_run(sweeps, exp, v, r, "trace", cases, batch,
-                                         [rate] * n_rounds, events, n_rounds))
+                                         [r_tps] * n_rounds, events, n_rounds))
     elif exp == "ops":
         for v in variants:
             for r in range(reps):
                 runs.append(make_run(sweeps, exp, v, r, "ops", b["channels"], batch,
                                      [rate], None, None))
+    elif exp == "sens":
+        cells = [(name, *with_overrides(sweeps, over or {})) for name, over in sweeps["sensitivity"].items()]
+        for r in range(reps):   # repetition by repetition: drift within the night spreads over the cells
+            for name, sw, over in cells:
+                anchored_only = bool(over) and all(p.startswith("anchoring.") for p in over)
+                # Every level comes from the cell's own copy, so a cell may also move the point itself.
+                cb, cw = sw["baseline"], sw["workload"]
+                for v in variants:
+                    if anchored_only and v not in R.ANCHORED_VARIANTS:
+                        continue
+                    runs.append(make_run(sw, exp, v, r, "trace", cb["channels"], cb["batch_size"],
+                                         [cb["send_rate_tps"]] * cw["rounds"], cw["events_per_case_per_round"],
+                                         cw["rounds"], overrides=over, tag=name))
     elif exp == "cell":
         # Several send rates -> one round each, ascending (the e3a shape); one rate ->
         # workload.rounds slices at it (the e1/e2/e3b shape).
@@ -425,7 +476,7 @@ def build_rounds(sweeps, run, trace_path):
     slice_size = t["cases"] * t["events_per_case_per_round"] // sweeps["workers"]
     if run["kind"] == "smoke":
         return R.smoke_rounds(sweeps, v) + [R.trace_round(sweeps, v, "smoke-trace", trace_path, 0, slice_size, rate)]
-    per_rate = len(set(run["rates"])) > 1
+    per_rate = len(set(run["rates"])) > 1 or run["exp"] == "e3a"   # an e3a midpoint run has one rate
     return [R.trace_round(sweeps, v, f"rate{r}" if per_rate else f"slice{k}", trace_path, k, slice_size, r)
             for k, r in enumerate(run["rates"])]
 
@@ -473,12 +524,16 @@ def seed_run_json(run, sweeps, sweeps_path):
                 "evidencePerCase": run["trace"]["evidence_per_case"] if run["trace"] else w["evidence_per_case"],
                 "payloadBytes": w["payload_bytes"], "auditCases": audit_cases(sweeps, run),
                 "flushTimeoutMs": sweeps["anchoring"]["flush_timeout_ms"],
+                "idleTimeoutMs": sweeps["anchoring"]["idle_timeout_ms"],
+                "endorsement": sweeps["endorsement"]["policy"],
                 "monitorIntervalS": sweeps["monitor"]["interval_s"]}
     doc = {"runId": run["runId"], "experiment": run["exp"], "variant": run["variant"], "levels": run["levels"],
            "repetition": run["rep"], "regime": run["regime"], "status": "running", "trace": None,
            "controls": controls, "overrides": run["overrides"],
            "provenance": provenance(run, sweeps_path), "startedAt": now_iso(), "finishedAt": None,
            "wallSeconds": None}
+    if run["cell"]:
+        doc["cell"] = run["cell"]   # sens: the sensitivity cell this run belongs to
     dump_json(os.path.join(run["dir"], "run.json"), doc)
     return doc
 
@@ -494,6 +549,7 @@ def ensure_network(run, fresh):
     an explicit, warned-about escape hatch for a single ad-hoc run.
     """
     v, ch = run["variant"], run["levels"]["channels"]
+    policy = run["sweeps"]["endorsement"]["policy"]
     reset = os.path.join(ORCH, "reset-network.sh")
     if fresh:
         if os.environ.get("GLEIPNIR_ALLOW_LEDGER_WIPE") != "1":
@@ -503,9 +559,9 @@ def ensure_network(run, fresh):
                      "library data (accounts, cases, blobs) — but back up first if in doubt:\n"
                      f"    bash {os.path.join(ORCH, 'backup-volumes.sh')} <dir>\n"
                      f"  then re-run with GLEIPNIR_ALLOW_LEDGER_WIPE=1, or reset by hand:\n"
-                     f"    GLEIPNIR_ALLOW_LEDGER_WIPE=1 bash {reset} --variant {v} --channels {ch}\n"
+                     f"    GLEIPNIR_ALLOW_LEDGER_WIPE=1 bash {reset} --variant {v} --channels {ch} --endorsement {policy}\n"
                      "  (single ad-hoc run against the ledger as it stands: --reuse-network)")
-        sh(["bash", reset, "--variant", v, "--channels", str(ch)])
+        sh(["bash", reset, "--variant", v, "--channels", str(ch), "--endorsement", policy])
         return
     print("  ! --reuse-network: this run inherits the ledger as it stands. Valid for ONE run only — a second "
           "run of the same trace collides on the evidence ids it replays (duplicate CreateEvidence) and the "
@@ -514,6 +570,9 @@ def ensure_network(run, fresh):
     if env.get("VARIANT") != v:
         sys.exit(f"running stack is VARIANT={env.get('VARIANT')} but this run needs {v}: "
                  f"drop --reuse-network (with GLEIPNIR_ALLOW_LEDGER_WIPE=1) or bring up {v} first")
+    if env.get("ENDORSEMENT", "any") != policy:
+        sys.exit(f"running stack was brought up with ENDORSEMENT={env.get('ENDORSEMENT', 'any')} but this run "
+                 f"needs {policy}: drop --reuse-network (with GLEIPNIR_ALLOW_LEDGER_WIPE=1)")
     out = sh(["docker", "exec", "peer0.org1.example.com", "ls", PEER_CHAINS], capture=True).stdout.split()
     if v in R.MULTI_CHANNEL_VARIANTS:
         wanted = {R.case_name(i) for i in range(1, ch + 1)}
@@ -524,7 +583,7 @@ def ensure_network(run, fresh):
             # must not silently serve a 5-channel cell.
             sys.exit(f"stack has case channels this run does not use ({', '.join(extra)}); a {ch}-channel cell "
                      f"must run on exactly {ch} case channels. Drop --reuse-network, or reset by hand:\n"
-                     f"  GLEIPNIR_ALLOW_LEDGER_WIPE=1 bash {reset} --variant {v} --channels {ch}")
+                     f"  GLEIPNIR_ALLOW_LEDGER_WIPE=1 bash {reset} --variant {v} --channels {ch} --endorsement {policy}")
         for name in sorted(wanted - set(out)):
             sh(["bash", os.path.join(ORCH, "provision-channel.sh"), name])
     elif "coc-main" not in out:
@@ -534,6 +593,7 @@ def ensure_network(run, fresh):
 def set_batcher_env(run, sweeps):
     set_env_var("BATCH_SIZE", run["levels"]["batchSize"])
     set_env_var("BATCH_FLUSH_MS", sweeps["anchoring"]["flush_timeout_ms"])
+    set_env_var("BATCH_IDLE_MS", sweeps["anchoring"]["idle_timeout_ms"])
     set_env_var("BATCH_EPOCH", f"{run['runId'].replace('/', '-')}-{int(time.time())}")
 
 
@@ -715,8 +775,9 @@ def hms(seconds):
 
 
 def flush_batcher(run, batcher_url):
+    """Run end: close every open batch, then keep the batch records with each event's enqueue time."""
     http(batcher_url + "/flush", method="POST", timeout=300)
-    dump_json(os.path.join(run["dir"], "anchoring.json"), http(batcher_url + "/status"))
+    dump_json(os.path.join(run["dir"], "anchoring.json"), http(batcher_url + "/status?events=1", timeout=300))
 
 
 def settle_batcher(batcher_url, tries=60):
@@ -857,6 +918,118 @@ def is_complete(run):
     return bool(m and m.get("status") == "complete" and m.get("rounds"))
 
 
+# ------------------------------------------------------------------ e3a climb
+
+def fit_events_up(cases, wanted, workers):
+    """Smallest v >= wanted with cases x v divisible by workers (the per-worker slice is an integer)."""
+    v = max(1, wanted)
+    while (cases * v) % workers:
+        v += 1
+    return v
+
+
+def e3a_next_runs(sweeps, variants, reps, manifests):
+    """The climb after the runs so far. Per variant, report.e3a_verdict over its complete e3a runs
+    (the reps' mean per send rate) decides: a load-generator limit ends the variant; the first
+    saturated rate earns ONE run halfway back to the last rate that kept up (with the saturated
+    run's round size), after which the variant ends; a variant that kept up everywhere gets the next
+    ladder (sweeps.yaml e3a.climb). A climb step with fewer than `reps` complete runs (a crash
+    mid-step) is planned again first, so a decision never rests on part of a step. Pure: the same
+    complete runs always give the same next runs, which is what lets --resume continue a climb.
+    -> (runs, {variant: verdict + decision})."""
+    e, b = sweeps["e3a"], sweeps["baseline"]
+    climb, cases = e["climb"], b["channels"]
+    runs, out = [], {}
+    for v in variants:
+        ms = [m for m in manifests if m.get("variant") == v]
+        steps = {}
+        for m in ms:
+            if "-rate" in m["runId"]:   # climb runs; the base ladder is planned (and completed) by plan()
+                steps.setdefault(m["runId"].rsplit("/r", 1)[0], []).append(m)
+        partial = [g for g in steps.values() if len({m["repetition"] for m in g}) < reps]
+        if partial:
+            for g in partial:
+                m = g[0]
+                rates = [r["sendRateTps"] for r in sorted(m["rounds"], key=lambda r: r["index"])]
+                for r in range(reps):
+                    runs.append(make_run(sweeps, "e3a", v, r, "trace", cases, b["batch_size"], rates,
+                                         m["trace"]["params"]["eventsPerCasePerRound"], len(rates),
+                                         tag="midpoint" if "-midpoint/" in m["runId"] else None,
+                                         rates_in_dir=True))
+            out[v] = {"decision": f"finishing {len(partial)} climb step(s) with missing repetitions"}
+            continue
+        # A round whose writes succeeded but none finalized has lost its finalization data (no batchId
+        # in the tx log: no record at all, or no committed batch in anchoring.json); judged as is, it
+        # would read as saturated (or fall back to the acceptance throughput).
+        def ok_writes(r):
+            per_op = (r.get("txlog") or {}).get("perOp") or {}
+            return sum((per_op.get(op) or {}).get("ok", 0) for op in C.WRITE_OPS)
+        broken = [f"{m['runId']} {r.get('label')}" for m in ms for r in m["rounds"]
+                  if ok_writes(r) and (r.get("finalization") is None or r["finalization"].get("finalized") == 0)]
+        if broken:
+            sys.exit(f"e3a climb: {v} has rounds with successful writes but nothing finalized "
+                     f"({', '.join(broken[:3])}{' ...' if len(broken) > 3 else ''}): check the tx logs' batchId "
+                     "and anchoring.json before the climb judges saturation")
+        rows = [r for r in REP.aggregate(REP.data_points("e3a", ms)) if r["variant"] == v]
+        verdict = REP.e3a_verdict(rows, e["saturation_ratio"], e["generator_ratio"])
+        measured = {r["x"] for r in rows}
+        sat, kept, gen = verdict["saturatedAt"], verdict["keptUpTo"], verdict["generatorLimitAt"]
+        rates = events = None
+        if not rows:
+            decision = "no complete run"
+        elif gen is not None:
+            decision = f"load generator limit at {gen} tx/s"
+        elif sat is not None:
+            mid = None if kept is None else int(round((kept + sat) / 2))
+            midpoint_done = any("-midpoint/" in m.get("runId", "") for m in ms)
+            if mid is None or midpoint_done or mid in measured:
+                decision = f"saturated at {sat} tx/s" + (f", kept up at {kept} tx/s" if kept is not None else "")
+            else:
+                rates = [mid]
+                events = next(m["trace"]["params"]["eventsPerCasePerRound"] for m in ms
+                              if any(r.get("sendRateTps") == sat for r in m["rounds"]))
+                decision = f"saturated at {sat} tx/s: one run at {mid} tx/s, halfway back to {kept} tx/s"
+        else:
+            top = max(measured)
+            rates = [int(round(top * climb["factor"] ** i)) for i in range(1, climb["rates_per_ladder"] + 1)]
+            rates = [r for r in rates if r <= climb["max_send_rate_tps"]]
+            if rates:
+                events = fit_events_up(cases, -(-climb["min_send_s"] * rates[-1] // cases), sweeps["workers"])
+                decision = f"kept up to {top} tx/s: next ladder {' '.join(map(str, rates))} tx/s"
+            else:
+                decision = f"kept up to {top} tx/s; the next ladder would pass max_send_rate_tps"
+        if rates:
+            for r in range(reps):
+                runs.append(make_run(sweeps, "e3a", v, r, "trace", cases, b["batch_size"], rates, events,
+                                     len(rates), tag="midpoint" if sat is not None else None, rates_in_dir=True))
+        out[v] = {**verdict, "decision": decision}
+    return runs, out
+
+
+def e3a_preflight(sweeps, variants, reps, todo, resume, reuse_network, manifests):
+    """--exp e3a before anything runs. Refuses --reuse-network (the climb adds runs, each needs a fresh
+    ledger) and a start without --resume over the complete climb runs of an earlier invocation (a new
+    base ladder must not be judged together with an old climb). With the base ladder complete
+    (nothing in `todo`), returns the climb's next runs, so a preview does not read "nothing to do"."""
+    if reuse_network:
+        sys.exit("--reuse-network does not apply to --exp e3a: the climb adds runs, and each needs a fresh ledger")
+    old = [m for m in manifests if m.get("variant") in variants and "-rate" in m.get("runId", "")]
+    if old and not resume:
+        sys.exit(f"{os.path.join(RESULTS_DIR, 'e3a')} holds {len(old)} complete climb run(s) of an earlier "
+                 "invocation: continue that climb with --resume, or move the folder aside to start over")
+    return [] if todo else [r for r in e3a_next_runs(sweeps, variants, reps, manifests)[0] if not is_complete(r)]
+
+
+def write_climb(sweeps, verdicts):
+    """results/e3a/e3a-climb.json: the rule and every variant's points and verdict so far."""
+    path = os.path.join(RESULTS_DIR, "e3a", "e3a-climb.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    dump_json(path, {"updatedAt": now_iso(), "rule": sweeps["e3a"], "variants": verdicts})
+    for v, d in verdicts.items():
+        print(f"  e3a climb {v}: {d['decision']}", flush=True)
+    return path
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--exp", required=True, choices=EXPS)
@@ -889,7 +1062,9 @@ def main():
         "--exp cell controls (the controlled workload)", "default: the sweeps.yaml value; a cell that overrides "
         "any of these records them in run.json `overrides` and gets its own results dir (-x<hash>)")
     for flag, path, typ, _, _, hlp in CONTROL_FLAGS:
-        ctl.add_argument(flag, type=typ, metavar=typ.__name__.upper(), help=f"{hlp} (sweeps.yaml {path})")
+        choices = ENDORSEMENTS if path == "endorsement.policy" else None
+        ctl.add_argument(flag, type=typ, choices=choices, metavar=None if choices else typ.__name__.upper(),
+                         help=f"{hlp} (sweeps.yaml {path})")
     args = ap.parse_args()
     args.sweeps = os.path.abspath(args.sweeps)   # git hash-object runs from REPO_ROOT, not from the caller's cwd
 
@@ -902,19 +1077,24 @@ def main():
     runs = plan(sweeps, args.exp, variants, reps, cell)
     preview_floor(sweeps, runs, cell is not None)
     todo = [r for r in runs if not (args.resume and is_complete(r))]
+    climb_next = (e3a_preflight(sweeps, variants, reps, todo, args.resume, args.reuse_network,
+                                REP.load_manifests("e3a", RESULTS_DIR)) if args.exp == "e3a" else [])
 
-    print(f"\nplan {args.exp}: {len(runs)} run(s), {len(todo)} to execute"
-          + (f" ({len(runs) - len(todo)} already complete, --resume)" if args.resume else ""))
+    print(f"\nplan {args.exp}: {len(runs)} run(s), {len(todo) + len(climb_next)} to execute"
+          + (f" ({len(runs) - len(todo)} already complete, --resume)" if args.resume else "")
+          + (f" ({len(climb_next)} of them the climb's next step)" if climb_next else ""))
     if overrides:
         print(f"  control overrides (vs {os.path.relpath(args.sweeps, REPO_ROOT)}): {json.dumps(overrides)}")
-    for r in todo:
+    for r in todo + climb_next:
         n_rounds = len(r["rates"]) if r["kind"] == "trace" else (
             len(R.ops_rounds(sweeps, r["variant"], r["levels"]["cases"], r["rates"][0])) if r["kind"] == "ops"
             else len(R.smoke_rounds(sweeps, r["variant"])) + 1)
         print(f"  {r['runId']:<48} regime={r['regime']:<9} rounds={n_rounds:<2} rates={r['rates']}"
               f" trace={'-' if not r['trace'] else r['trace']['events_per_case_per_round']}evx{r['trace']['rounds'] if r['trace'] else '-'}")
-    eta = eta_seconds(args.exp, len(todo))
+    eta = eta_seconds(args.exp, len(todo) + len(climb_next))
     print(f"ETA: {'unknown (no complete runs in runlog.jsonl yet)' if eta is None else f'{eta / 3600:.1f} h'}")
+    if args.exp == "e3a":
+        print("  then the climb: runs are added per variant as the results come in (sweeps.yaml e3a.climb)")
     if args.dry_run:
         return
     if args.reuse_network and len(todo) > 1:
@@ -930,28 +1110,46 @@ def main():
            "BATCHER_URL": os.environ.get("BATCHER_URL", "http://localhost:4001"),
            "GLEIPNIR_TOKEN": os.environ.get("GLEIPNIR_TOKEN") or env_file.get("GLEIPNIR_TOKEN", "dev-token")}
     t_start, walls, csv_path = time.time(), [], None
-    for i, run in enumerate(todo, 1):
-        remaining = len(todo) - i + 1
-        # ETA from this session's own runs once there are some, else from runlog.jsonl history.
-        eta = statistics.median(walls) * remaining if walls else eta_seconds(args.exp, remaining)
-        print(f"\n##### [run {i}/{len(todo)} | {100 * (i - 1) // len(todo)} % done | elapsed "
-              f"{hms(time.time() - t_start)} | ETA {hms(eta)}] #####", flush=True)
-        manifest = execute(sweeps, run, args, env, tag=f"[run {i}/{len(todo)}] ")
-        walls.append(time.time() - run["_t0"])
-        if args.exp == "ramp":
-            ramp_summary(manifest)
-        try:
-            csv_path = REP.export_rounds(args.exp, RESULTS_DIR)
-            print(f"  results CSV updated ({i}/{len(todo)} runs): {csv_path}", flush=True)
-        except OSError as e:   # e.g. the CSV is open in Excel (write-locked): never stop a campaign for it
-            print(f"  ! results CSV not updated ({e}); close it in Excel — the next run rewrites it, or run "
-                  f"python3 orchestration/report.py --exp {args.exp}", flush=True)
-    print(f"\n{args.exp} complete: {len(todo)} run(s) executed in {hms(time.time() - t_start)}.")
+
+    def run_all(todo):
+        nonlocal csv_path
+        for i, run in enumerate(todo, 1):
+            remaining = len(todo) - i + 1
+            # ETA from this session's own runs once there are some, else from runlog.jsonl history.
+            eta = statistics.median(walls) * remaining if walls else eta_seconds(args.exp, remaining)
+            print(f"\n##### [run {i}/{len(todo)} | {100 * (i - 1) // len(todo)} % done | elapsed "
+                  f"{hms(time.time() - t_start)} | ETA {hms(eta)}] #####", flush=True)
+            manifest = execute(run["sweeps"], run, args, env, tag=f"[run {i}/{len(todo)}] ")
+            walls.append(time.time() - run["_t0"])
+            if args.exp == "ramp":
+                ramp_summary(manifest)
+            try:
+                csv_path = REP.export_rounds(args.exp, RESULTS_DIR)
+                print(f"  results CSV updated ({i}/{len(todo)} runs): {csv_path}", flush=True)
+            except OSError as e:   # e.g. the CSV is open in Excel (write-locked): never stop a campaign for it
+                print(f"  ! results CSV not updated ({e}); close it in Excel — the next run rewrites it, or run "
+                      f"python3 orchestration/report.py --exp {args.exp}", flush=True)
+        return len(todo)
+
+    executed = run_all(todo)
+    if args.exp == "e3a":
+        planned = set()
+        while True:
+            more, verdicts = e3a_next_runs(sweeps, variants, reps, REP.load_manifests("e3a", RESULTS_DIR))
+            write_climb(sweeps, verdicts)
+            ids = tuple(r["runId"] for r in more)
+            if not more or ids in planned:   # every variant has its verdict (or a step would repeat)
+                break
+            planned.add(ids)
+            step = [r for r in more if not (args.resume and is_complete(r))]
+            print(f"\n===== e3a climb step: {len(step)} run(s) =====", flush=True)
+            executed += run_all(step)
+    print(f"\n{args.exp} complete: {executed} run(s) executed in {hms(time.time() - t_start)}.")
     if csv_path:
         print(f"  per-round results (Excel): {csv_path}\n"
               f"  re-export with decimal commas: python3 orchestration/report.py --exp {args.exp} --decimal-comma"
               + (f"\n  aggregated tables + charts:   python3 orchestration/report.py --exp {args.exp}"
-                 if args.exp in REP.EXPS else ""))
+                 if args.exp in REP.TABLE_EXPS else ""))
 
 
 if __name__ == "__main__":

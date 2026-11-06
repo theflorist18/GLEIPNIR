@@ -11,7 +11,7 @@ const multer = require('multer');
 const { Readable } = require('node:stream');
 const { niUri } = require('./ni');
 const { toCsv } = require('./csv');
-const { routeWrite, routeRead, RequestError } = require('./variantRouter');
+const { routeWrite, routeRead, rootChannel, RequestError } = require('./variantRouter');
 const { makeAuth, bearerOf } = require('./auth');
 const { makeSecurityLog } = require('./securityLog');
 
@@ -96,9 +96,6 @@ function buildEvent(op, evidenceId, caseId, actor, detail) {
 
 function createApp(deps) {
   const { fabric, batcher, receipts, users, sessions, caseRegistry, evidenceStore, config } = deps;
-  // anchor-client is reached only by the Parallel-Anchored anchor-roots read
-  // below (deps so tests can point it at a fake).
-  const anchorClientUrl = deps.anchorClientUrl || 'http://anchor-client:4003';
   const cfg = {
     variant: 'standard',
     token: 'dev-token',
@@ -853,43 +850,38 @@ function createApp(deps) {
     res.status(resp.status).json(body);
   }));
 
-  // Anchor-root read for audit reconstruction: any authenticated
-  // principal. Anchoring keeps its roots on coc-main; Parallel-Anchored keeps
-  // them on the anchor channel, reachable only through the anchor-client (the
-  // sole holder of that identity) — proxied verbatim, status included. The
-  // direct variants have no roots at all.
-  app.get('/api/v1/anchor-roots/:scopeId/:batchId', wrap(async (req, res) => {
+  // Anchor-root read (ReadAnchorRoot) on the channel that holds the scope's
+  // roots: coc-main for Anchoring's `shared` scope, the case's own channel for
+  // a Parallel-Anchored case (a scope that is not a case-NNN id is a 400 there).
+  // The direct variants have no roots (404). The public route serves audit
+  // reconstruction to any authenticated principal; the internal one serves the
+  // verification service.
+  const readAnchorRoot = wrap(async (req, res) => {
     const { scopeId, batchId } = req.params;
-    if (V === 'anchoring') {
-      const out = await fabric.evaluate(cfg.defaultChannel, 'ReadAnchorRoot', [scopeId, batchId]);
-      return res.type('application/json').send(out);
-    }
-    if (V === 'parallel-anchored') {
-      const resp = await fetch(`${anchorClientUrl}/roots/${encodeURIComponent(scopeId)}/${encodeURIComponent(batchId)}`);
-      const body = await resp.json().catch(() => ({}));
-      return res.status(resp.status).json(body);
-    }
-    return res.status(404).json({ error: 'no anchor roots in this variant' });
-  }));
+    const out = await fabric.evaluate(rootChannel(V, scopeId, cfg.defaultChannel), 'ReadAnchorRoot', [scopeId, batchId]);
+    res.type('application/json').send(out);
+  });
+  app.get('/api/v1/anchor-roots/:scopeId/:batchId', readAnchorRoot);
 
-  // ---- internal: anchor-root sink for the Anchoring variant (coc-main) ----
+  // ---- internal: the anchor-root sink of both anchored variants ----
   // Service-principal only. These routes commit/read Merkle roots on the
   // ledger and belong to the batcher + verification service, which use the
   // service token (docs/CONTRACTS.md §6). Global auth.authenticate alone would
   // admit any user session — an investigator could commit an arbitrary root or
   // squat a batchId to break verification of a genuine batch. requireService
   // closes that without changing the service-token semantics.
+  // The chaincode keys a root on meta.caseId (default "shared"), so on
+  // Parallel-Anchored the case named in the meta is both the root's scope and
+  // the channel it is committed to.
   app.post('/internal/anchor-root', auth.requireService, wrap(async (req, res) => {
     const { batchId, merkleRoot, meta } = req.body || {};
     if (!batchId || !merkleRoot) throw new RequestError(400, 'batchId and merkleRoot are required');
-    const txId = await fabric.submit(cfg.defaultChannel, 'CommitAnchorRoot', [batchId, merkleRoot, JSON.stringify(meta || {})]);
+    const channel = rootChannel(V, (meta || {}).caseId, cfg.defaultChannel);
+    const txId = await fabric.submit(channel, 'CommitAnchorRoot', [batchId, merkleRoot, JSON.stringify(meta || {})]);
     res.status(201).json({ txId });
   }));
 
-  app.get('/internal/anchor-root/:scopeId/:batchId', auth.requireService, wrap(async (req, res) => {
-    const out = await fabric.evaluate(cfg.defaultChannel, 'ReadAnchorRoot', [req.params.scopeId, req.params.batchId]);
-    res.type('application/json').send(out);
-  }));
+  app.get('/internal/anchor-root/:scopeId/:batchId', auth.requireService, readAnchorRoot);
 
   // Terminal error handler (OWASP A05/A09). Errors thrown in middleware before
   // the route handlers — most notably a malformed or oversized JSON body

@@ -115,8 +115,8 @@ test('anchoring boundary: N events -> receipts stored, one root submitted, recei
   assert.equal(authHeaders[0], 'Bearer test-token');
   const expectedRoot = buildTree(events.map((e) => leafHash(e))).root;
   assert.equal(rootCalls[0].merkleRoot, expectedRoot);
-  assert.equal(rootCalls[0].meta.scopeId, 'shared');
-  assert.equal(rootCalls[0].meta.leafCount, 3);
+  // No caseId: the chaincode keys the root on the default `shared` scope.
+  assert.deepEqual(rootCalls[0].meta, { scopeId: 'shared', leafCount: 3 });
 
   // Three receipts stored, each carrying the committed txId, a valid path,
   // and the evidenceId + the event body as enqueued.
@@ -148,11 +148,21 @@ test('anchoring boundary: N events -> receipts stored, one root submitted, recei
   // Size-closed batch: timestamps + delay fields for the anchoring-delay metric.
   const b = status.batches[0];
   assert.equal(b.forced, false);
+  assert.equal(b.closeReason, 'size');
   for (const k of ['openedAt', 'closedAt', 'committedAt']) {
     assert.match(b[k], ISO_RE, `${k} is ISO-8601`);
   }
   assert.ok(b.openedAt <= b.closedAt && b.closedAt <= b.committedAt);
   assert.ok(b.delayMs.min >= 0 && b.delayMs.min <= b.delayMs.mean && b.delayMs.mean <= b.delayMs.max);
+  assert.equal('enqueuedAtMs' in b, false, 'the polled /status carries no per-event arrays');
+
+  // ?events=1: one enqueue time per leaf, in leaf order, that reproduces delayMs exactly.
+  const full = (await (await fetch(`${batcher.url}/status?events=1`)).json()).batches[0];
+  assert.equal(full.enqueuedAtMs.length, 3);
+  assert.deepEqual([...full.enqueuedAtMs].sort((x, y) => x - y), full.enqueuedAtMs);
+  assert.equal(new Date(full.openedAt).getTime(), full.enqueuedAtMs[0]);
+  const delays = full.enqueuedAtMs.map((ms) => new Date(full.committedAt).getTime() - ms);
+  assert.deepEqual([Math.min(...delays), Math.max(...delays)], [full.delayMs.min, full.delayMs.max]);
 });
 
 test('flush timer closes a partial batch (forced:true); /flush also forces', async (t) => {
@@ -192,8 +202,10 @@ test('flush timer closes a partial batch (forced:true); /flush also forces', asy
   assert.equal(rootCalls[0].meta.leafCount, 1);
   status = await (await fetch(`${batcher.url}/status`)).json();
   assert.equal(status.flushTimeoutMs, flushMs);
+  assert.equal(status.idleTimeoutMs, 0);
   const b = status.batches[0];
   assert.equal(b.forced, true);
+  assert.equal(b.closeReason, 'timeout');
   assert.equal(b.rootStatus, 'committed');
   assert.ok(b.delayMs.min >= flushMs - 5, `delay ${b.delayMs.min} spans the timeout`);
   assert.ok(b.delayMs.min <= b.delayMs.max);
@@ -205,7 +217,61 @@ test('flush timer closes a partial batch (forced:true); /flush also forces', asy
   assert.equal(rootCalls.length, 2);
   assert.equal(status.counters.forced, 2);
   assert.equal(status.batches[1].forced, true);
+  assert.equal(status.batches[1].closeReason, 'flush');
   assert.ok(status.batches[1].openedAt >= status.batches[0].closedAt);
+});
+
+test('idle timer closes a batch idleMs after its LAST event (no cap), closeReason idle', async (t) => {
+  const rootCalls = [];
+  const rstore = await receiptStoreStub(new Map());
+  const gw = await startServer(async (req, res) => {
+    rootCalls.push(await readBody(req));
+    res.writeHead(201, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ txId: 'tx-idle' }));
+  });
+  const idleMs = 150;
+  const app = createApp({
+    variant: 'anchoring', batchSize: 100, idleMs, receiptStoreUrl: rstore.url, gatewayUrl: gw.url, logLevel: 'silent',
+  });
+  const batcher = await listen(app);
+  t.after(() => { batcher.server.close(); rstore.server.close(); gw.server.close(); });
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  // Events keep arriving faster than idleMs: each one restarts the countdown,
+  // so the batch stays open well past idleMs after its FIRST event.
+  for (let i = 0; i < 4; i += 1) { await postEvent(batcher.url, makeEvent(i)); await sleep(60); }
+  assert.equal(rootCalls.length, 0, 'still open: the gaps were shorter than idleMs');
+  const lastEnqueue = Date.now();
+  let status;
+  while (Date.now() - lastEnqueue < 3000) {
+    status = await (await fetch(`${batcher.url}/status`)).json();
+    if (status.counters.closedBatches === 1) break;
+    await sleep(10);
+  }
+  await app.locals.settle();
+  assert.equal(rootCalls.length, 1);
+  assert.equal(rootCalls[0].meta.leafCount, 4, 'one batch holding all four events');
+  status = await (await fetch(`${batcher.url}/status?events=1`)).json();
+  const b = status.batches[0];
+  assert.equal(status.idleTimeoutMs, idleMs);
+  assert.equal(b.closeReason, 'idle');
+  assert.equal(b.forced, true);
+  const sinceLast = new Date(b.closedAt).getTime() - b.enqueuedAtMs[3];
+  assert.ok(sinceLast >= idleMs - 5, `closed ${sinceLast} ms after the last event`);
+  assert.ok(new Date(b.closedAt).getTime() - b.enqueuedAtMs[0] >= idleMs + 150, 'more than idleMs after the first event');
+
+  // A size boundary still wins and clears the idle timer.
+  const sized = createApp({
+    variant: 'anchoring', batchSize: 2, idleMs: 50, receiptStoreUrl: rstore.url, gatewayUrl: gw.url, logLevel: 'silent',
+  });
+  const s = await listen(sized);
+  t.after(() => s.server.close());
+  await postEvent(s.url, makeEvent(10));
+  await postEvent(s.url, makeEvent(11));
+  await sleep(120);
+  await sized.locals.settle();
+  const ss = await (await fetch(`${s.url}/status`)).json();
+  assert.deepEqual(ss.batches.map((x) => x.closeReason), ['size']);
 });
 
 test('duplicate eventId in the open batch is rejected with 409', async (t) => {
@@ -264,11 +330,12 @@ test('root submit failure keeps receipts and marks the batch degraded', async (t
   assert.equal(status.batches[0].delayMs, null);
 });
 
-test('parallel-anchored routes per-case queues to the anchor-client', async (t) => {
+test('parallel-anchored: one queue per case, each root sent to the gateway naming its case', async (t) => {
   const rootCalls = [];
-  const rstore = await receiptStoreStub(new Map());
-  const anchor = await startServer(async (req, res) => {
-    rootCalls.push(await readBody(req));
+  const receipts = new Map();
+  const rstore = await receiptStoreStub(receipts);
+  const gw = await startServer(async (req, res) => {
+    rootCalls.push({ url: req.url, auth: req.headers.authorization, body: await readBody(req) });
     res.writeHead(201, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ txId: 'tx-case-1' }));
   });
@@ -278,14 +345,15 @@ test('parallel-anchored routes per-case queues to the anchor-client', async (t) 
     batchSize: 2,
     batchEpoch: 'e0',
     receiptStoreUrl: rstore.url,
-    anchorClientUrl: anchor.url,
+    gatewayUrl: gw.url,
+    token: 'test-token',
     logLevel: 'silent',
   });
   const batcher = await listen(app);
   t.after(() => {
     batcher.server.close();
     rstore.server.close();
-    anchor.server.close();
+    gw.server.close();
   });
 
   for (let i = 0; i < 2; i += 1) {
@@ -294,9 +362,18 @@ test('parallel-anchored routes per-case queues to the anchor-client', async (t) 
     const j = await resp.json();
     assert.equal(j.batchId, 'case-001-e0-b000000');
   }
+  // A second case keeps its own queue: one event, closed by /flush.
+  await postEvent(batcher.url, { ...makeEvent(2), caseId: 'case-002' });
   await fetch(`${batcher.url}/flush`, { method: 'POST' });
 
-  assert.equal(rootCalls.length, 1);
-  assert.equal(rootCalls[0].caseId, 'case-001');
-  assert.equal(rootCalls[0].meta.leafCount, 2);
+  assert.equal(rootCalls.length, 2);
+  for (const c of rootCalls) {
+    assert.equal(c.url, '/internal/anchor-root');
+    assert.equal(c.auth, 'Bearer test-token');
+  }
+  const byCase = Object.fromEntries(rootCalls.map((c) => [c.body.meta.caseId, c.body]));
+  assert.deepEqual(byCase['case-001'].meta, { scopeId: 'case-001', leafCount: 2, caseId: 'case-001' });
+  assert.deepEqual(byCase['case-002'].meta, { scopeId: 'case-002', leafCount: 1, caseId: 'case-002' });
+  assert.equal(byCase['case-002'].batchId, 'case-002-e0-b000000');
+  assert.equal(receipts.get('evt-2').rootRef.scopeId, 'case-002');
 });

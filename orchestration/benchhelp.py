@@ -25,10 +25,10 @@ TAB_HELP = {
         "SMOKE TEST (label 'smoke'): functional correctness only — never used for results.\n\n"
         "RAMP: steps the send rate up (one round per rate) to find where each variant's throughput stops\n"
         "keeping up (throughput < 0.9 x send rate = saturation). From it the app suggests the BASELINE\n"
-        "SEND RATE (safely below saturation) and a trimmed send-rate grid for E3a.\n\n"
-        "Tip: ramp coarsely first (e.g. 100 ... 1000 tx/s), then set E3a's grid finely around the point where\n"
-        "throughput flattens. At that point look at the CPU column: headroom left = an architecture limit\n"
-        "(the finding); CPU maxed out = the laptop itself (a threat to validity).\n"
+        "SEND RATE (safely below saturation). E3a has its own ladder and climbs to saturation by itself.\n\n"
+        "Tip: ramp coarsely first (e.g. 100 ... 1000 tx/s). Where throughput flattens, look at the CPU\n"
+        "column: headroom left = an architecture limit (the finding); CPU maxed out = the laptop itself\n"
+        "(a threat to validity).\n"
         "Also check 'measured send rate' = 'send rate': if not, the Caliper workers were the bottleneck."),
     "E1 batch size": (
         "Goal: choose the baseline batch size for the anchored variants (calibration, reported in the paper).",
@@ -53,10 +53,12 @@ TAB_HELP = {
         "                   of CPU, not the architecture)."),
     "E3 main": (
         "Goal: the paper's main experiment — compare the 4 architectures' scalability, baselines fixed.",
-        "E3a  scalability vs LOAD: send rate raised round by round; where does each variant saturate, how do\n"
-        "     latency and failures behave?\n"
-        "E3b  scalability vs CASES: number of cases raised (Parallel variants: one channel per case), up to\n"
-        "     max cases — shows e.g. where Parallel starts losing to Standard.\n"
+        "E3a  scalability vs LOAD: send rate raised round by round from 100 tx/s and climbing until each\n"
+        "     variant saturates (finalized throughput < 0.9 x send rate) or the load generator tops out.\n"
+        "E3b  scalability vs CASES at a fixed TOTAL send rate (Parallel variants: one channel per case), up\n"
+        "     to max cases — the cost of adding channels.\n"
+        "E3c  scalability vs CASES at a fixed PER-CASE send rate: the load grows with the cases.\n"
+        "Sensitivity cells: 2-of-2 endorsement and a 5 s idle batch timer against a baseline cell.\n"
         "Per-operation breakdown: each operation (create, transfer, access, dispose + the reads) tested on its\n"
         "     own at one operating point — which operation is most expensive? does anchoring help all of\n"
         "     them? Writes and reads in separate tables.\n\n"
@@ -144,16 +146,26 @@ FIELD_HELP = {
         "change ledger growth or the comparison between variants."),
     "workload.audit_cases": (
         "Cases whose full chain of custody is reconstructed after the rounds (the first N of the trace) ->\n"
-        "'audit time per case (s)' — a mandatory metric ('how long to reconstruct one case's CoC').\n"
+        "'audit time per case (s)' and 'audit time per event (ms)' ('how long to reconstruct one case's CoC').\n"
         "Standard/Parallel read each trail from the ledger; the anchored variants fetch receipts, recompute\n"
         "each Merkle path and check it against the on-chain root. More cases = steadier mean, longer run.\n"
-        "Capped at the run's case count."),
+        "Capped at the run's case count, so 50 audits every case of every run."),
     "anchoring.flush_timeout_ms": (
-        "Anchored variants only. The batcher closes a batch when it holds 'batch size' events; a timeout would\n"
-        "ALSO close it after this many ms. 0 = size-only: every batch really has the batch size you set.\n"
-        "A timeout would make the effective batch size depend on the send rate and blur E1 / E3a.\n"
+        "Anchored variants only. The batcher closes a batch when it holds 'batch size' events; this age timer\n"
+        "would ALSO close it this many ms after its FIRST event. 0 = off: every batch really has the batch size\n"
+        "you set. A timer would make the effective batch size depend on the send rate and blur E1 / E3a.\n"
         "The cost (events wait longer at low send rates) is measured as 'anchoring delay (s)'.\n"
         "The run-end partial batch is always flushed before measuring."),
+    "anchoring.idle_timeout_ms": (
+        "Anchored variants only. The idle timer closes a batch this many ms after its LAST event, however\n"
+        "small the batch is (no cap). 0 = off (size-only batching, the default for every experiment). It\n"
+        "bounds how long an accepted event can wait unprotected when events stop arriving; the sensitivity\n"
+        "cell 'idle-5s' measures it. Each batch record says why it closed (size, idle, timeout, flush)."),
+    "endorsement.policy": (
+        "Who must endorse every chaincode transaction on the app channels. any = a peer of Org1 OR Org2\n"
+        "(1-of-any, the default: it isolates the architecture's own cost); all = a peer of BOTH orgs\n"
+        "(2-of-2, what a multi-party custody transfer would need). Set when the chaincode is committed, so a\n"
+        "change takes effect at the next ledger reset. The sensitivity cell 'endorse-all' measures it."),
     "monitor.interval_s": (
         "Every this-many seconds during a round, Caliper's Docker monitor records each container's CPU % and\n"
         "memory MB. The table shows each container's average (max also kept), summed over the containers.\n"
@@ -191,16 +203,23 @@ FIELD_HELP = {
         "workers (24). Not a per-case cap."),
     "regimes.smoke.send_rate_tps": "E0 smoke test: a low send rate (tx/s) — it checks function, not speed.",
     "ramp.events_per_case_per_round": (
-        "E0 ramp: events per case in each send-rate step. 224 = the E3a round (20 cases x 224 = 4,480 tx:\n"
-        "~22 s at 200 tx/s, ~7.5 min at 10 tx/s), so the ramp sees what E3a will. Short rounds mislead:\n"
+        "E0 ramp: events per case in each send-rate step. 224 = the E1/E3b round (20 cases x 224 = 4,480\n"
+        "tx: ~22 s at 200 tx/s, ~7.5 min at 10 tx/s), so the ramp sees what they will. Short rounds mislead:\n"
         "Caliper's throughput window includes the wait for the last blocks (up to 2 s on every Parallel\n"
         "channel), so 40 (800 tx) would read ~0.89 x send rate at 50 tx/s (modelled) — 'saturated' when it\n"
         "is not. Past saturation a round lasts ~ transactions / actual throughput."),
     "send_rates_tps": (
-        "Send-rate grid (configured input, tx/s): the ramp's steps and E3a's levels (one round each,\n"
-        "ascending). Must BRACKET saturation (>= 2 levels below, 1 above). Ramp coarsely first (e.g.\n"
-        "100 ... 1000), then add finer E3a levels by hand around where throughput flattens. 'Use trimmed\n"
-        "grid' only drops the levels beyond the first one above the highest saturation point."),
+        "Send-rate grid (configured input, tx/s): the ramp's steps (one round each, ascending). Must\n"
+        "BRACKET saturation (>= 2 levels below, 1 above). 'Use trimmed grid' only drops the levels beyond\n"
+        "the first one above the highest saturation point. E3a has its own ladder (e3a.send_rates_tps)."),
+    "e3a.send_rates_tps": (
+        "E3a's base ladder (configured input, tx/s): one round per rate, ascending, on one ledger. A variant\n"
+        "that still keeps up at the top climbs on by itself (next ladder = the top rate x 1.25, x 1.25^2, ...)\n"
+        "until it saturates or the load generator tops out; a saturated one gets one run halfway back."),
+    "e3a.events_per_case_per_round": (
+        "E3a base-ladder round size: events per case per send rate. 1,500 x 20 cases = 30,000 tx = 300 s of\n"
+        "sending at 100 tx/s and 30 s at 1,000 tx/s, so the end-of-round wait for the last blocks (up to\n"
+        "2 s) stays small. The climb's rounds are sized for at least 30 s at their top rate."),
     "batch_sizes": "E1's batch-size levels (events per batch) — ONE grid for Anchoring and Parallel-Anchored.",
     "channel_counts": (
         "E2's levels: channels (= cases, one channel per case). Bounded by the host: about one CPU core per\n"
@@ -223,9 +242,13 @@ CUSTOM_HELP = {
 MODE_HELP = {
     "e0": "Functional check of all four variants at a low send rate. Results are labelled 'smoke'.",
     "ramp": "One round per send rate, ascending, to find roughly where each variant saturates.",
-    "e3a": "All 4 variants, one round per send rate: where does each saturate?",
-    "e3b": "All 4 variants, number of cases raised (up to max cases): scalability vs cases.",
+    "e3a": ("All 4 variants, one round per send rate from 100 tx/s; a variant that keeps up climbs on\n"
+            "(x 1.25 per step) until it saturates or the load generator tops out. The run count grows."),
+    "e3b": "All 4 variants, number of cases raised (up to max cases) at the baseline TOTAL send rate.",
+    "e3c": "All 4 variants, number of cases raised at a fixed PER-CASE send rate (the total grows with them).",
     "ops": "Each operation as its own round at the E3 point; writes and reads in separate tables.",
+    "sens": ("At the baseline point: the baseline cell, 2-of-2 endorsement (all 4 variants) and a 5 s idle\n"
+             "batch timer (anchored variants), repetition by repetition so they share one night."),
 }
 BUTTON_HELP = {
     "Preview plan": "Shows what WOULD run (runs, regimes, sub-floor warnings, ETA). Changes nothing.",
@@ -266,8 +289,8 @@ COLUMN_HELP = {
     "success (n)": "Transactions that succeeded: committed (Standard/Parallel) or accepted and enqueued (anchored).",
     "failure (n)": "Transactions that failed (e.g. the create/transfer race, timeouts).",
     "failure rate (%)": "failure / (success + failure) x 100.",
-    "on-chain (B/event)": ("LEDGER growth per write event: block store of every channel (incl. the anchor\n"
-                           "channel), fitted over the per-round checkpoints. Measured once per run."),
+    "on-chain (B/event)": ("LEDGER growth per write event: block store of every channel, fitted over\n"
+                           "the per-round checkpoints. Measured once per run."),
     "off-chain (B/event)": ("Receipt-store growth per event (anchored variants: event copy + Merkle path).\n"
                             "Shown so anchoring's ledger saving is never presented as free. Once per run."),
 }

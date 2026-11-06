@@ -2,7 +2,6 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const http = require('node:http');
 const { createApp } = require('../src/app');
 
 // One off-chain receipt for ev-1: the CoC event plus its Merkle witness.
@@ -13,7 +12,7 @@ const RECEIPT = {
   rootRef: { scopeId: 'shared', batchId: 'shared-e1-b000000', txId: 'tx-root' },
 };
 
-function fakeDeps(overrides, extra) {
+function fakeDeps(overrides) {
   const submits = [];
   const evaluates = [];
   return {
@@ -31,25 +30,8 @@ function fakeDeps(overrides, extra) {
       batcher: { async enqueue() { return { batchId: 'shared-b000000', leafIndex: 0 }; } },
       receipts: { async listByEvidence(id) { return id === 'ev-1' ? [RECEIPT] : []; } },
       config: { variant: 'standard', token: 'secret-token', defaultChannel: 'coc-main', ...overrides },
-      ...extra,
     },
   };
-}
-
-// Minimal anchor-client stand-in: GET /roots/:scopeId/:batchId, 404 for an
-// unknown batch (the same {error,...} JSON shape the real service sends).
-function fakeAnchorClient() {
-  const hits = [];
-  const server = http.createServer((req, res) => {
-    hits.push(req.url);
-    const m = /^\/roots\/([^/]+)\/([^/]+)$/.exec(req.url);
-    res.setHeader('content-type', 'application/json');
-    if (!m || m[2] === 'missing') { res.statusCode = 404; return res.end(JSON.stringify({ error: 'root-not-found' })); }
-    return res.end(JSON.stringify({ scopeId: decodeURIComponent(m[1]), batchId: decodeURIComponent(m[2]), merkleRoot: 'anchor-root-hex' }));
-  });
-  return new Promise((resolve) => {
-    server.listen(0, '127.0.0.1', () => resolve({ server, hits, url: `http://127.0.0.1:${server.address().port}` }));
-  });
 }
 
 function listen(app) {
@@ -204,20 +186,69 @@ test('GET /anchor-roots (anchoring) evaluates ReadAnchorRoot on the default chan
   assert.deepEqual(evaluates, [{ channel: 'coc-main', fn: 'ReadAnchorRoot', args: ['shared', 'shared-e1-b000000'] }]);
 });
 
-test('GET /anchor-roots (parallel-anchored) proxies the anchor-client, status included', async (t) => {
-  const ac = await fakeAnchorClient();
-  t.after(() => ac.server.close());
-  const { deps, evaluates } = fakeDeps({ variant: 'parallel-anchored' }, { anchorClientUrl: ac.url });
+test('GET /anchor-roots (parallel-anchored) evaluates ReadAnchorRoot on the case\'s own channel', async (t) => {
+  const { deps, evaluates } = fakeDeps({ variant: 'parallel-anchored' });
+  deps.fabric.evaluate = async (channel, fn, args) => {
+    evaluates.push({ channel, fn, args });
+    if (args[1] === 'missing') throw new Error(`anchor root for scope "${args[0]}" batch "${args[1]}" not found`);
+    return JSON.stringify({ scopeId: args[0], batchId: args[1], merkleRoot: 'case-root-hex' });
+  };
   const { server, url } = await listen(createApp(deps));
   t.after(() => server.close());
 
-  const ok = await fetch(`${url}/api/v1/anchor-roots/case-001/case-001-e1-b000002`, { headers: AUTH });
+  const ok = await fetch(`${url}/api/v1/anchor-roots/case-007/case-007-e1-b000002`, { headers: AUTH });
   assert.equal(ok.status, 200);
-  assert.deepEqual(await ok.json(), { scopeId: 'case-001', batchId: 'case-001-e1-b000002', merkleRoot: 'anchor-root-hex' });
-  assert.deepEqual(ac.hits, ['/roots/case-001/case-001-e1-b000002']);
-  assert.equal(evaluates.length, 0, 'the app-channel session is never used for anchor-channel roots');
+  assert.deepEqual(await ok.json(), { scopeId: 'case-007', batchId: 'case-007-e1-b000002', merkleRoot: 'case-root-hex' });
+  assert.deepEqual(evaluates, [{ channel: 'case-007', fn: 'ReadAnchorRoot', args: ['case-007', 'case-007-e1-b000002'] }]);
 
-  const missing = await fetch(`${url}/api/v1/anchor-roots/case-001/missing`, { headers: AUTH });
-  assert.equal(missing.status, 404);
-  assert.equal((await missing.json()).error, 'root-not-found');
+  // chaincode not-found -> 404 (a batch not yet anchored); a scope that is no case channel -> 400, no read
+  assert.equal((await fetch(`${url}/api/v1/anchor-roots/case-007/missing`, { headers: AUTH })).status, 404);
+  assert.equal((await fetch(`${url}/api/v1/anchor-roots/shared/b1`, { headers: AUTH })).status, 400);
+  assert.equal((await fetch(`${url}/api/v1/anchor-roots/CASE-3f2a/b1`, { headers: AUTH })).status, 400);
+  assert.equal(evaluates.length, 2);
+});
+
+test('POST /internal/anchor-root commits the root on coc-main (anchoring) or the case channel (parallel-anchored)', async (t) => {
+  const post = (url, body) => fetch(`${url}/internal/anchor-root`, {
+    method: 'POST', headers: { ...AUTH, 'content-type': 'application/json' }, body: JSON.stringify(body),
+  });
+  const root = 'a'.repeat(64);
+
+  const anchoring = fakeDeps({ variant: 'anchoring' });
+  const a = await listen(createApp(anchoring.deps));
+  t.after(() => a.server.close());
+  const ra = await post(a.url, { batchId: 'shared-e1-b000000', merkleRoot: root, meta: { scopeId: 'shared', leafCount: 50 } });
+  assert.equal(ra.status, 201);
+  assert.deepEqual(await ra.json(), { txId: 'tx-abc' });
+  assert.deepEqual(anchoring.submits, [{ channel: 'coc-main', fn: 'CommitAnchorRoot',
+    args: ['shared-e1-b000000', root, '{"scopeId":"shared","leafCount":50}'] }]);
+
+  const pa = fakeDeps({ variant: 'parallel-anchored' });
+  const p = await listen(createApp(pa.deps));
+  t.after(() => p.server.close());
+  const meta = { scopeId: 'case-012', leafCount: 50, caseId: 'case-012' };
+  assert.equal((await post(p.url, { batchId: 'case-012-e1-b000003', merkleRoot: root, meta })).status, 201);
+  assert.deepEqual(pa.submits, [{ channel: 'case-012', fn: 'CommitAnchorRoot',
+    args: ['case-012-e1-b000003', root, JSON.stringify(meta)] }]);
+  // a root without a case-NNN caseId never falls through to another channel
+  assert.equal((await post(p.url, { batchId: 'b1', merkleRoot: root, meta: { scopeId: 'shared', leafCount: 1 } })).status, 400);
+  assert.equal((await post(p.url, { batchId: 'b1', merkleRoot: root, meta: { caseId: 'CASE-3f2a', leafCount: 1 } })).status, 400);
+  assert.equal(pa.submits.length, 1);
+
+  // the direct variants anchor nothing
+  const std = fakeDeps({ variant: 'standard' });
+  const s = await listen(createApp(std.deps));
+  t.after(() => s.server.close());
+  assert.equal((await post(s.url, { batchId: 'b1', merkleRoot: root, meta: {} })).status, 404);
+  assert.equal(std.submits.length, 0);
+});
+
+test('GET /internal/anchor-root (parallel-anchored) reads the root from the case channel', async (t) => {
+  const { deps, evaluates } = fakeDeps({ variant: 'parallel-anchored' });
+  const { server, url } = await listen(createApp(deps));
+  t.after(() => server.close());
+  const r = await fetch(`${url}/internal/anchor-root/case-003/case-003-e1-b000000`, { headers: AUTH });
+  assert.equal(r.status, 200);
+  assert.equal((await r.json()).merkleRoot, 'root-hex');
+  assert.deepEqual(evaluates, [{ channel: 'case-003', fn: 'ReadAnchorRoot', args: ['case-003', 'case-003-e1-b000000'] }]);
 });

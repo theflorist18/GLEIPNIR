@@ -2,7 +2,7 @@
 # gateway (3000), frontend (8081), case-registry (4005) and evidence-store
 # (4006) run for every variant. The batcher (4001), receipt-store (4002) and
 # verification (4004) run under the `anchoring` and `parallel-anchored`
-# profiles; anchor-client (4003) only under `parallel-anchored`.
+# profiles.
 # Crypto is mounted read-only from ../organizations. gleipnir-net is declared in
 # compose-net.yaml (the three files are always merged).
 
@@ -11,9 +11,9 @@ volumes:
   gateway-auth-data:
   case-registry-data:
   evidence-blob-data:
-  # RQ2 per-request verify-step timings (fetch/recompute/compare), written by
-  # the verification service; the orchestrator (experiment.py) resets it per
-  # run and collect.py reads it after.
+  # Per-request verify-step timings (fetch/recompute/compare), written by the
+  # verification service; the orchestrator (experiment.py) resets it per run
+  # and collect.py reads it after.
   verify-metrics:
 
 services:
@@ -27,11 +27,10 @@ services:
       - GLEIPNIR_TOKEN=${GLEIPNIR_TOKEN:-dev-token}
       - BATCHER_URL=http://merkle-batcher:4001
       - VERIFICATION_URL=http://verification:4004
-      # M26 off-chain reads (anchored variants) + anchor-root reads; both
-      # services only exist under their profiles, so on standard/parallel these
-      # URLs are never dialled.
+      # Off-chain trail reads of the anchored variants; the receipt store only
+      # exists under their profiles, so on standard/parallel this URL is never
+      # dialled.
       - RECEIPT_STORE_URL=http://receipt-store:4002
-      - ANCHOR_CLIENT_URL=http://anchor-client:4003
       - PEER_ENDPOINT=peer0-org1:7051
       - PEER_HOST_ALIAS=peer0.org1.example.com
       - MSP_ID=Org1MSP
@@ -39,7 +38,7 @@ services:
       - TLS_CERT_PATH=/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt
       - DEFAULT_CHANNEL=coc-main
       - CC_NAME=evidence
-      # Evidence library (M12–M15): user auth store + internal service links.
+      # Evidence library: user auth store + internal service links.
       - AUTH_DATA_DIR=/data/auth
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin-dev-password}
@@ -63,7 +62,7 @@ services:
       - PORT=4005
       - DATA_DIR=/data
       - GLEIPNIR_INTERNAL_TOKEN=${GLEIPNIR_INTERNAL_TOKEN:-internal-dev-token}
-    # Not host-published (S2). CONTRACTS §6 declares this internal-only; the
+    # Not host-published. CONTRACTS §6 declares this internal-only; the
     # gateway reaches it over gleipnir-net as http://case-registry:4005. Its
     # only guard is the shared internal token, so exposing it on the host would
     # put a full bypass of the gateway's ACL layer one committed header away.
@@ -80,7 +79,7 @@ services:
       - DATA_DIR=/data
       - GLEIPNIR_INTERNAL_TOKEN=${GLEIPNIR_INTERNAL_TOKEN:-internal-dev-token}
       - MAX_UPLOAD_BYTES=${MAX_UPLOAD_BYTES:-26214400}
-    # Not host-published (S2). Internal-only per CONTRACTS §6; the gateway uses
+    # Not host-published. Internal-only per CONTRACTS §6; the gateway uses
     # http://evidence-store:4006 over gleipnir-net. Host exposure would let
     # anyone with the committed internal token read or DELETE evidence blobs.
     volumes:
@@ -105,25 +104,27 @@ services:
       - PORT=4001
       - VARIANT=${VARIANT:-anchoring}
       # ONE batch-size grid for Anchoring (N) and Parallel-Anchored (K);
-      # experiment.py sets both per run. BATCH_FLUSH_MS=0 = size-only batching
-      # (a timeout, when set, is held constant across runs).
+      # experiment.py sets the size and both timers per run. BATCH_FLUSH_MS
+      # (age: after a batch's first event) and BATCH_IDLE_MS (idle: after its
+      # last event) at 0 = size-only batching.
       - BATCH_SIZE=${BATCH_SIZE:-100}
       - BATCH_FLUSH_MS=${BATCH_FLUSH_MS:-0}
+      - BATCH_IDLE_MS=${BATCH_IDLE_MS:-0}
       # Namespaces batchIds per run so recreates against a persistent
-      # ledger never reuse a committed (scope,batchId) key (audit F44).
+      # ledger never reuse a committed (scope,batchId) key.
       - BATCH_EPOCH=${BATCH_EPOCH:-}
       - RECEIPT_STORE_URL=http://receipt-store:4002
       - GATEWAY_URL=http://gateway:3000
-      - ANCHOR_CLIENT_URL=http://anchor-client:4003
-      # The gateway bearer-auths /internal/anchor-root (audit F23).
+      # The gateway bearer-auths /internal/anchor-root, the root sink of both
+      # anchored variants.
       - GLEIPNIR_TOKEN=${GLEIPNIR_TOKEN:-dev-token}
-    # LOOPBACK ONLY (S3). The batcher has no auth, but the RQ2 verify workload
+    # LOOPBACK ONLY. The batcher has no auth, but the verify workload
     # (benchmark/workload/verify.js) POSTs /flush to localhost:4001 FROM THE
     # HOST, so the port cannot simply be removed — that would silently break
-    # RQ2 (the flush call swallows errors). 127.0.0.1 keeps Caliper's access
-    # while removing LAN and cross-container reach. Do NOT add auth to the
-    # batcher: it is the frozen benchmark write path and verify.js calls it
-    # unauthenticated.
+    # the verification-latency rounds (the flush call swallows errors).
+    # 127.0.0.1 keeps Caliper's access while removing LAN and cross-container
+    # reach. Do NOT add auth to the batcher: it is the benchmark write path and
+    # verify.js calls it unauthenticated.
     ports:
       - "127.0.0.1:4001:4001"
     networks: [gleipnir-net]
@@ -136,11 +137,12 @@ services:
     environment:
       - PORT=4002
       - DATA_DIR=/data
-    # Not host-published (S2). Reached over gleipnir-net as
+    # Not host-published. Reached over gleipnir-net as
     # http://receipt-store:4002 by the batcher and verification service.
-    # NOTE: this is NOT hardening the receipt store (a banned change) — no auth,
-    # hash chain or signature is added; the store stays fully writable on the
-    # docker network. It only removes the extra LAN attack surface.
+    # NOTE: this does NOT harden the receipt store, which stays deliberately
+    # un-hardened (its weaker guarantee is part of what the benchmark measures):
+    # no auth, hash chain or signature is added; the store stays fully writable
+    # on the docker network. It only removes the extra LAN attack surface.
     volumes:
       - receipt-data:/data
     networks: [gleipnir-net]
@@ -154,37 +156,16 @@ services:
       - PORT=4004
       - VARIANT=${VARIANT:-anchoring}
       - RECEIPT_STORE_URL=http://receipt-store:4002
+      # Roots of both anchored variants are read through the gateway's
+      # bearer-authed /internal/anchor-root.
       - GATEWAY_URL=http://gateway:3000
-      - ANCHOR_CLIENT_URL=http://anchor-client:4003
       - GLEIPNIR_TOKEN=${GLEIPNIR_TOKEN:-dev-token}
-      # RQ2: append one JSON line per verify with the fetch/recompute/compare
-      # step breakdown, OFF the timed path. collect.py summarises it per run.
+      # Append one JSON line per verify with the fetch/recompute/compare step
+      # breakdown, OFF the timed path. collect.py summarises it per run.
       - VERIFY_METRICS_PATH=/verify-metrics/verify.jsonl
-    # Not host-published (S2). Reached over gleipnir-net; the gateway proxies
+    # Not host-published. Reached over gleipnir-net; the gateway proxies
     # verification via GET /api/v1/evidence/:id/verify, so the host never needs
     # 4004 directly.
     volumes:
       - verify-metrics:/verify-metrics
-    networks: [gleipnir-net]
-
-  anchor-client:
-    container_name: gleipnir-anchor-client
-    profiles: ["parallel-anchored"]
-    build:
-      context: ../../services/anchor-client
-    environment:
-      - PORT=4003
-      - PEER_ENDPOINT=peer0-anchor:11051
-      - PEER_HOST_ALIAS=peer0.anchor.example.com
-      - MSP_ID=AnchorClientMSP
-      - CRYPTO_PATH=/organizations/peerOrganizations/anchor.example.com/users/anchorclient@anchor.example.com/msp
-      - TLS_CERT_PATH=/organizations/peerOrganizations/anchor.example.com/peers/peer0.anchor.example.com/tls/ca.crt
-      - ANCHOR_CHANNEL=anchor-main
-      - CC_NAME=evidence
-    # Not host-published (S2). Reached over gleipnir-net as
-    # http://anchor-client:4003 by the batcher and verification service. This is
-    # the only holder of the AnchorClientMSP identity (a held-constant thesis
-    # control); host exposure let anyone commit arbitrary roots on anchor-main.
-    volumes:
-      - ../organizations:/organizations:ro
     networks: [gleipnir-net]

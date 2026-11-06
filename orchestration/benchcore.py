@@ -107,7 +107,6 @@ def stack_up_script():
             "case \"$V\" in anchoring) P=(--profile anchoring);; parallel-anchored) P=(--profile parallel-anchored);; "
             "esac && compose \"${P[@]}\" up -d --no-build && wait_healthz 9443 orderer0 && "
             "wait_healthz 9446 peer0-org1 && wait_healthz 9447 peer0-org2 && "
-            "{ [ \"$V\" != parallel-anchored ] || wait_healthz 9448 peer0-anchor; } && "
             "curl -sf --retry 30 --retry-delay 2 --retry-all-errors localhost:3000/healthz >/dev/null && "
             "echo \"@@stack-up $V\"")
 
@@ -226,7 +225,8 @@ FIELDS = {
     "workload.mix.dispose_fraction": ("fraction of evidence disposed (0–1)", "float"),
     "workload.payload_bytes": ("evidence file size (B) — off-chain; only its hash goes on-chain", "int"),
     "workload.audit_cases": ("cases reconstructed for audit time (n)", "int"),
-    "anchoring.flush_timeout_ms": ("batcher flush timeout (ms, 0 = size-only)", "int"),
+    "anchoring.flush_timeout_ms": ("batcher age timer (ms, 0 = off)", "int"),
+    "anchoring.idle_timeout_ms": ("batcher idle timer (ms, 0 = off)", "int"),
     "monitor.interval_s": ("CPU/memory monitor interval (s)", "int"),
     "regimes.steady.min_events_per_channel": ("steady floor (write events per channel) — methodology rule", "int"),
     "baseline.send_rate_tps": ("send rate (tx/s) — from E0", "int"),
@@ -239,7 +239,9 @@ FIELDS = {
     "regimes.smoke.logs_per_case_max": ("smoke logs per case, max (n)", "int"),
     "regimes.smoke.send_rate_tps": ("smoke send rate (tx/s)", "int"),
     "ramp.events_per_case_per_round": ("ramp events per case per send rate (n)", "int"),
-    "send_rates_tps": ("send-rate grid (tx/s) — ramp + E3a", "list"),
+    "send_rates_tps": ("send-rate grid (tx/s) — ramp", "list"),
+    "e3a.send_rates_tps": ("E3a base ladder (tx/s) — then the climb", "list"),
+    "e3a.events_per_case_per_round": ("E3a events per case per send rate (n)", "int"),
     "batch_sizes": ("batch-size grid (events per batch)", "list"),
     "channel_counts": ("channel = case grid (n)", "list"),
     "case_counts": ("case grid (n, trimmed to ≤ max cases)", "list"),

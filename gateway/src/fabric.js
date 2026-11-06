@@ -1,10 +1,11 @@
 'use strict';
 
-// The only @hyperledger/fabric-gateway sessions to the application channels
-// (coc-main, case-*). One shared grpc client; a Network/Contract is created per
-// call (plain object construction, no RPC). Returns a {submit, evaluate} adapter that the
-// routes/variantRouter consume. The anchor channel is owned by the anchor-client
-// service, not here (docs/CONTRACTS.md §6).
+// The only @hyperledger/fabric-gateway sessions to the ledger: the application
+// channels (coc-main, case-*), which carry the event records of the direct
+// variants and the Merkle roots of the anchored ones. One shared grpc client; a
+// Network/Contract is created per call (plain object construction, no RPC).
+// Returns a {submit, evaluate} adapter that the routes/variantRouter consume
+// (docs/CONTRACTS.md §6).
 //
 // API pinned from docs/research/fabric-2.5.md §7 (fabric-gateway 1.11.0). This
 // module is loaded only at server start; tests inject a fake adapter instead.

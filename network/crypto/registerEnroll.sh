@@ -2,14 +2,12 @@
 #
 # GLEIPNIR crypto material via Fabric CA 1.5.19 enrollment (no cryptogen).
 # Produces network/organizations/{peerOrganizations,ordererOrganizations}/... in
-# the standard Fabric layout with NodeOUs, for FOUR orgs:
+# the standard Fabric layout with NodeOUs, for THREE orgs:
 #   org1  (Org1MSP)          peer0 + admin + User1
 #   org2  (Org2MSP)          peer0 + admin + User1
 #   orderer org (OrdererMSP) orderer0/1/2 + admin
-#   anchor (AnchorClientMSP) peer0 + admin + the fixed client id 'anchorclient'
-# The anchor org is only enrolled when ENABLE_ANCHOR_ORG=true (Parallel-Anchored).
 #
-# Prereq: `fabric-ca-client` (v1.5.x) on PATH and the four CAs already running
+# Prereq: `fabric-ca-client` (v1.5.x) on PATH and the three CAs already running
 # (network/compose/compose-ca.yaml). Follows the fabric-samples registerEnroll
 # idiom (docs/research/fabric-samples-patterns.md §2).
 #
@@ -21,12 +19,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NET_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 ORG_DIR="${NET_DIR}/organizations"
 FABRIC_CA_DIR="${ORG_DIR}/fabric-ca"
-ENABLE_ANCHOR_ORG="${ENABLE_ANCHOR_ORG:-false}"
 
 # CA endpoints (host ports per docs/CONTRACTS.md §1).
 CA_ORG1_PORT=7054
 CA_ORG2_PORT=8054
-CA_ANCHOR_PORT=9054
 CA_ORDERER_PORT=10054
 CA_HOST="${CA_HOST:-localhost}"
 
@@ -92,11 +88,11 @@ enroll_node() {
 }
 
 # ---------------------------------------------------------------------------
-# Peer organisation: org1 / org2 / anchor
-# args: <org-shortname> <MSPID> <ca-name> <ca-port> <peer-host> [extra-client-id]
+# Peer organisation: org1 / org2
+# args: <org-shortname> <MSPID> <ca-name> <ca-port> <peer-host>
 # ---------------------------------------------------------------------------
 create_peer_org() {
-  local org="$1" mspid="$2" caname="$3" caport="$4" peerhost="$5" extra_client="${6:-}"
+  local org="$1" mspid="$2" caname="$3" caport="$4" peerhost="$5"
   local domain="${org}.example.com"
   local org_root="${ORG_DIR}/peerOrganizations/${domain}"
   mkdir -p "${org_root}"
@@ -108,9 +104,6 @@ create_peer_org() {
   fcc register --id.name "${org}-peer0" --id.secret peer0pw --id.type peer
   fcc register --id.name "${org}-admin" --id.secret adminpw --id.type admin
   fcc register --id.name "${org}-user1" --id.secret user1pw --id.type client
-  if [ -n "${extra_client}" ]; then
-    fcc register --id.name "${extra_client}" --id.secret "${extra_client}pw" --id.type client
-  fi
 
   # --- org-level MSP (used by configtx) ---
   mkdir -p "${org_root}/msp"
@@ -140,14 +133,6 @@ create_peer_org() {
   fcc enroll -u "https://${org}-user1:user1pw@${CA_HOST}:${caport}" -M "${org_root}/users/User1@${domain}/msp"
   cp "${org_root}/msp/config.yaml" "${org_root}/users/User1@${domain}/msp/config.yaml"
   normalize_client_key "${org_root}/users/User1@${domain}/msp"
-
-  # Fixed anchor-client identity (only for the anchor org).
-  if [ -n "${extra_client}" ]; then
-    fcc enroll -u "https://${extra_client}:${extra_client}pw@${CA_HOST}:${caport}" \
-      -M "${org_root}/users/${extra_client}@${domain}/msp"
-    cp "${org_root}/msp/config.yaml" "${org_root}/users/${extra_client}@${domain}/msp/config.yaml"
-    normalize_client_key "${org_root}/users/${extra_client}@${domain}/msp"
-  fi
   echo "==> [${org}] done (${mspid})"
 }
 
@@ -195,21 +180,9 @@ create_orderer_org() {
 
 main() {
   mkdir -p "${ORG_DIR}"
-  if [ "${1:-}" = "anchor-only" ]; then
-    # up.sh --skip-crypto on Parallel-Anchored when the rest of the crypto exists but the
-    # anchor org was never enrolled (the stack was first brought up as another variant).
-    create_peer_org anchor AnchorClientMSP ca-anchor "${CA_ANCHOR_PORT}" peer0.anchor.example.com anchorclient
-    echo "Anchor-org crypto generated under ${ORG_DIR} (other orgs untouched)"
-    return
-  fi
   create_orderer_org
   create_peer_org org1 Org1MSP ca-org1 "${CA_ORG1_PORT}" peer0.org1.example.com
   create_peer_org org2 Org2MSP ca-org2 "${CA_ORG2_PORT}" peer0.org2.example.com
-  if [ "${ENABLE_ANCHOR_ORG}" = "true" ]; then
-    create_peer_org anchor AnchorClientMSP ca-anchor "${CA_ANCHOR_PORT}" peer0.anchor.example.com anchorclient
-  else
-    echo "==> [anchor] skipped (ENABLE_ANCHOR_ORG != true)"
-  fi
   echo "All crypto material generated under ${ORG_DIR}"
 }
 

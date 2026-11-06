@@ -1,5 +1,5 @@
 # GLEIPNIR Fabric CA 1.5.19 servers — one per org (docs/CONTRACTS.md §1, §12).
-# ca-org1 7054, ca-org2 8054, ca-anchor 9054 (parallel-anchored profile), ca-orderer 10054.
+# ca-org1 7054, ca-org2 8054, ca-orderer 10054.
 # Brought up first; network/crypto/registerEnroll.sh enrolls against them.
 # gleipnir-net is declared in compose-net.yaml (the three files are always merged).
 
@@ -45,17 +45,3 @@ services:
       - "10054:10054"
     volumes:
       - ../organizations/fabric-ca/ca-orderer:/etc/hyperledger/fabric-ca-server
-
-  # Anchor org CA — only started for the Parallel-Anchored variant.
-  ca-anchor:
-    <<: *ca
-    container_name: ca-anchor
-    profiles: ["parallel-anchored"]
-    environment:
-      - FABRIC_CA_SERVER_CA_NAME=ca-anchor
-      - FABRIC_CA_SERVER_TLS_ENABLED=true
-      - FABRIC_CA_SERVER_PORT=9054
-    ports:
-      - "9054:9054"
-    volumes:
-      - ../organizations/fabric-ca/ca-anchor:/etc/hyperledger/fabric-ca-server

@@ -174,21 +174,20 @@ test('with no metricsPath (default) nothing is written and verify still works', 
   assert.equal((await fetch(`${url}/verify/evt-1`)).status, 200); // no throw despite no metrics sink
 });
 
-test('parallel-anchored path reads the anchor-client, not the gateway', async (t) => {
+test('parallel-anchored path reads the case root through the gateway, bearer-authed', async (t) => {
   const rstore = await receiptStore(new Map([['evt-1', goodReceipt('case-001')]]));
-  let anchorHits = 0;
-  const anchor = await startServer((req, res) => {
-    anchorHits += 1;
-    assert.match(req.url, /^\/roots\/case-001\/case-001-b000000$/);
+  const hits = [];
+  const gw = await startServer((req, res) => {
+    hits.push({ url: req.url, auth: req.headers.authorization });
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ merkleRoot: V2.ROOT }));
   });
-  const url = await boot(t, { variant: 'parallel-anchored', receiptStoreUrl: rstore.url, anchorClientUrl: anchor.url }, rstore, anchor);
+  const url = await boot(t, { variant: 'parallel-anchored', receiptStoreUrl: rstore.url, gatewayUrl: gw.url, token: 'tok' }, rstore, gw);
 
   const resp = await fetch(`${url}/verify/evt-1`);
   assert.equal(resp.status, 200);
   assert.equal((await resp.json()).ok, true);
-  assert.equal(anchorHits, 1);
+  assert.deepEqual(hits, [{ url: '/internal/anchor-root/case-001/case-001-b000000', auth: 'Bearer tok' }]);
 });
 
 // ---- leaf recomputed from the event copy ----

@@ -33,7 +33,6 @@ function loadConfig() {
     variant: process.env.VARIANT || 'anchoring',
     receiptStoreUrl: process.env.RECEIPT_STORE_URL || 'http://receipt-store:4002',
     gatewayUrl: process.env.GATEWAY_URL || 'http://gateway:3000',
-    anchorClientUrl: process.env.ANCHOR_CLIENT_URL || 'http://anchor-client:4003',
     token: process.env.GLEIPNIR_TOKEN || 'dev-token',
     logLevel: process.env.LOG_LEVEL || 'info',
     // Where to append the per-request step breakdown. Empty (the default)
@@ -51,14 +50,13 @@ function createApp(overrides) {
   const cfg = { ...loadConfig(), ...(overrides || {}) };
   const log = (...a) => { if (cfg.logLevel !== 'silent') console.log('[verification]', ...a); };
 
-  // Read the anchored root record for (scopeId, batchId). Anchoring reads it
-  // through the gateway's internal endpoint (bearer-authed); Parallel-Anchored
-  // reads it from the anchor-client. Returns the merkleRoot string.
+  // Read the anchored root record for (scopeId, batchId) through the gateway's
+  // bearer-authed internal endpoint, which reads it from the channel holding
+  // that scope (coc-main for `shared`, the case's own channel for a case).
+  // Returns the merkleRoot string, or null when no root exists.
   async function readAnchoredRoot(scopeId, batchId) {
     const key = `${encodeURIComponent(scopeId)}/${encodeURIComponent(batchId)}`;
-    const resp = cfg.variant === 'parallel-anchored'
-      ? await fetch(`${cfg.anchorClientUrl}/roots/${key}`)
-      : await fetch(`${cfg.gatewayUrl}/internal/anchor-root/${key}`, { headers: { authorization: `Bearer ${cfg.token}` } });
+    const resp = await fetch(`${cfg.gatewayUrl}/internal/anchor-root/${key}`, { headers: { authorization: `Bearer ${cfg.token}` } });
     if (resp.status === 404) return null;
     if (!resp.ok) throw new Error(`anchor root read ${resp.url} -> ${resp.status}`);
     return (await resp.json()).merkleRoot;

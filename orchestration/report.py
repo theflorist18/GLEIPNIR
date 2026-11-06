@@ -3,7 +3,7 @@
 repetitions) and optional matplotlib charts per experiment (docs/methodology/experiments.md §3),
 plus a per-round CSV export for Excel of EVERY experiment.
 
-  report.py --exp e0|ramp|e1|e2|e3a|e3b|ops|cell [--out docs/results/<exp>] [--results <dir>]
+  report.py --exp e0|ramp|e1|e2|e3a|e3b|e3c|ops|sens|cell [--out docs/results/<exp>] [--results <dir>]
             [--no-charts] [--decimal-comma]
 
 Always: benchmark/results/<exp>/<exp>-results.csv — one row per (run, round), every
@@ -12,14 +12,18 @@ header (column order: send rate, throughput, latency
 min/max/avg/p95, CPU, memory, success, failure, failure rate). UTF-8 with BOM so
 Excel opens it directly; --decimal-comma writes `;`-separated, comma-decimal CSV for
 an Excel whose regional settings use a decimal comma (e.g. Indonesian). The
-aggregated tables and charts below exist for e1|e2|e3a|e3b|ops only.
+aggregated tables and charts below exist for e1|e2|e3a|e3b|e3c|ops|sens only
+(no charts for ops and sens).
 
 Loads every `status: complete` manifest under benchmark/results/<exp>/ and groups
 runs by (variant, X): E1 X = batch size (Standard/Parallel reference runs -> dashed
 horizontal lines), E2 X = channels, E3a X = send rate (one data point per ROUND;
-y = x reference; saturation = first send rate where mean throughput < 0.9 x send
-rate; latency knee = first rate where p95 >= 2 x p95 at the lowest rate), E3b X =
-cases, ops -> two tables (writes, reads) keyed by round label.
+y = x reference; e3a_verdict: saturation = first send rate where the mean finalized
+throughput < e3a.saturation_ratio x send rate, unless the measured send rate fell below
+e3a.generator_ratio x send rate at that rate or earlier — the load-generator limit; the
+ratios are the climb's own (results/e3a/e3a-climb.json, else sweeps.yaml); latency knee = first
+rate where p95 >= 2 x p95 at the lowest rate), E3b and E3c X = cases, sens X = the
+sensitivity cell, ops -> two tables (writes, reads) keyed by round label.
 
 Run-level numbers are means over the run's rounds (p95 = mean of per-round p95;
 the per-transaction p95 of each round is in the manifest). Charts are skipped with a
@@ -35,10 +39,11 @@ import sys
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RESULTS_DIR = os.path.join(REPO_ROOT, "benchmark", "results")
-EXPS = ["e1", "e2", "e3a", "e3b", "ops"]              # aggregated tables + charts
-EXPORT_EXPS = ["e0", "ramp", *EXPS, "cell"]            # per-round CSV export
+EXPS = ["e1", "e2", "e3a", "e3b", "ops"]              # the aggregated tables + charts of campaigns 1-5
+TABLE_EXPS = [*EXPS, "e3c", "sens"]                    # every experiment with aggregated tables (charts: numeric X)
+EXPORT_EXPS = ["e0", "ramp", *TABLE_EXPS, "cell"]      # per-round CSV export
 VARIANT_ORDER = ["standard", "anchoring", "parallel", "parallel-anchored"]
-SATURATION_RATIO = 0.9
+SATURATION_RATIO = 0.9        # ramp rule; E3a takes its ratios from sweeps.yaml e3a
 RAMP_MARGIN = 0.5             # suggested send rate <= this x the saturation point (a margin below the knee)
 # Baseline-selection thresholds (documented defaults) — docs/methodology/experiments.md §4.1/§4.2.
 PLATEAU_REL = 0.05            # §4.1 throughput AND on-chain bytes/event change to the next level <= 5 %
@@ -49,7 +54,7 @@ HEALTHY_CPU_FRAC = 0.9        # §4.2 summed container CPU <= 0.9 x cores x 100 
 WRITE_OPS = ("create", "transfer", "access", "dispose")
 READ_OPS = ("read-evidence", "read-trail", "verify-event")
 X_LABEL = {"e1": "batch size (events)", "e2": "channels (n)", "e3a": "send rate (tx/s)", "e3b": "cases (n)",
-           "ops": "operation"}
+           "e3c": "cases (n)", "ops": "operation", "sens": "sensitivity cell"}
 FAILURE_CLASSES = ("MVCC_READ_CONFLICT", "ENDORSEMENT_POLICY_FAILURE", "TIMEOUT", "HTTP_4XX", "HTTP_5XX", "OTHER")
 
 # (key, header with unit, decimals) — column order of the result tables:
@@ -71,7 +76,20 @@ METRICS = [
     ("auditSPerCase", "audit time per case (s)", 3),
     ("anchoringDelayS", "anchoring delay (s)", 3),
 ]
-CHART_METRICS = [k for k, _, _ in METRICS if k not in ("sendRateTps", "latencyMinS", "latencyMaxS", "succ", "fail")]
+# Integrity finalization (collect.py finalization_metrics: submission -> the event's own commit on
+# Standard/Parallel, -> its batch's root commit on the anchored variants, the one latency all four
+# share), the measured send rate and the audit time per event. Kept apart from METRICS, so every
+# table and reader built on METRICS keeps its columns: they are written after all of them.
+EXTRA_METRICS = [
+    ("sendRateMeasuredTps", "measured send rate (tx/s)", 1),
+    ("finalizedTps", "finalized throughput (TPS)", 1),
+    ("finalizationAvgS", "finalization latency avg (s)", 3),
+    ("finalizationP95S", "finalization latency p95 (s)", 3),
+    ("auditMsPerEvent", "audit time per event (ms)", 3),
+]
+ALL_METRICS = METRICS + EXTRA_METRICS
+CHART_METRICS = [k for k, _, _ in ALL_METRICS
+                 if k not in ("sendRateTps", "latencyMinS", "latencyMaxS", "succ", "fail", "sendRateMeasuredTps")]
 LATENCY_KEYS = ("latencyMinS", "latencyMaxS", "latencyAvgS", "latencyP95S")
 
 
@@ -99,8 +117,11 @@ def round_metrics(m, r):
     groups = ((r.get("resources") or {}).get("groups") or {}).get("all") or {}
     st = m.get("storage") or {}
     reg = st.get("bytesPerEventRegression") or {}
-    au = ((m.get("audit") or {}).get("summary") or {}).get("msPerCase") or {}
+    summary = (m.get("audit") or {}).get("summary") or {}
+    au = summary.get("msPerCase") or {}
     an = ((m.get("anchoring") or {}).get("delay") or {})
+    fin = r.get("finalization")
+    fin_lat = (fin or {}).get("latencyMs") or {}
     succ, fail = r.get("succ", 0), r.get("fail", 0)
     return {
         "sendRateTps": r.get("sendRateTps"),
@@ -116,12 +137,19 @@ def round_metrics(m, r):
         "offChainBytesPerEvent": st.get("offChainBytesPerEvent"),
         "auditSPerCase": au["mean"] / 1000.0 if isinstance(au.get("mean"), (int, float)) else None,
         "anchoringDelayS": an.get("meanS"),
+        "sendRateMeasuredTps": tl.get("sendRateMeasuredTps"),
+        # A round collected with finalization records but none finalized finalized nothing: 0, not
+        # missing. Rounds collected before those records existed have no value (None).
+        "finalizedTps": (fin.get("finalizedTps") or 0.0) if fin else None,
+        "finalizationAvgS": fin_lat["mean"] / 1000.0 if isinstance(fin_lat.get("mean"), (int, float)) else None,
+        "finalizationP95S": fin_lat["p95"] / 1000.0 if isinstance(fin_lat.get("p95"), (int, float)) else None,
+        "auditMsPerEvent": summary.get("msPerEvent"),
     }
 
 
 def run_metrics(m):
     per = [round_metrics(m, r) for r in m["rounds"]]
-    out = {k: mean(p[k] for p in per) for k, _, _ in METRICS}
+    out = {k: mean(p[k] for p in per) for k, _, _ in ALL_METRICS}
     out["succ"] = sum(p["succ"] for p in per)
     out["fail"] = sum(p["fail"] for p in per)
     tot = out["succ"] + out["fail"]
@@ -146,7 +174,8 @@ def data_points(exp, manifests):
             for r in m["rounds"]:
                 pts.append((v, r["label"], ref, round_metrics(m, r)))
         else:
-            x = {"e1": lv.get("batchSize"), "e2": lv.get("channels"), "e3b": lv.get("cases")}[exp]
+            x = {"e1": lv.get("batchSize"), "e2": lv.get("channels"), "e3b": lv.get("cases"),
+                 "e3c": lv.get("cases"), "sens": m.get("cell")}[exp]
             pts.append((v, x, ref, run_metrics(m)))
     return pts
 
@@ -159,7 +188,7 @@ def aggregate(points):
     rows = []
     for (v, x, ref), mets in sorted(groups.items(), key=lambda kv: (VARIANT_ORDER.index(kv[0][0]), _sort_x(kv[0][1]), kv[0][2])):
         agg = {}
-        for k, _, _ in METRICS:
+        for k, _, _ in ALL_METRICS:
             vals = [mm[k] for mm in mets if isinstance(mm.get(k), (int, float))]
             agg[k] = (mean(vals), statistics.stdev(vals) if len(vals) > 1 else 0.0, len(vals)) if vals else (None, 0.0, 0)
         rows.append({"variant": v, "x": x, "reference": ref, "n": len(mets), "metrics": agg})
@@ -185,7 +214,8 @@ def x_cell(r):
 
 # Metrics measured once per RUN, not per round: in the per-round tables (e3a,
 # ops) the same run-level value repeats on every row, so the table says so.
-RUN_LEVEL_METRICS = ("onChainBytesPerEvent", "offChainBytesPerEvent", "auditSPerCase", "anchoringDelayS")
+RUN_LEVEL_METRICS = ("onChainBytesPerEvent", "offChainBytesPerEvent", "auditSPerCase", "anchoringDelayS",
+                     "auditMsPerEvent")
 
 
 def csv_writer(fh, decimal_comma):
@@ -217,28 +247,36 @@ def write_tables(exp, rows, out_dir, name, x_label, flags=None, per_round=False,
     metrics = [m for m in METRICS if not (exp == "e3a" and m[0] == "sendRateTps")]
     headers = ["variant", x_label, "reps (n)"] + [h for _, h, _ in metrics] + (["flag"] if flags else [])
     csv_path, md_path = os.path.join(out_dir, f"{name}.csv"), os.path.join(out_dir, f"{name}.md")
+    def means_sds(r, ms):
+        return ([num(r["metrics"][k][0], d, decimal_comma) for k, _, d in ms],
+                [num(r["metrics"][k][1] if r["metrics"][k][0] is not None else None, d, decimal_comma)
+                 for k, _, d in ms])
+
     with open(csv_path, "w", encoding="utf-8-sig", newline="") as fh:
         w = csv_writer(fh, decimal_comma)
-        w.writerow(headers + [f"{h} SD" for _, h, _ in metrics])
+        # The EXTRA_METRICS go last (means, then SDs), so the older columns keep their positions.
+        w.writerow(headers + [f"{h} SD" for _, h, _ in metrics]
+                   + [h for _, h, _ in EXTRA_METRICS] + [f"{h} SD" for _, h, _ in EXTRA_METRICS])
         for r in rows:
             base = [r["variant"] + (" (reference)" if r["reference"] else ""), num(r["x"], None, decimal_comma)
                     if r["x"] is not None else "ref", r["n"]]
-            means = [num(r["metrics"][k][0], d, decimal_comma) for k, _, d in metrics]
-            sds = [num(r["metrics"][k][1] if r["metrics"][k][0] is not None else None, d, decimal_comma)
-                   for k, _, d in metrics]
-            w.writerow(base + means + ([flags.get((r["variant"], r["x"]), "")] if flags else []) + sds)
+            means, sds = means_sds(r, metrics)
+            extra_means, extra_sds = means_sds(r, EXTRA_METRICS)
+            w.writerow(base + means + ([flags.get((r["variant"], r["x"]), "")] if flags else []) + sds
+                       + extra_means + extra_sds)
     # Markdown: one table per variant (X down the rows) and latency as ONE column, avg (min–max) + p95.
     md_metrics = [m for m in metrics if m[0] not in LATENCY_KEYS]
     lat_at = next(i for i, m in enumerate(md_metrics) if m[0] == "cpuPct")
     md_headers = [x_label, "reps (n)"] + [h for _, h, _ in md_metrics[:lat_at]] + \
-        ["latency (s): avg (min–max), p95"] + [h for _, h, _ in md_metrics[lat_at:]] + (["flag"] if flags else [])
+        ["latency (s): avg (min–max), p95"] + [h for _, h, _ in md_metrics[lat_at:]] + (["flag"] if flags else []) + \
+        [h for _, h, _ in EXTRA_METRICS]
     with open(md_path, "w", encoding="utf-8") as fh:
         fh.write(f"# {exp} — {name}\n\nmean ± SD over repetitions; throughput is successful-only; "
                  "latency avg/min/max are Caliper's, p95 from per-transaction logs (mean of per-round p95); "
                  "the latency column shows means only — the SDs are in the CSV.\n")
         if per_round:
             fh.write("\nOne row per round. "
-                     + ", ".join(h for k, h, _ in METRICS if k in RUN_LEVEL_METRICS)
+                     + ", ".join(h for k, h, _ in ALL_METRICS if k in RUN_LEVEL_METRICS)
                      + " are measured once per RUN, so the same value repeats on every row of a run — "
                        "they are not per-row measurements.\n")
         for v in VARIANT_ORDER:
@@ -253,6 +291,7 @@ def write_tables(exp, rows, out_dir, name, x_label, flags=None, per_round=False,
                 cells += [fmt(r["metrics"][k], d) for k, _, d in md_metrics[lat_at:]]
                 if flags:
                     cells.append(flags.get((r["variant"], r["x"]), ""))
+                cells += [fmt(r["metrics"][k], d) for k, _, d in EXTRA_METRICS]
                 fh.write("| " + " | ".join(cells) + " |\n")
     print(f"wrote {csv_path}\nwrote {md_path}")
 
@@ -317,12 +356,24 @@ EXPORT_COLUMNS = [
     ("audit cases (n)", lambda m, r, x: _get(m, "controls", "auditCases")),
     ("flush timeout (ms)", lambda m, r, x: _get(m, "controls", "flushTimeoutMs")),
     ("monitor interval (s)", lambda m, r, x: _get(m, "controls", "monitorIntervalS")),
-    ("CLI overrides", lambda m, r, x: json.dumps(m.get("overrides"), sort_keys=True) if m.get("overrides") else ""),
+    ("overrides (cell or sensitivity cell)", lambda m, r, x: json.dumps(m.get("overrides"), sort_keys=True)
+     if m.get("overrides") else ""),
     ("run id", lambda m, r, x: m.get("runId")),
     ("trace hash", lambda m, r, x: _get(m, "trace", "hash")),
     ("git commit", lambda m, r, x: _get(m, "provenance", "gitCommit")),
     ("started at (UTC)", lambda m, r, x: m.get("startedAt")),
     ("run wall time (s)", lambda m, r, x: m.get("wallSeconds")),
+    # Integrity finalization (collect.py finalization_metrics) and the controls added with it.
+    ("finalized throughput (TPS)", lambda m, r, x: x["finalizedTps"]),
+    ("finalization latency avg (s)", lambda m, r, x: x["finalizationAvgS"]),
+    ("finalization latency p95 (s)", lambda m, r, x: x["finalizationP95S"]),
+    ("finalized events (n)", lambda m, r, x: _get(r, "finalization", "finalized")),
+    ("events not finalized (n)", lambda m, r, x: _get(r, "finalization", "notFinalized")),
+    ("events paused between rounds (n)", lambda m, r, x: _get(r, "finalization", "pausedEvents")),
+    ("audit time per event (ms, per run)", lambda m, r, x: x["auditMsPerEvent"]),
+    ("idle timeout (ms)", lambda m, r, x: _get(m, "controls", "idleTimeoutMs")),
+    ("endorsement", lambda m, r, x: _get(m, "controls", "endorsement")),
+    ("sensitivity cell", lambda m, r, x: m.get("cell")),
 ]
 
 
@@ -360,15 +411,55 @@ def export_rounds(exp, results_dir=RESULTS_DIR, path=None, decimal_comma=False):
     return path
 
 
-def saturation_flags(rows):
-    """E3a: per variant, first send rate with throughput < 0.9 x rate; latency knee = p95 >= 2 x p95(lowest rate)."""
+def e3a_verdict(rows, saturation_ratio, generator_ratio):
+    """The E3a rule for ONE variant's aggregated rows (the reps' mean per send rate). Walking up the
+    send rates: a measured send rate below generator_ratio x configured means the load generator,
+    not the system, is the limit (stop); otherwise a throughput below saturation_ratio x configured
+    is saturation (stop). The throughput is the finalized throughput (finalizations while the load
+    is still being sent); runs collected before it existed fall back to Caliper's successful-only
+    throughput. Rates above the stop point are listed, never judged.
+    -> {saturatedAt, keptUpTo, generatorLimitAt, points}."""
+    out = {"saturatedAt": None, "keptUpTo": None, "generatorLimitAt": None, "points": []}
+    for r in sorted((r for r in rows if isinstance(r["x"], (int, float))), key=lambda r: r["x"]):
+        m = r["metrics"]
+        tps = m["finalizedTps"][0] if m["finalizedTps"][0] is not None else m["throughputTps"][0]
+        measured = m["sendRateMeasuredTps"][0]
+        out["points"].append({"sendRateTps": r["x"], "throughputTps": tps, "sendRateMeasuredTps": measured,
+                              "reps": r["n"]})
+        if out["saturatedAt"] is not None or out["generatorLimitAt"] is not None:
+            continue
+        if measured is not None and measured < generator_ratio * r["x"]:
+            out["generatorLimitAt"] = r["x"]
+        elif tps is None or tps < saturation_ratio * r["x"]:
+            out["saturatedAt"] = r["x"]
+        else:
+            out["keptUpTo"] = r["x"]
+    return out
+
+
+def e3a_ratios(results_dir=RESULTS_DIR):
+    """(saturation_ratio, generator_ratio) the climb judged these results with: the rule
+    experiment.py wrote into <results>/e3a/e3a-climb.json (it ran with --sweeps FILE, maybe not
+    the default); results without one (no climb ran) take sweeps.yaml's e3a block."""
+    try:
+        with open(os.path.join(results_dir, "e3a", "e3a-climb.json"), encoding="utf-8") as fh:
+            e = json.load(fh)["rule"]
+    except (OSError, ValueError, KeyError):
+        import rounds   # here, not at the top: no other report needs sweeps.yaml (or PyYAML)
+        e = rounds.load_sweeps()["e3a"]
+    return e["saturation_ratio"], e["generator_ratio"]
+
+
+def saturation_flags(rows, results_dir=RESULTS_DIR):
+    """E3a: per variant, the e3a_verdict of its rows; latency knee = p95 >= 2 x p95(lowest rate)."""
+    sat_ratio, gen_ratio = e3a_ratios(results_dir)
     flags, summary = {}, {}
     for v in VARIANT_ORDER:
         vr = [r for r in rows if r["variant"] == v and isinstance(r["x"], (int, float))]
         if not vr:
             continue
-        sat = next((r["x"] for r in vr if r["metrics"]["throughputTps"][0] is not None
-                    and r["metrics"]["throughputTps"][0] < SATURATION_RATIO * r["x"]), None)
+        verdict = e3a_verdict(vr, sat_ratio, gen_ratio)
+        sat, gen = verdict["saturatedAt"], verdict["generatorLimitAt"]
         p95_0 = vr[0]["metrics"]["latencyP95S"][0]
         knee = next((r["x"] for r in vr if p95_0 and r["metrics"]["latencyP95S"][0]
                      and r["metrics"]["latencyP95S"][0] >= 2 * p95_0), None)
@@ -376,10 +467,13 @@ def saturation_flags(rows):
             f = []
             if sat is not None and r["x"] >= sat:
                 f.append("saturated")
+            if gen is not None and r["x"] >= gen:
+                f.append("generator-limit")
             if knee is not None and r["x"] >= knee:
                 f.append("latency-knee")
             flags[(v, r["x"])] = ",".join(f)
-        summary[v] = {"saturationSendRateTps": sat, "latencyKneeSendRateTps": knee}
+        summary[v] = {"saturationSendRateTps": sat, "keptUpToSendRateTps": verdict["keptUpTo"],
+                      "generatorLimitSendRateTps": gen, "latencyKneeSendRateTps": knee}
     return flags, summary
 
 
@@ -396,7 +490,7 @@ def charts(exp, rows, out_dir, x_label, saturation=None):
     from variant_style import REFERENCE_LINE, VARIANT_STYLE, e1_reference, saturation_line
     style = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gleipnir.mplstyle")
     with plt.style.context(style):
-        for key, header, _ in METRICS:
+        for key, header, _ in ALL_METRICS:
             if key not in CHART_METRICS:
                 continue
             fig, ax = plt.subplots()
@@ -419,7 +513,7 @@ def charts(exp, rows, out_dir, x_label, saturation=None):
             if not drew:
                 plt.close(fig)
                 continue
-            if exp == "e3a" and key == "throughputTps":
+            if exp == "e3a" and key in ("throughputTps", "finalizedTps"):
                 xs = sorted({r["x"] for r in rows if isinstance(r["x"], (int, float))})
                 ax.plot(xs, xs, color=REFERENCE_LINE["color"], ls=REFERENCE_LINE["ls"], lw=REFERENCE_LINE["lw"],
                         label=REFERENCE_LINE["label"])
@@ -611,7 +705,7 @@ def build(exp, results_dir=RESULTS_DIR, out_dir=None, charts_on=True, decimal_co
     if exp == "ramp":
         out["suggestion"] = suggest_send_rate(manifests)
         print(f"  suggested baseline.send_rate_tps = {out['suggestion']['suggested']}")
-    if exp not in EXPS:
+    if exp not in TABLE_EXPS:
         return out
     rows = aggregate(data_points(exp, manifests))
     if exp == "ops":
@@ -619,12 +713,18 @@ def build(exp, results_dir=RESULTS_DIR, out_dir=None, charts_on=True, decimal_co
             write_tables(exp, [r for r in rows if r["x"] in ops], out_dir, name, X_LABEL["ops"],
                          per_round=True, decimal_comma=decimal_comma)
         return out
-    flags, sat = (saturation_flags(rows) if exp == "e3a" else (None, None))
+    if exp == "sens":   # one row per (variant, cell); the cell names are no axis to chart
+        write_tables(exp, rows, out_dir, exp, X_LABEL[exp], decimal_comma=decimal_comma)
+        return out
+    flags, sat = (saturation_flags(rows, results_dir) if exp == "e3a" else (None, None))
     write_tables(exp, rows, out_dir, exp, X_LABEL[exp], flags, per_round=exp == "e3a", decimal_comma=decimal_comma)
     if sat:
+        sat_ratio, gen_ratio = e3a_ratios(results_dir)
         for v, s in sat.items():
-            print(f"  {v}: saturation at send rate {s['saturationSendRateTps']} tx/s "
-                  f"(rule: throughput < {SATURATION_RATIO}x send rate); latency knee at {s['latencyKneeSendRateTps']}")
+            print(f"  {v}: saturation at send rate {s['saturationSendRateTps']} tx/s, kept up to "
+                  f"{s['keptUpToSendRateTps']}, load-generator limit at {s['generatorLimitSendRateTps']} "
+                  f"(rule: finalized throughput < {sat_ratio}x send rate while the measured send rate "
+                  f">= {gen_ratio}x); latency knee at {s['latencyKneeSendRateTps']}")
         with open(os.path.join(out_dir, "e3a-saturation.json"), "w", encoding="utf-8") as fh:
             json.dump(sat, fh, indent=2)
     if exp == "e1":

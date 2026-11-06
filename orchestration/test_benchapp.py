@@ -150,7 +150,7 @@ def help_coverage():
     assert set(B.FIELDS) <= set(H.FIELD_HELP), set(B.FIELDS) - set(H.FIELD_HELP)
     assert {path for _f, path, *_ in __import__("experiment").CONTROL_FLAGS} <= set(H.FIELD_HELP)
     assert {c for c, _ in app.LIVE_COLS} <= set(H.COLUMN_HELP), {c for c, _ in app.LIVE_COLS} - set(H.COLUMN_HELP)
-    assert set(H.MODE_HELP) == {"e0", "ramp", "e3a", "e3b", "ops"}
+    assert set(H.MODE_HELP) == {"e0", "ramp", "e3a", "e3b", "e3c", "ops", "sens"}
     tabs = ["Settings & Baselines", "E0 initial test", "E1 batch size", "E2 channels", "E3 main", "Custom test",
             "History & results"]
     assert all(t in H.TAB_HELP for t in tabs)

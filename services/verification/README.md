@@ -24,10 +24,13 @@ Timing uses `process.hrtime.bigint()`. Steps:
    the canonical event (`leafSource:"event"`); otherwise the stored `leafHash` is used
    (`leafSource:"receipt"`, legacy receipts). Either way the leaf is folded up `siblingPath`
    to the implied root. The leaf hashing is inside this step: it is part of the audit cost.
-3. **compareRootMs** — read the anchored root and compare:
-   - `VARIANT=anchoring` → `GET GATEWAY_URL/internal/anchor-root/:scopeId/:batchId` (bearer).
-   - `VARIANT=parallel-anchored` → `GET ANCHOR_CLIENT_URL/roots/:caseId/:batchId`
-     (caseId = `receipt.rootRef.scopeId`).
+3. **compareRootMs** — read the anchored root and compare. Both variants read it with
+   `GET GATEWAY_URL/internal/anchor-root/:scopeId/:batchId` (bearer `GLEIPNIR_TOKEN`), with
+   `scopeId`/`batchId` from `receipt.rootRef`. The gateway reads the root from the channel
+   that holds the scope: `coc-main` for Anchoring's `shared` scope, the case's own channel
+   for a Parallel-Anchored case. (In the earlier design, campaigns 1–5, Parallel-Anchored
+   read its roots from a separate anchor-client instead, so this step took another path
+   there.)
 
 With `VERIFY_METRICS_PATH` set, every completed (3-step) verify appends one JSON line
 `{ts, eventId, ok, leafSource, fetchMs, recomputeMs, compareRootMs, latencyMs}`; error paths
@@ -39,8 +42,9 @@ With `VERIFY_METRICS_PATH` set, every completed (3-step) verify appends one JSON
 - **Out:** verification result with per-step latencies; optional metrics JSONL. No other
   writes anywhere.
 
-Env: `PORT=4004`, `VARIANT`, `RECEIPT_STORE_URL`, `GATEWAY_URL`, `ANCHOR_CLIENT_URL`,
-`GLEIPNIR_TOKEN`, `VERIFY_METRICS_PATH` (empty = off), `LOG_LEVEL`.
+Env: `PORT=4004`, `VARIANT` (only logged at start: both variants verify the same way),
+`RECEIPT_STORE_URL`, `GATEWAY_URL`, `GLEIPNIR_TOKEN`, `VERIFY_METRICS_PATH` (empty = off),
+`LOG_LEVEL`.
 
 ## Does NOT
 
@@ -51,7 +55,7 @@ Env: `PORT=4004`, `VARIANT`, `RECEIPT_STORE_URL`, `GATEWAY_URL`, `ANCHOR_CLIENT_
   un-hardened receipt store yields `root-mismatch`, not a pass.
 - Compare the recomputed leaf against the stored `leafHash` separately (the root fold
   already fails on any difference).
-- Hold any Fabric session (reads roots via the gateway or anchor-client).
+- Hold any Fabric session (reads roots through the gateway).
 - Write receipts or roots.
 
 ## Status codes / failure modes
@@ -60,15 +64,20 @@ Env: `PORT=4004`, `VARIANT`, `RECEIPT_STORE_URL`, `GATEWAY_URL`, `ANCHOR_CLIENT_
 - `200 {ok:false, reason:"root-mismatch"}` — **tamper signal** (event copy, sibling path or
   stored leaf altered), not a server error.
 - `404 {ok:false, reason:"missing-receipt"}` — no receipt for the event.
-- `404 {ok:false, reason:"missing-anchor-root"}` — root not yet committed.
+- `404 {ok:false, reason:"missing-anchor-root"}` — root not yet committed (the gateway
+  answered 404).
 - `422 {ok:false, reason:"malformed-receipt"}` — the un-hardened store served junk; the
   service stays up.
-- `502 {ok:false, reason:"anchor-read-error" | "receipt-store-error"}` — upstream unreachable.
+- `502 {ok:false, reason:"receipt-store-error"}` — the receipt store is unreachable or
+  answered another non-2xx status.
+- `502 {ok:false, reason:"anchor-read-error"}` — the gateway is unreachable or refused the
+  root read with a non-2xx status other than 404 (e.g. a 400 for a Parallel-Anchored scope
+  that is not a `case-NNN` channel).
 - **metrics sink unwritable** — appends are fire-and-forget and ignored; verification still
   answers (only the per-request step log is empty).
 
 ## Test
 
 ```bash
-npm install && npm test    # node:test — Merkle vectors + byte-identity, happy/tamper/missing/anchor-error/parallel paths, leafSource both ways
+npm install && npm test    # node:test — Merkle vectors + byte-identity, happy/tamper/missing/anchor-error paths, the parallel-anchored root read through the gateway, leafSource both ways
 ```

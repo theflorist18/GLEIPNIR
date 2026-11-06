@@ -18,31 +18,30 @@ interface signatures.
 | Orderer 2 | OrdererMSP | `orderer2.example.com` (`orderer2`) | 9050 | 9053 (osnadmin) | 9445 |
 | Peer, Org1 | Org1MSP | `peer0.org1.example.com` (`peer0-org1`) | 7051 | 7052 (chaincode) | 9446 |
 | Peer, Org2 | Org2MSP | `peer0.org2.example.com` (`peer0-org2`) | 9051 | 9052 (chaincode) | 9447 |
-| Peer, Anchor org† | AnchorClientMSP | `peer0.anchor.example.com` (`peer0-anchor`) | 11051 | 11052 (chaincode) | 9448 |
 | CA, Org1 | — | `ca-org1` | 7054 | — | — |
 | CA, Org2 | — | `ca-org2` | 8054 | — | — |
-| CA, Anchor org† | — | `ca-anchor` | 9054 | — | — |
 | CA, Orderer org | — | `ca-orderer` | 10054 | — | — |
 
-† Only started under compose profile `parallel-anchored` (see §8). See §12 for why the
-anchor org exists and why there are 4 CAs, not 2.
+Every variant runs this same set of nodes, with one CA per org (3 CAs, not 2 — §12-2); the
+earlier design (campaigns 1–5) added an anchor org for Parallel-Anchored (`peer0-anchor`,
+`ca-anchor` and a fixed anchor-client identity, MSP `AnchorClientMSP`), removed in M28 (§12-24).
 
 Host ports = container ports (single host, no remapping). All Fabric traffic is TLS.
 Crypto material is produced by **Fabric CA 1.5.19 enrollment** (`network/crypto/`
 scripts, test-network `registerEnroll.sh` idiom, NodeOUs enabled). No cryptogen.
 Crypto output root: `network/organizations/` (gitignored).
 
-The **anchor-client service identity** is a fixed client identity registered once with
-`ca-anchor`: enroll ID `anchorclient`, type `client`, MSP `AnchorClientMSP`. It never
-changes between runs (held-constant experimental control, ARCHITECTURE §4.4).
-
 ## 2. Channels
 
 | Channel | Members | Used by variants | Purpose |
 |---|---|---|---|
 | `coc-main` | Org1MSP, Org2MSP | Standard, Anchoring | shared CoC channel; in Anchoring, also receives `CommitAnchorRoot` |
-| `case-001` … `case-NNN` | Org1MSP, Org2MSP | Parallel, Parallel-Anchored | one channel per case (C ≤ 50, the E2 `channel_counts` / E3b `case_counts` grids, §10), provisioned by `orchestration/provision-channel.sh` (experiment.py provisions the missing ones) |
-| `anchor-main` | AnchorClientMSP | Parallel-Anchored | the **anchor channel** (never call it anything else); root sink written only by the anchor-client |
+| `case-001` … `case-NNN` | Org1MSP, Org2MSP | Parallel, Parallel-Anchored | one channel per case (C ≤ 50, the E2 `channel_counts` / E3b and E3c `case_counts` grids, §10), provisioned by `orchestration/provision-channel.sh` (experiment.py provisions the missing ones); in Parallel-Anchored, also receives `CommitAnchorRoot` — that case's own Merkle roots (M28) |
+
+Every channel is created from the one `AppChannel` profile of `network/configtx/configtx.yaml`.
+The earlier design (campaigns 1–5) had a third channel, the **anchor channel** `anchor-main`
+(AnchorClientMSP only), which received every Parallel-Anchored root while the case channels
+carried nothing; M28 removed it (§12-24).
 
 Channel creation is channel-participation only: `configtxgen` app-channel genesis block →
 `osnadmin channel join` against **all three** orderer admin endpoints (assert HTTP 201) →
@@ -50,18 +49,33 @@ peers join → chaincode commit.
 
 ## 3. Chaincode
 
-- Name: `evidence` (same package on every channel, including `anchor-main`).
+- Name: `evidence` (one package — its id is `.env` `CCAAS_ID_APP` — committed on every channel).
 - Language: Go **1.25.5**, `fabric-contract-api-go`. Deployment: **Chaincode-as-a-Service
   (ccaas)** — the chaincode runs as its own compose service (`ccaas-evidence`, port 9999,
   `CHAINCODE_SERVER_ADDRESS=0.0.0.0:9999`), built from `golang:1.25.5` in
-  `chaincode/evidence/Dockerfile`. Rationale in §12. One ccaas process per peer serves
-  all of that peer's channels. Peer external builder: the `ccaas` builder shipped in the
+  `chaincode/evidence/Dockerfile`. Rationale in §12. One ccaas process serves both peers
+  on every channel (the earlier design ran a second one for the anchor peer). Peer external
+  builder: the `ccaas` builder shipped in the
   `hyperledger/fabric-peer:2.5` image — `network/core.yaml` MUST keep the
   `chaincode.externalBuilders` entry for it.
-- Endorsement policies (explicit, constant across all runs):
-  - app channels (`coc-main`, `case-*`): `OR('Org1MSP.peer','Org2MSP.peer')` — 1-of-any,
-    matching the LF baseline envelope (ARCHITECTURE Key Finding 7).
-  - `anchor-main`: `AND('AnchorClientMSP.member')` (ARCHITECTURE §4.4, verbatim).
+- Endorsement policy (explicit; ONE policy on every app channel of a run — `coc-main`,
+  `case-*` — and a run setting since M28, §12-24; recorded in `run.json`
+  `controls.endorsement`):
+  - `any` (the default, `sweeps.yaml` `endorsement.policy: any`):
+    `OR('Org1MSP.peer','Org2MSP.peer')` — 1-of-any, matching the LF baseline envelope
+    (ARCHITECTURE Key Finding 7).
+  - `all`: `AND('Org1MSP.peer','Org2MSP.peer')` — 2-of-2, every transaction endorsed by a
+    peer of each org (the `sens` cell `endorse-all`, §10).
+  - `up.sh --endorsement any|all` writes `ENDORSEMENT` into `network/compose/.env`
+    (`reset-network.sh --endorsement` passes it on; experiment.py calls it with the run's
+    policy); `lib.sh endorsement_policy` reads it at every chaincode commit (absent ⇒ `any`),
+    so channels that `provision-channel.sh` adds later get the same policy. There is no
+    anchor-channel policy any more (the earlier design's `AND('AnchorClientMSP.member')`).
+  - 2-of-2 needs cross-org discovery: `configtx.yaml` declares AnchorPeers (Fabric's gossip
+    anchor peers, unrelated to Merkle anchoring) for Org1 (`peer0.org1.example.com:7051`) and
+    Org2 (`peer0.org2.example.com:9051`); `configtxgen -outputBlock` encodes them into each
+    channel's genesis block, so `peer0.org1` — the Fabric Gateway peer that the gateway and
+    Caliper's fabric-mode connector use — discovers and reaches Org2's peer.
 - Functions — the binding signatures from ARCHITECTURE §4.1, plus the read op §4.5
   references:
 
@@ -91,7 +105,10 @@ ReadAnchorRoot(ctx, scopeId, batchId) (string, error)   // scopeId: caseId, or "
     signatures. Concurrent `AccessLog` to the same evidence therefore writes distinct
     keys — zero `MVCC_READ_CONFLICT` by construction.
   - anchor roots: `CreateCompositeKey("root", [scopeId, batchId])` where `scopeId` is
-    taken from `metaJSON.caseId`, defaulting to `"shared"` (Anchoring variant).
+    taken from `metaJSON.caseId`, defaulting to `"shared"` (Anchoring variant: no `caseId`,
+    roots on `coc-main`). Parallel-Anchored sends `caseId` = the case (`case-NNN`), which is
+    also the channel the gateway commits the root on, so each case channel holds only its
+    own roots (M28, §9). Write-once per (scope, batchId); M28 did not change the chaincode.
   - `GetAuditTrail` = `GetStateByPartialCompositeKey("evt", [evidenceId])`, returns a JSON
     array ordered by sortKey (iterator order).
 - Each of the four CoC ops carries its ISO/IEC 27037 clause annotation as a Go comment
@@ -178,7 +195,9 @@ receipts lack both fields and contribute no trail entry. `txId` may be filled in
 by a follow-up PUT after the root commit returns. `batchId` is an **opaque string**,
 unique per (scope, batcher lifetime) — currently `<scopeId>-<epoch>-b<seq>`, where the
 epoch (BATCH_EPOCH env or batcher start time) keeps ids from colliding with roots an
-earlier batcher process already committed to the persistent ledger. Duplicate-eventId
+earlier batcher process already committed to the persistent ledger (known limit: a restart
+of the same container keeps a fixed `BATCH_EPOCH` and numbers from `b000000` again,
+`orchestration/crash-test.sh`, §12-24). Duplicate-eventId
 enqueues are rejected 409 **within the open batch only**; a retry after the boundary
 lands in the next batch and its receipt PUT overwrites the previous witness
 (at-most-once per batch, not per ledger).
@@ -187,24 +206,32 @@ lands in the next batch and its receipt PUT overwrites the previous witness
 "meta":{...},"txTimestamp"}`.
 
 **Batch record** (batcher `GET /status`.`batches[]`, in-memory for the process lifetime;
-the source of the **anchoring delay** metric, M26): `{"batchId","scopeId","leafCount",
+the source of the **anchoring delay** metric, M26, and of the anchored variants'
+**finalization** times, M28): `{"batchId","scopeId","leafCount",
 "root","receiptStatus","rootStatus","txId","degraded","error","openedAt","closedAt",
-"committedAt","forced","delayMs":{"min","mean","max"}}`. Timestamps are ISO-8601:
+"committedAt","closeReason","forced","delayMs":{"min","mean","max"},"enqueuedAtMs":[ms…]}`.
+Timestamps are ISO-8601:
 `openedAt` = first enqueue, `closedAt` = boundary, `committedAt` = the root submission
-*returned* to the batcher (the gateway / anchor-client await the Fabric commit, so the
+*returned* to the batcher (the gateway awaits the Fabric commit, so the
 delay includes the submit round-trip — a documented default for the paper's
-definition, see §12-17; `null` if the submit failed). `forced` = closed by `POST /flush` or the
-`BATCH_FLUSH_MS` timer rather than by size. `delayMs` = `committedAt − enqueue time` over
-the batch's events (`null` when not committed).
+definition, see §12-17; `null` if the submit failed). **M28** `closeReason` = what closed the
+batch: `size` (`BATCH_SIZE` events), `idle` (the `BATCH_IDLE_MS` idle timer, that long after
+the batch's LAST event), `timeout` (the `BATCH_FLUSH_MS` age timer, that long after its FIRST
+event) or `flush` (`POST /flush`); `forced` = `closeReason != 'size'`. `delayMs` =
+`committedAt − enqueue time` over the batch's events (`null` when not committed).
+`enqueuedAtMs` (**M28**) = each event's enqueue time (epoch ms, leaf order); only
+`GET /status?events=1` includes it — the default `/status` and the `POST /flush` reply leave
+it out, so the polled response stays small. Known limit: an open batch exists only in the
+batcher's memory — events accepted (202) whose batch is still open are lost if the process
+dies: no receipt, no trail entry, no root (`orchestration/crash-test.sh`, §12-24).
 
 ## 6. Service ports & REST APIs (all JSON; all expose `GET /healthz` → `{"ok":true}`; the gateway's healthz adds a `variant` field)
 
 | Service | Port | Endpoints |
 |---|---|---|
-| gateway (BFF) | **3000** | public API below; plus internal: `POST /internal/anchor-root` `{batchId,merkleRoot,meta}` → submits `CommitAnchorRoot` on `coc-main` (Anchoring variant only); `GET /internal/anchor-root/:scopeId/:batchId` → evaluates `ReadAnchorRoot` on `coc-main` |
-| merkle-batcher | **4001** | `POST /events` (CoC event) → `202 {batchId,leafIndex}`; `POST /flush` → force batch boundary on every open queue (partial-batch policy at run end; returns the `/status` body after settling); `GET /status` → `{variant, batchSize, flushTimeoutMs, queues:{scopeId:depth}, counters:{openScopes, closedBatches, committed, failed, forced, receiptDegraded, degraded}, degraded, batches:[batch record, §5]}` |
+| gateway (BFF) | **3000** | public API below; plus internal (service token only), **M28** the root sink of **both** anchored variants, on the channel `variantRouter.rootChannel(variant, scope)` names — `coc-main` on Anchoring, the case's own channel on Parallel-Anchored (400 unless the scope is `case-NNN`), 404 `{error:'no anchor roots in this variant'}` on standard/parallel: `POST /internal/anchor-root` `{batchId,merkleRoot,meta}` → submits `CommitAnchorRoot` (scope = `meta.caseId`, absent on Anchoring) → `201 {txId}`; `GET /internal/anchor-root/:scopeId/:batchId` → evaluates `ReadAnchorRoot` (chaincode not-found → 404) — the same handler as the public `/anchor-roots` read below |
+| merkle-batcher | **4001** | `POST /events` (CoC event) → `202 {batchId,leafIndex}`; `POST /flush` → force batch boundary on every open queue (partial-batch policy at run end; returns the `/status` body after settling); `GET /status` → `{variant, batchSize, flushTimeoutMs, idleTimeoutMs, queues:{scopeId:depth}, counters:{openScopes, closedBatches, committed, failed, forced, receiptDegraded, degraded}, degraded, batches:[batch record, §5, without enqueuedAtMs]}`; **M28** `GET /status?events=1` → the same with each batch's `enqueuedAtMs` (experiment.py's run-end snapshot, `anchoring.json`) |
 | receipt-store | **4002** | `PUT /receipts/:eventId` (indexes into `DATA_DIR/idx/<evidenceId>.txt` when the body carries a valid `evidenceId`; 400 on an invalid one); `GET /receipts/:eventId` (404 if missing); **M26** `GET /receipts?evidenceId=X` → JSON array of full receipts in first-PUT (leaf) order, `[]` if none, 400 `{error:'evidenceId query required'}` if missing/invalid |
-| anchor-client | **4003** | `POST /roots` `{caseId,batchId,merkleRoot,meta}` → `201 {txId}` (submit on `anchor-main`); `GET /roots/:caseId/:batchId` (evaluate on `anchor-main`) |
 | verification | **4004** | `GET /verify/:eventId` → `{ok,reason?,latencyMs,leafSource:"event"\|"receipt",steps:{fetchMs,recomputeMs,compareRootMs}}`; **M26**: when `receipt.event` is present the leaf is recomputed from it inside `recomputeMs` (`leafSource:"event"`), else the stored `leafHash` is used (`"receipt"`, legacy); `reason`: `root-mismatch` (200, tamper signal), `missing-receipt`/`missing-anchor-root` (404, not yet anchored), `malformed-receipt` (422 — the un-hardened witness stored junk; the `leafHash` hex-64 shape check still runs even when `event` is present), 502 upstream. With `VERIFY_METRICS_PATH` set, one JSONL line per completed verify: `{ts,eventId,ok,leafSource,fetchMs,recomputeMs,compareRootMs,latencyMs}` |
 | case-registry | **4005** | internal-only (via gateway; `X-Gleipnir-Internal-Token` after `/healthz`): `POST/GET/PATCH /cases[/:caseId]`, `POST/PATCH/DELETE /cases/:caseId/participants[/:userId]` (PATCH = M25 in-place role change; policy in the gateway), `POST/DELETE /cases/:caseId/evidence[/:evidenceId]` (categorize; idempotent same-case, 409 cross-case; un-assign also clears `categoryId`), `POST/PATCH/DELETE /cases/:caseId/categories[/:categoryId]` (M19 taxonomy; name unique per case → 409; delete refused 409 while referenced; categories are read via `GET /cases/:caseId`, its `.categories` array), `POST /evidence-index` + `PATCH /evidence-index/:evidenceId` (accept the M19 metadata fields; `categoryId` must belong to the evidence's case; no single-row GET — rows are read through the search below), `GET /evidence-index?caseId=&q=&uploadedBy=&type=&from=&to=&visibleToUserId=`, `GET /internal/authz?userId=&evidenceId=` → `{allowed,caseId,roleInCase}`. `GET /cases` and the evidence-index search return at most 500 rows (fixed cap; no `?limit`) |
 | evidence-store | **4006** | internal-only (via gateway; `X-Gleipnir-Internal-Token` after `/healthz`): `PUT /blobs/:evidenceId` (raw body + `X-Content-Type`/`X-Original-Filename`) → `201 {integrityProof,sizeBytes,storedAt,rollbackToken}`, `409` if exists (immutable), `413` over `MAX_UPLOAD_BYTES`; `GET /blobs/:evidenceId` (attachment stream); `DELETE /blobs/:evidenceId` (ingest-rollback only; requires the `x-gleipnir-rollback-token` header carrying the token that blob's PUT returned — no query-string fallback) |
@@ -231,10 +258,12 @@ batchId, leafIndex, rootRef:{scopeId,batchId,txId}}` verbatim from the receipt (
 the direct variants); the folded head is `{id, version:'1.0', storage, identity:{subject},
 custodian, status:'ACTIVE'|'DISPOSED', offChain:true}`, 404 when no events. `DELETE
 /evidence/:id` → `DisposeEvidence` (event op `DISPOSE`; evidence-index status `DISPOSED`).
-`GET /anchor-roots/:scopeId/:batchId` (any authenticated principal, 401 otherwise):
-anchoring → raw `ReadAnchorRoot` JSON from `DEFAULT_CHANNEL` (chaincode not-found → 404);
-parallel-anchored → proxy to anchor-client `GET /roots/:scopeId/:batchId` (upstream status +
-body forwarded); standard/parallel → 404 `{error:'no anchor roots in this variant'}`. The
+`GET /anchor-roots/:scopeId/:batchId` (any authenticated principal, 401 otherwise): raw
+`ReadAnchorRoot` JSON from the channel that holds the scope's roots (`rootChannel`) —
+anchoring → `DEFAULT_CHANNEL`; parallel-anchored → the case's own channel, `case-NNN` =
+`scopeId` (**M28**; a scope that is not `case-NNN`, e.g. `shared` or a library `CASE-<uuid>`,
+is a 400); chaincode not-found → 404; standard/parallel → 404 `{error:'no anchor roots in
+this variant'}`. The
 gateway never recomputes or verifies a branch — `benchmark/audit/reconstruct.js` does,
 `GET /evidence/search`, `POST/GET/PATCH /cases[/:id]`, `GET /cases/search`,
 `POST/PATCH/DELETE /cases/:id/participants[/:userId]` (PATCH is M25:
@@ -335,24 +364,26 @@ audit-log export stays deferred and CASE/UCO JSON-LD stays banned),
   Export bundle: `{evidenceId, exportedAt, record, auditTrail}` (trail as of the
   export moment; the export's own ACCESS event lands after it).
 
-**Session ownership** (resolves the §3-table "only the gateway holds fabric-gateway
-sessions" vs the anchor-client's need to write `anchor-main`): the **gateway** holds the
-only sessions to the app channels (`coc-main`, `case-*`); the **anchor-client** holds
-the only session to `anchor-main` (fixed AnchorClientMSP identity). The verification
-service holds **no** Fabric session — it reads roots via gateway (Anchoring) or
-anchor-client (Parallel-Anchored) depending on `VARIANT`. Flagged in §12.
+**Session ownership** (**M28**, §12-24): of the services, the **gateway** holds the only
+fabric-gateway sessions (`User1@org1`, Org1MSP, via `peer0-org1`) — to `coc-main` and every
+`case-*` channel, for the direct variants' event records and both anchored variants' roots.
+The merkle-batcher and the verification service hold **no** Fabric session: the batcher
+commits every root through `POST /internal/anchor-root`, and the verification service reads
+every root through `GET /internal/anchor-root/...`, whatever the variant. (Caliper's
+fabric-mode workloads connect through their own peer-gateway connector, §10. The earlier
+design split the sessions: an anchor-client held the only session to the anchor channel,
+§12-4.)
 
 ## 7. Environment variables (exact names)
 
 `VARIANT` ∈ `standard|anchoring|parallel|parallel-anchored` — read by gateway, batcher,
-verification (the other services are variant-agnostic). `LOG_LEVEL` — read by batcher,
-receipt-store, verification (default `info`; compose does not set it).
+verification (since M28 verification only logs it: its root reads take the same gateway
+path on both anchored variants; the other services are variant-agnostic). `LOG_LEVEL` —
+read by batcher, receipt-store, verification (default `info`; compose does not set it).
 Gateway: `PORT=3000`, `GLEIPNIR_TOKEN`, `BATCHER_URL=http://merkle-batcher:4001`,
 `VERIFICATION_URL=http://verification:4004`, **M26** `RECEIPT_STORE_URL=http://receipt-store:4002`
-(off-chain trail reads on the batched variants; `receipts` dep on `createApp`) and
-`ANCHOR_CLIENT_URL=http://anchor-client:4003` (`/anchor-roots` proxy on parallel-anchored;
-passed as `deps.anchorClientUrl`, whereas `verificationUrl` lives in `config` — recorded
-as-built), `PEER_ENDPOINT=peer0-org1:7051`,
+(off-chain trail reads on the batched variants; `receipts` dep on `createApp`),
+`PEER_ENDPOINT=peer0-org1:7051`,
 `PEER_HOST_ALIAS=peer0.org1.example.com`, `MSP_ID=Org1MSP`, `CRYPTO_PATH`
 (User1@org1 MSP dir), `TLS_CERT_PATH`, `DEFAULT_CHANNEL=coc-main`, `CC_NAME=evidence`,
 library (M12–M15): `AUTH_DATA_DIR=/data/auth` (users.json; volume
@@ -364,20 +395,23 @@ empty-store only), `SESSION_TTL_SECONDS=28800`, `GLEIPNIR_INTERNAL_TOKEN`
 Batcher: `PORT=4001`, **`BATCH_SIZE`** (int > 0; ONE grid for Anchoring and
 Parallel-Anchored, §12-13; code and compose default 100, `.env` 50, overridden per run by
 experiment.py),
-**`BATCH_FLUSH_MS`** (int; `0` = size-only batching, the experiment constant; > 0 arms a
-timer at the first enqueue of an open batch), `BATCH_EPOCH` (optional; namespaces
+**`BATCH_FLUSH_MS`** (int; the **age** timer: > 0 closes a batch that long after its FIRST
+event, `closeReason: timeout`; `0` = off), **M28** **`BATCH_IDLE_MS`** (int; the **idle**
+timer: > 0 closes a batch that long after its LAST event — restarted by every enqueue, no
+cap, `closeReason: idle`; code and compose default `0` = off). Both `0` = size-only batching,
+the experiment default (`sweeps.yaml` `anchoring.flush_timeout_ms` /
+`anchoring.idle_timeout_ms`, written per run by experiment.py; of the campaign experiments
+only the `sens` cell `idle-5s` sets a timer).
+`BATCH_EPOCH` (optional; namespaces
 batchIds per batcher lifetime — experiment.py sets `<runId>-<unix>` per run, empty ⇒
 start-time default), `GLEIPNIR_TOKEN` (bearer for the gateway's authed
 `/internal/anchor-root`), `RECEIPT_STORE_URL=http://receipt-store:4002`,
-`GATEWAY_URL=http://gateway:3000`, `ANCHOR_CLIENT_URL=http://anchor-client:4003`.
-(`createApp` overrides use camelCase: `batchSize`, `flushMs`, `batchEpoch`.)
+`GATEWAY_URL=http://gateway:3000` (the root sink of both anchored variants).
+(`createApp` overrides use camelCase: `batchSize`, `flushMs`, `idleMs`, `batchEpoch`.)
 Receipt-store: `PORT=4002`, `DATA_DIR=/data` (receipts `<eventId>.json`; index
 `idx/<evidenceId>.txt`).
-Anchor-client: `PORT=4003`, `PEER_ENDPOINT=peer0-anchor:11051`,
-`PEER_HOST_ALIAS=peer0.anchor.example.com`, `MSP_ID=AnchorClientMSP`, `CRYPTO_PATH`,
-`TLS_CERT_PATH`, `ANCHOR_CHANNEL=anchor-main`, `CC_NAME=evidence`.
-Verification: `PORT=4004`, `RECEIPT_STORE_URL`, `GATEWAY_URL`, `ANCHOR_CLIENT_URL`,
-`GLEIPNIR_TOKEN` (bearer for the gateway's authed root-read endpoint),
+Verification: `PORT=4004`, `RECEIPT_STORE_URL`, `GATEWAY_URL` (every root read, both
+anchored variants), `GLEIPNIR_TOKEN` (bearer for the gateway's authed root-read endpoint),
 `VERIFY_METRICS_PATH` (compose: `/verify-metrics/verify.jsonl` on the `verify-metrics`
 volume; empty = off).
 Case-registry: `PORT=4005`, `DATA_DIR=/data`, `GLEIPNIR_INTERNAL_TOKEN`.
@@ -387,26 +421,34 @@ Evidence-store: `PORT=4006`, `DATA_DIR=/data`, `GLEIPNIR_INTERNAL_TOKEN`,
 the workloads append `tx-w<workerIndex>.jsonl` to; unset = no per-transaction logging),
 `GATEWAY_URL` (default `http://localhost:3000`), `BATCHER_URL` (default
 `http://localhost:4001`), `GLEIPNIR_TOKEN` (default `dev-token`; experiment.py falls back
-to the `.env` value) — read by the REST connector, `verify.js`, `reconstruct.js` and
-experiment.py; `GLEIPNIR_ALLOW_LEDGER_WIPE=1` — the only thing that lets
+to the `.env` value) — read by the REST connector, `verify.js`, `reconstruct.js`,
+experiment.py and (M28) `crash-test.sh` / `tamper-test.sh`; `GLEIPNIR_ALLOW_LEDGER_WIPE=1`
+— the only thing that lets
 `reset-network.sh` (and `experiment.py`, which calls it before every run unless
 `--reuse-network` is passed) remove the ledger volumes.
+**`network/compose/.env` keys the orchestration writes:** `VARIANT` and (**M28**)
+`ENDORSEMENT=any|all` (up.sh, from `--endorsement`, default `any`; read by `lib.sh
+endorsement_policy` at every chaincode commit — absent ⇒ `any` — and by experiment.py, which
+refuses `--reuse-network` when it differs from the run's policy), `CCAAS_ID_APP` (up.sh;
+`unset` by reset-network.sh and `down.sh --wipe`), and per anchored run `BATCH_SIZE`,
+`BATCH_FLUSH_MS`, `BATCH_IDLE_MS`, `BATCH_EPOCH` (experiment.py). Nothing reads
+`CCAAS_ID_ANCHOR` any more (the earlier design's anchor-peer package id).
 
 ## 8. Compose: project, profiles, volumes
 
 - Project name `gleipnir`, network `gleipnir-net`. Files per ARCHITECTURE §2:
-  `compose-net.yaml` (orderers, peers, ccaas, cli/tools), `compose-ca.yaml` (4 CAs),
-  `compose-services.yaml` (gateway, batcher, receipt-store, anchor-client, verification,
+  `compose-net.yaml` (orderers, peers, ccaas, cli/tools), `compose-ca.yaml` (3 CAs),
+  `compose-services.yaml` (gateway, batcher, receipt-store, verification,
   case-registry, evidence-store, frontend).
 - Profiles: base (no profile) = orderers, peers org1/org2, ccaas, cli, gateway,
-  frontend, case-registry, evidence-store, **plus the three always-on CAs**
-  (ca-org1, ca-org2, ca-orderer — only ca-anchor is behind a profile).
+  frontend, case-registry, evidence-store, **plus the three CAs**
+  (ca-org1, ca-org2, ca-orderer; no CA is behind a profile).
   `anchoring` = + merkle-batcher, receipt-store, verification.
-  `parallel-anchored` = + merkle-batcher, receipt-store, verification, anchor-client,
-  peer0-anchor, ccaas-evidence-anchor, ca-anchor.
+  `parallel-anchored` = the same three (**M28**; the earlier design also started
+  anchor-client, peer0-anchor, ccaas-evidence-anchor and ca-anchor, §12-24).
   (`orchestration/up.sh --variant X` maps variant → profiles.)
 - **Named volumes** (measurement design — never anonymous): `peer0org1-ledger`,
-  `peer0org2-ledger`, `peer0anchor-ledger` → `/var/hyperledger/production`;
+  `peer0org2-ledger` → `/var/hyperledger/production`;
   `orderer0-ledger`, `orderer1-ledger`, `orderer2-ledger` →
   `/var/hyperledger/production/orderer`; `receipt-data` → `/data`; `verify-metrics` →
   `/verify-metrics` (verification service's per-request JSONL, M26);
@@ -428,18 +470,24 @@ experiment.py; `GLEIPNIR_ALLOW_LEDGER_WIPE=1` — the only thing that lets
 | standard | `submit` on `coc-main` | `evaluate` on `coc-main` | — | — |
 | anchoring | `POST batcher /events` | off-chain trail: receipt-store `GET /receipts?evidenceId=` → events (+ proofs) | batcher → gateway `/internal/anchor-root` → `CommitAnchorRoot` on `coc-main` | verification ← gateway `/internal/anchor-root/...`; `/anchor-roots` ← `ReadAnchorRoot` on `coc-main` |
 | parallel | `submit` on `case-<id>` (from request `caseId`) | `evaluate` on `case-<id>` | — | — |
-| parallel-anchored | `POST batcher /events` (per-case queues, same batch size) | off-chain trail (caseId still validated) | batcher → anchor-client `POST /roots` → `CommitAnchorRoot` on `anchor-main` | verification ← anchor-client `GET /roots/...`; `/anchor-roots` ← anchor-client proxy |
+| parallel-anchored | `POST batcher /events` (per-case queues, same batch size) | off-chain trail (caseId still validated) | batcher → gateway `/internal/anchor-root` → `CommitAnchorRoot` on `case-<id>` (M28) | verification ← gateway `/internal/anchor-root/...` (`ReadAnchorRoot` on `case-<id>`); `/anchor-roots` ← `ReadAnchorRoot` on `case-<id>` |
 
 Scope note (deliberate default): on the **anchoring** root path the batcher sends
 `meta:{scopeId,leafCount}` with **no `caseId` key**, so the chaincode's
 `meta.caseId || "shared"` default selects the `shared` scope; receipts and the
 verification reader use the same literal, so the round-trip is consistent by
-construction. On the **parallel-anchored** path the anchor-client injects `caseId`
-into metaJSON last, making it authoritative. Per-case writes (direct **and** batched)
+construction. On the **parallel-anchored** path (**M28**) the batcher sends
+`meta:{scopeId,leafCount,caseId}` with `caseId` = `scopeId` = the case (`case-NNN`): the
+chaincode keys the root on it, and the gateway (`rootChannel`) commits it on that case's
+own channel — a meta without a valid `case-NNN` `caseId` is a 400, never a fall-through to
+`coc-main`. Root reads resolve the channel from the scope the same way, so the root of a
+case's batch is written and read on that case's channel only. (The earlier design's
+anchor-client injected `caseId` itself and committed every root on the anchor channel.)
+Per-case writes (direct **and** batched)
 require a valid `case-NNN` caseId at the gateway — a missing caseId is a 400, never a
 silent fall-through to `shared`.
 
-## 10. Benchmark & experiment config (M26 — supervisor's review 2026-09-22, §12-14)
+## 10. Benchmark & experiment config (M26 — supervisor's review 2026-09-22, §12-14; M28 — §12-24)
 
 - Single source of truth: **`benchmark/sweeps.yaml`** — that file, not this
   section, is the file of record. The block below is a condensed rendering of it:
@@ -452,27 +500,39 @@ seed: 20260922            # PRNG seed of the transaction trace — identical seq
 workers: 4                # Caliper worker processes (constant)
 repetitions: 3            # r; results reported as mean ± SD over repetitions
 batch_sizes: [10, 25, 50, 100, 200]               # E1 — ONE grid for Anchoring (N) and Parallel-Anchored (K)
-channel_counts: [5, 10, 20, 30, 40, 50]           # E2 — Parallel only; bounded by host cores
-send_rates_tps: [10, 25, 50, 75, 100, 150, 200]   # E3a — send rate = CONFIGURED offered load (input)
-case_counts: [5, 10, 20, 30, 40, 50]              # E3b — trimmed to ≤ baseline.channels_max before E3b runs
+channel_counts: [5, 10, 20, 30, 40, 50]           # E2 — Parallel only; one channel per case; bounded by host cores
+send_rates_tps: [10, 25, 50, 75, 100, 150, 200]   # ramp — send rate = CONFIGURED offered load (input); E3a has its own ladder (e3a)
+case_counts: [5, 10, 20, 30, 40, 50]              # E3b — trimmed to ≤ baseline.channels_max
 baseline:                 # calibrated constants carried forward ("baseline", never "optimal")
-  send_rate_tps: 50       # from E0/ramp (sub-saturation) → E1, E2, E3b, ops   [PLACEHOLDER until E0]
-  batch_size: 50          # from E1 → E3, ops                                 [PLACEHOLDER until E1]
-  channels: 20            # the SET case count (= channels on parallel*, one per case): E2 MEDIAN → E1, E3a, ops, ramp, cell default [PLACEHOLDER until E2]
-  channels_max: 50        # from E2: top of the healthy range → E3b upper bound [PLACEHOLDER until E2]
+  send_rate_tps: 100      # from the ramp (sub-saturation) → E1, E2, E3b, ops, sens   [set from ramp 2026-10-01]
+  batch_size: 50          # from E1 → E3, ops, sens                                [set by hand 2026-10-02]
+  channels: 20            # the SET case count (= channels on parallel*, one per case): E2 MEDIAN → E1, E3a, ops, sens, ramp, cell default [set from e2 2026-10-02]
+  channels_max: 50        # from E2: top of the healthy range → E3b/E3c upper bound [set from e2 2026-10-02]
 workload:                 # controlled, identical across variants, recorded in every run.json
   evidence_per_case: 20
   events_per_case_per_round: 224  # cases*224/workers must be an integer for every grid case count (§12-21)
-  rounds: 5                       # trace slices per run (E1/E2/E3b); E3a uses one slice per send rate
+  rounds: 5                       # trace slices per run (E1/E2/E3b/E3c/sens); E3a uses one slice per send rate
   mix: { transfer_weight: 0.15, access_weight: 0.85, dispose_fraction: 0.5 }
   payload_bytes: 256              # synthetic Codex-Entry filler hashed into storage.integrity_proof
-  audit_cases: 5                  # cases reconstructed per run (audit reconstruction time)
-anchoring: { flush_timeout_ms: 0 }   # 0 = size-only batching; constant across runs
+  audit_cases: 50                 # cases reconstructed per run; ≥ the largest case count, so every case (capped at the run's cases)
+anchoring: { flush_timeout_ms: 0, idle_timeout_ms: 0 }   # age timer (after a batch's FIRST event) / idle timer (after its LAST event, no cap); 0 = off; both 0 = size-only batching
+endorsement: { policy: any }         # app-channel chaincode endorsement: any = OR(Org1, Org2 peer), 1-of-any; all = AND, 2-of-2
 monitor:   { interval_s: 5 }         # Caliper docker resource monitor sampling interval
 regimes:
   smoke:  { cases: 10, evidence_per_case: 2, logs_per_case_min: 10, logs_per_case_max: 25, send_rate_tps: 5 }
   steady: { min_events_per_channel: 1000 }   # below the floor a run is labelled "sub-floor", never "steady"
-ramp: { events_per_case_per_round: 224 }     # E0 ramp = the E3a slice: 40 would let Parallel's 2 s end-of-round block wait read as saturation (§12-21)
+ramp: { events_per_case_per_round: 224 }     # E0 ramp = the E3b slice: 40 would let Parallel's 2 s end-of-round block wait read as saturation (§12-21)
+e3a:                      # E3a: send rate up to saturation at baseline.channels cases; one ledger per run, one round per send rate, ascending
+  send_rates_tps: [100, 150, 200, 300, 400, 600, 800, 1000]   # the base ladder
+  events_per_case_per_round: 1500  # base-ladder rounds: 30,000 tx at 20 cases = 300 s of sending at 100 tx/s, 30 s at 1000 tx/s
+  saturation_ratio: 0.9            # saturated: finalized throughput < this × the configured send rate ...
+  generator_ratio: 0.95            # ... while the measured send rate ≥ this × configured; below it the load generator is the limit (stop)
+  climb: { factor: 1.25, rates_per_ladder: 4, min_send_s: 30, max_send_rate_tps: 10000 }   # next ladder = top × factor^1..4; rounds ≥ min_send_s at its top rate
+e3c: { send_rate_per_case_tps: 5, case_counts: [5, 10, 30, 40, 50] }   # E3c: send rate = cases × 5; 20 cases × 5 = the baseline cell (sens/baseline, added by the analysis)
+sensitivity:              # sens: cells of sweeps.yaml path overrides at the baseline point; anchoring.*-only cells run on the anchored variants alone
+  baseline: {}                                     # the reference cell
+  endorse-all: { endorsement.policy: all }         # 2-of-2 endorsement, all four variants
+  idle-5s: { anchoring.idle_timeout_ms: 5000 }     # 5 s idle batch timer, no cap: the anchored variants
 ```
 
 - Caliper workspace `benchmark/`, CLI pinned `@hyperledger/caliper-cli@0.6.0`; the exact
@@ -546,7 +606,12 @@ ramp: { events_per_case_per_round: 224 }     # E0 ramp = the E3a slice: 40 would
   one line per timed tx — and one per untimed ledger write — from Caliper's own `TxStatus`):
   `{"round":label,"op":"CREATE|TRANSFER|ACCESS|DISPOSE|READ_EVIDENCE|READ_TRAIL|VERIFY",
   "caseId":string|null,"evidenceId":string|null,"tCreate":ms,"tFinal":ms,"latencyMs":n|null,
-  "ok":bool,"err":string|null,"timed":bool}`. `timed` is the trailing argument of
+  "ok":bool,"err":string|null,"timed":bool[,"batchId":string,"leafIndex":n]}`. **M28**:
+  `batchId`/`leafIndex` appear only on an anchored write the batcher accepted — the REST
+  connector copies them from the 202 body onto the `TxStatus` after `SetStatusSuccess` (so
+  the parse is outside the measured latency), and `log()` appends them; every other line is
+  unchanged. collect.py joins them to the batch record's `committedAt` (finalization, below).
+  `timed` is the trailing argument of
   `log(workerIndex, round, op, caseId, evidenceId, status, timed = true)`; `timed: false` marks
   a ledger write the round performed but never measured — `lib/pool.seedPool`'s pool seeding
   (through the connector) and `verify.js`'s seeding, which goes over plain `fetch` and so is
@@ -559,18 +624,26 @@ ramp: { events_per_case_per_round: 224 }     # E0 ramp = the E3a slice: 40 would
   `@hyperledger/caliper-fabric/lib/connector-versions/peer-gateway/PeerGateway.js`), so `err`
   is `null` for fabric-mode failures; collect.py classifies those from `caliper.log`.
 - **Round labels**: `smoke-create` / `smoke-logs` / `smoke-access-shared-gate` (standard) /
-  `smoke-verify` (anchored) / `smoke-trace` (e0); `rate<R>` (ramp, e3a, cell with several send
-  rates); `slice<k>` (e1, e2, e3b, cell with one send rate); `create` / `transfer` / `access` / `dispose` / `read-evidence` / `read-trail` /
+  `smoke-verify` (anchored) / `smoke-trace` (e0); `rate<R>` (ramp, cell with several send
+  rates, and e3a always — also its one-rate midpoint run); `slice<k>` (e1, e2, e3b, e3c, sens,
+  cell with one send rate); `create` / `transfer` / `access` / `dispose` / `read-evidence` / `read-trail` /
   `verify-event` (ops).
 - **Results layout** (gitignored, never edited by hand):
   `benchmark/results/<exp>/<variant>/<levels>/r<rep>/` with `levels =
   batch<N>-ch<C>-cases<K>[-ref]` (fixed key order, e.g. `batch50-ch20-cases20`; `cell` runs append
-  `-rate<R>[-<R>…]` and, with control overrides, `-x<hash>`) containing
+  `-rate<R>[-<R>…]` and, with control overrides, `-x<hash>`; **M28**: e3a climb runs append
+  their send rates, e.g. `-rate1250-1562-1953-2441`, and the midpoint run also `-midpoint`,
+  e.g. `-rate1125-midpoint` — base-ladder runs append nothing; `sens` runs append the cell
+  name, e.g. `batch50-ch20-cases20-endorse-all`) containing
   `run.json` (seeded by experiment.py), `rounds/<label>/{bench.yaml, round.json, caliper.log,
   report.html, tx-w<i>.jsonl}`, `checkpoints.jsonl` (`t0..tN`), `anchoring.json` (batcher
-  `/status` after the final flush), `audit.json` (reconstruct.js), `manifest.json`
-  (collect.py); plus `benchmark/results/<exp>/<exp>-results.csv` (report.export_rounds, rewritten
-  after every run) and `benchmark/results/runlog.jsonl` lines `{runId, exp, variant, levels,
+  `GET /status?events=1` after the final flush — batch records with `enqueuedAtMs`),
+  `audit.json` (reconstruct.js), `manifest.json` (collect.py); plus `benchmark/results/<exp>/<exp>-results.csv` (report.export_rounds, rewritten
+  after every run), **M28** `benchmark/results/e3a/e3a-climb.json` (rewritten after every climb
+  step: `{updatedAt, rule: <the sweeps.yaml e3a block>, variants:{<variant>: {saturatedAt,
+  keptUpTo, generatorLimitAt, points[{sendRateTps, throughputTps, sendRateMeasuredTps, reps}],
+  decision}}}`; only `decision` while a step with missing repetitions is re-run)
+  and `benchmark/results/runlog.jsonl` lines `{runId, exp, variant, levels,
   rep, startedAt, finishedAt, wallSeconds, status: complete|failed}`. `runId =
   '<exp>/<variant>/<levels>/r<rep>'`. Caliper's own `report.json` is not produced;
   `caliper.log` is the tee'd stdout collect.py parses (rows after the LAST `### All test
@@ -583,8 +656,10 @@ ramp: { events_per_case_per_round: 224 }     # E0 ramp = the E3a slice: 40 would
   variant, levels{batchSize, channels, cases, sendRateTps, reference}, repetition,
   regime: smoke|steady|sub-floor, status, trace{hash, params, opCounts, path}, rounds[],
   storage{}, anchoring, audit, payloadCompressionVsBaseline?, controls{workers,
-  evidencePerCase, payloadBytes, auditCases, flushTimeoutMs, monitorIntervalS}, overrides{<sweeps
-  path>: value} (cell CLI controls; {} otherwise), minChannelWriteEvents (actual, from the
+  evidencePerCase, payloadBytes, auditCases, flushTimeoutMs, idleTimeoutMs, endorsement,
+  monitorIntervalS}, overrides{<sweeps
+  path>: value} (cell CLI controls, or a sens cell's overrides; {} otherwise), cell (sens runs
+  only: the sensitivity cell's name), minChannelWriteEvents (actual, from the
   trace), provenance{gitCommit, configShas, sweepsSha, sweepsPath, caliper{version, binding,
   connector}, fabricTag, host{cores, memGb, platform}}, startedAt, finishedAt, wallSeconds` (+ `throughputPolicy`,
   `collectedAt`). `rounds[i]`: `label, index, module, slice, sendRateTps, succ, fail,
@@ -593,6 +668,9 @@ ramp: { events_per_case_per_round: 224 }     # E0 ramp = the E3a slice: 40 would
   failureClasses{MVCC_READ_CONFLICT, ENDORSEMENT_POLICY_FAILURE, TIMEOUT, HTTP_4XX,
   HTTP_5XX, OTHER}, latencyMs{min, p50, p95, p99, max, mean, n}, sendRateMeasuredTps,
   windowS, perOp{OP:{…}}}` — `txlog` is computed over the **timed** records only —
+  **M28** `finalization{basis: commit|root-commit, finalized, notFinalized, pausedEvents,
+  latencyMs{min, p50, p95, p99, max, mean, n}, finalizedTps, windowS}` (the finalization
+  bullet below; `null` for a round without a successful timed write),
   `untimedWrites` (count of successful write ops logged `timed: false`, i.e. the round's
   pool/verify seeding), `failureClassesLogScan{MVCC_READ_CONFLICT, ENDORSEMENT_POLICY_FAILURE,
   TIMEOUT, fabricStatusCodes{code:count}, source}|null` (present only when the round had
@@ -608,7 +686,9 @@ ramp: { events_per_case_per_round: 224 }     # E0 ramp = the E3a slice: 40 would
   publishes nothing, with a printed warning, so report.py prints `-` rather than
   "0 bytes/event"): `checkpoints[], bytesPerEventRegression{slope,
   intercept, r2, points}|null` (OLS over ≥ 3 checkpoints of cumulative write events vs
-  on-chain bytes = app channels + anchor channel; `r2: null` for a flat series, never `1.0`),
+  on-chain bytes = app channels + anchor channel — the anchor channel exists only in runs of
+  the earlier design, campaigns 1–5, so `anchorChannelDeltaBytes` is 0 for new runs; `r2: null`
+  for a flat series, never `1.0`),
   `bytesPerEventDelta`,
   `onChainDeltaBytes, appChannelsDeltaBytes, anchorChannelDeltaBytes, perChannelDeltaBytes,
   stateDeltaBytes, offChainDeltaBytes, offChainBytesPerEvent, successfulWriteEvents, policy,
@@ -617,9 +697,13 @@ ramp: { events_per_case_per_round: 224 }     # E0 ramp = the E3a slice: 40 would
   (`txlog.perOp`, else `succ` for a write module) **plus** its `untimedWrites`. Both kinds
   commit real transactions, so both produce block-store bytes; counting only the timed ones
   divides an `ops` round's growth by a fraction of the events that caused it.
-  `anchoring`: `batchSize, flushTimeoutMs, batches, committedBatches, forcedBatches,
-  delay{minS, meanS, maxS, batches}` (leafCount-weighted, from the batch records' `delayMs`
-  ÷ 1000), `delayExcludingForced` | null. `audit`: `method
+  `anchoring` (`null` without `anchoring.json`, i.e. on the direct variants): `batchSize,
+  flushTimeoutMs, idleTimeoutMs, batches, committedBatches, forcedBatches,
+  closeReasons{<closeReason>: count}|null, delay{minS, meanS, maxS, batches}`
+  (leafCount-weighted, from the batch records' `delayMs` ÷ 1000), `delayExcludingForced`
+  (each `null` when no batch qualifies), `delayPerEventMs{min, p50, p95, p99, max, mean,
+  n}|null` (**M28**: exact per event, `committedAt` − each `enqueuedAtMs`; `null` when the
+  records carry no `enqueuedAtMs`, i.e. an `anchoring.json` written before M28). `audit`: `method
   ('on-chain-trail'|'merkle-branch'), cases, summary` (reconstruct.js summary verbatim) |
   null (ops runs have no trace, so no audit). `configShas` covers
   `network/configtx/configtx.yaml`, `network/core.yaml`, `network/orderer.yaml` and the
@@ -636,45 +720,98 @@ ramp: { events_per_case_per_round: 224 }     # E0 ramp = the E3a slice: 40 would
   (the root cache is reset for every case, so each case pays its own root reads) via
   `GET /api/v1/anchor-roots/…` (404 = failed events), compare. One untimed pass over case 1's
   first evidence item (trail + root reads, results discarded) precedes the timed cases, so
-  case 1 is not timed cold (§12-23). Non-2xx on `/audit` throws.
+  case 1 is not timed cold (§12-23). Non-2xx on `/audit` throws. experiment.py passes
+  `--cases min(workload.audit_cases, the run's cases)` — since M28 every case of the run
+  (`audit_cases: 50` ≥ every grid case count; it was 5); `summary.msPerEvent` is the
+  report column "audit time per event (ms)".
 - Throughput is reported **successful-only** (`reported × Succ/(Succ+Fail)`, issue #1418),
   stated in `benchmark/README.md`; "send rate" is the configured input, "throughput" the
   measurement, TPS only a unit. Storage compression is reported as the reduction in on-chain
   **bytes per event** vs a Standard baseline run (`collect.py --baseline`), never as 1/N of
   total ledger size. Anchored-variant write latency on the REST path is **enqueue latency**
   (the gateway's 202); ledger commit lag is the separate anchoring-delay metric.
+- **Finalization** (**M28**, collect.py `finalization_metrics`, per round; the one latency all
+  four variants share): each successful timed write, from its submission (Caliper's
+  `tCreate`) to its integrity finalization — its own commit (`tFinal`; Standard/Parallel,
+  `basis: commit`) or the commit of its batch's root (anchored, `basis: root-commit`: the
+  `anchoring.json` `committedAt` of the 202's `batchId`; a batch that never committed → not
+  finalized; an anchored round in which no write carries a `batchId` — every run logged
+  before the batch link — has `finalization: null`, and a round whose writes all failed
+  reads `finalized: 0`, `finalizedTps: 0`). `finalizedTps` = the least-squares slope of the
+  cumulative finalizations over [the first finalization after the round's first submission, its
+  last submission] (anchored: every root committed in that window, weighted by its leafCount, a
+  batch carried over from the previous round included); it is 0 when fewer than two
+  finalizations fall inside the window, and `windowS` is that window's length. Root commits come
+  in whole batches, so a slope, not a count over the window, keeps a variant that keeps up at
+  about the send rate whatever its latency; a saturated one reads its finalization capacity.
+  `pausedEvents` = finalized events
+  whose batch closed after the round's last accepted write — they waited for the next round's
+  events or the run-end flush, a known limit of size-only batching across rounds (§12-24).
+  report.py columns: finalized throughput (TPS), finalization latency avg / p95 (s).
+- **E3a climb, E3c and sens** (**M28**, §12-24; procedure and rationale:
+  `docs/methodology/experiments.md`):
+  - `e3a`: per variant, `repetitions` runs of the base ladder (`e3a.send_rates_tps`, one round
+    per send rate, ascending, `e3a.events_per_case_per_round`, `baseline.channels` cases, one
+    ledger per run), then the climb (experiment.py `e3a_next_runs`; rule = `report.e3a_verdict`
+    on the mean over the reps per send rate, walking up): measured send rate <
+    `generator_ratio` × configured → load-generator limit, the variant stops; else finalized
+    throughput < `saturation_ratio` × configured → saturated (runs collected before
+    finalization records fall back to Caliper's successful-only throughput). A variant that
+    kept up at every rate gets the next ladder — top × `factor`, × `factor`², … ×
+    `factor`^`rates_per_ladder`, rounded, none above `max_send_rate_tps` (an empty ladder
+    ends the variant) — as one more run per repetition, one round per rate, each round holding
+    ⌈`min_send_s` × the ladder's top rate ÷ cases⌉ events per case, raised until the workers
+    divide the slice; the first saturated rate earns ONE midpoint run per repetition halfway
+    back to the last rate that kept up (the saturated run's round size), then the variant
+    stops. Rates above the stop point are measured (same run) but never judged. A climb step
+    with fewer complete reps than `repetitions` (a crash) is planned again first; `--resume`
+    re-derives the climb from the complete runs.
+  - `e3c`: as e3b over `e3c.case_counts` (≤ `baseline.channels_max`), but at send rate = cases ×
+    `e3c.send_rate_per_case_tps` (25–250 tx/s); the grid leaves out 20 cases (20 × 5 =
+    100 tx/s, the baseline point), which the `sens` `baseline` cell measures in the same
+    campaign. E3b keeps the TOTAL send rate at `baseline.send_rate_tps`.
+  - `sens`: each `sensitivity` cell = sweeps.yaml path overrides on an in-memory copy (an
+    unknown path or an `endorsement.policy` other than `any|all` fails at plan time), at the
+    baseline point (`baseline.send_rate_tps`, `baseline.channels` cases, `baseline.batch_size`,
+    `workload.rounds` slices); a cell that overrides only `anchoring.*` runs on the anchored
+    variants alone (12 + 12 + 6 = 30 runs at r = 3). Runs go repetition by repetition (every
+    cell once, then again); each run carries its own effective constants (`controls`,
+    `overrides`, `cell`).
 - Paper-facing procedure, level-selection rules and flowcharts: `docs/methodology/experiments.md`.
 
 ## 11. Orchestration entry points
 
 ```
-orchestration/up.sh --variant <v> [--channels <n>] [--skip-crypto]  # enroll → compose up → channels → ccaas → commit; with --skip-crypto on parallel-anchored, a missing/partial anchor org is enrolled ALONE (registerEnroll.sh anchor-only; org1/org2/orderer untouched) — §12-19
+orchestration/up.sh --variant <v> [--channels <n>] [--endorsement any|all] [--skip-crypto]  # enroll (3 orgs; --skip-crypto reuses network/organizations) → compose up → orderer/peer healthz → peers serve gRPC (lib.sh wait_peer_grpc, M28) → install → channels → approve/commit with the --endorsement policy (default any; written to .env ENDORSEMENT, §3) → services
 orchestration/down.sh [--wipe]                       # teardown; --wipe removes named volumes
-orchestration/provision-channel.sh <caseId>          # genesis → osnadmin join(201) → peer join → approve/commit cc with CCAAS_ID_APP (install is org-scoped, done once by up.sh); writes no Caliper config
-orchestration/reset-network.sh --variant <v> --channels <C>   # M26 ledger-only reset: needs GLEIPNIR_ALLOW_LEDGER_WIPE=1; down (no -v) → rm ONLY gleipnir_{orderer0,orderer1,orderer2,peer0org1,peer0org2,peer0anchor}-ledger, gleipnir_receipt-data, gleipnir_verify-metrics → rm network/channel-artifacts → unset CCAAS_ID_* → up.sh --skip-crypto (never touches gateway-auth-data, case-registry-data, evidence-blob-data, CA state, network/organizations)
+orchestration/provision-channel.sh <caseId>          # genesis → osnadmin join(201) → peer join → approve/commit cc with CCAAS_ID_APP and the stack's .env ENDORSEMENT policy (install is org-scoped, done once by up.sh); writes no Caliper config
+orchestration/reset-network.sh --variant <v> --channels <C> [--endorsement any|all]   # M26 ledger-only reset: needs GLEIPNIR_ALLOW_LEDGER_WIPE=1; down (no -v) → rm ONLY gleipnir_{orderer0,orderer1,orderer2,peer0org1,peer0org2}-ledger, gleipnir_receipt-data, gleipnir_verify-metrics → rm network/channel-artifacts → unset CCAAS_ID_APP → up.sh --endorsement <policy, default any> --skip-crypto (never touches gateway-auth-data, case-registry-data, evidence-blob-data, CA state, network/organizations)
 orchestration/backup-volumes.sh <dir> [--restore]    # tar every gleipnir_* named volume via alpine (one file each); --restore REPLACES each volume's contents (empties it first) and refuses while a container uses the volume
 orchestration/benchapp.pyw                           # desktop app (Windows host, Python 3.11 + Tk; drives experiment.py in WSL) — §12-19
 orchestration/smoke-standard.sh                      # REST-path functional gate: create → transfer → access×2 → audit(==4) → dispose → status DISPOSED → transfer-fails
 orchestration/smoke-library.sh                       # library gate (standard variant): login/roles → case+participant → multipart ingest → categorize → search → view/download/export auto-log asserts → authz negatives → trail==4
+orchestration/crash-test.sh [--events K] [--out FILE]  # M28 batcher crash test (anchored stack; parallel-anchored uses case-001): K (default 5, < batch size) events → 202 → SIGKILL + start the batcher → flush → checks receipts, trail and root; exit 0 = none survived (the documented loss of an open batch), 1 = something survived, 2 = no usable answer from the stack; also reports whether the restarted container kept BATCH_EPOCH (it then numbers from b000000 again and can reuse batch ids already on the ledger); first re-creates the batcher with a new fixed BATCH_EPOCH (crash-test-<unix>, written to .env) so the test's batch id is new, and after a restart that kept it re-creates it with an empty BATCH_EPOCH; --out writes the JSON result
+orchestration/tamper-test.sh [--out FILE]            # M28 receipt-store tamper demonstration (anchored stack; parallel-anchored uses case-001): one evidence, 4 events, flushed; changed event copy → root-mismatch; changed sibling path → root-mismatch (blocks the proof, forges nothing); deleted receipt → missing-receipt on verify, trail silently 3 events, the on-chain root's leafCount still 4; replay via the gateway → a new eventId, recorded as a new event; same eventId into the batcher → 409 inside the open batch, 202 after the boundary (receipt witness overwritten); exit 0 = every outcome as documented, 1 otherwise, 2 = no usable answer; first re-creates the batcher with an empty BATCH_EPOCH (.env) so the test's batch ids are new. Both scripts are functional fault-injection tests (curl + jq + docker), not chaincode security tooling
 orchestration/rounds.py                              # library only (no CLI): the ONLY renderer of Caliper benchconfigs/network configs from sweeps.yaml — render_round()/network_config()/render_parallel_network(), called by experiment.py, which writes every rendered config into the run dir (nothing rendered is committed)
-orchestration/experiment.py --exp e0|ramp|e1|e2|e3a|e3b|ops|cell [--variant V]* [--reps N] [--resume] [--dry-run] [--reuse-network] [--no-monitor] [--no-audit] [--verbose] [--sweeps FILE] [--send-rate R [R ...]] [--batch-size B] [--cases N] [--seed S] [--workers W] [--rounds K] [--events-per-case E] [--evidence-per-case V] [--transfer-weight T] [--access-weight A] [--dispose-fraction D] [--payload-bytes P] [--audit-cases N] [--flush-timeout-ms F] [--monitor-interval I]   # the campaign driver; the factor AND control flags are --exp cell only (§12-18); prints [run i/n] + ETA and per-round result lines, rewrites results/<exp>/<exp>-results.csv after every run (plans cells × reps; one network lifetime per run; lifecycle in §10 / orchestration/README). A FRESH ledger per run is the default; --reuse-network opts out (warned, one ad-hoc run)
+orchestration/experiment.py --exp e0|ramp|e1|e2|e3a|e3b|e3c|ops|sens|cell [--variant V]* [--reps N] [--resume] [--dry-run] [--reuse-network] [--no-monitor] [--no-audit] [--verbose] [--sweeps FILE] [--send-rate R [R ...]] [--batch-size B] [--cases N] [--seed S] [--workers W] [--rounds K] [--events-per-case E] [--evidence-per-case V] [--transfer-weight T] [--access-weight A] [--dispose-fraction D] [--payload-bytes P] [--audit-cases N] [--flush-timeout-ms F] [--idle-timeout-ms F] [--endorsement any|all] [--monitor-interval I]   # the campaign driver; the factor AND control flags are --exp cell only (§12-18; --idle-timeout-ms and --endorsement are M28); prints [run i/n] + ETA and per-round result lines, rewrites results/<exp>/<exp>-results.csv after every run (plans cells × reps; one network lifetime per run; lifecycle in §10 / orchestration/README; e3a: the base ladder, then the climb, writing results/e3a/e3a-climb.json after every step, §10; e3a refuses --reuse-network, and without --resume refuses to start while results/e3a holds an earlier invocation's climb runs; with --resume and the base ladder complete, the plan lists the climb's next step). A FRESH ledger per run is the default; --reuse-network opts out (warned, one ad-hoc run; refused when the stack's .env ENDORSEMENT differs from the run's policy)
 orchestration/checkpoint.py <runPath> [--label tK]   # du -sb probes via docker exec, appends checkpoints.jsonl (runPath = <exp>/<variant>/<levels>/r<rep>)
 orchestration/collect.py <run-dir> [--baseline <run-dir>] | --selftest   # run dir → manifest.json (rounds, per-tx percentiles, failure classes, resources, storage regression, anchoring, audit)
-orchestration/report.py --exp e0|ramp|e1|e2|e3a|e3b|ops|cell [--out docs/results/<exp>] [--no-charts] [--decimal-comma]   # ALWAYS benchmark/results/<exp>/<exp>-results.csv (one row per run x round; column order send rate, throughput, latency min/max/avg/p95, CPU, memory, success, failure, failure rate; UTF-8 BOM; --decimal-comma = ';' + decimal comma); for e1..ops also CSV + Markdown tables (units in headers, mean ± SD over reps; Markdown = one table per variant with ONE latency column `avg (min–max), p95` of means, SDs in the CSV) + PNG charts (matplotlib optional); e3a also writes e3a-saturation.json (saturation = first send rate where successful throughput < 0.9 × send rate; latency knee alongside); ops → ops-writes.* and ops-reads.*; E1 reference rows carry no batch size and print `ref`, never the literal `None`; the per-round tables (e3a, ops) carry a header note that on-chain/off-chain bytes per event, audit time and anchoring delay are measured once per RUN and therefore repeat on every row
+orchestration/report.py --exp e0|ramp|e1|e2|e3a|e3b|e3c|ops|sens|cell [--out docs/results/<exp>] [--no-charts] [--decimal-comma]   # ALWAYS benchmark/results/<exp>/<exp>-results.csv (one row per run x round; column order send rate, throughput, latency min/max/avg/p95, CPU, memory, success, failure, failure rate; UTF-8 BOM; --decimal-comma = ';' + decimal comma); for e1, e2, e3a, e3b, e3c, ops, sens also CSV + Markdown tables (units in headers, mean ± SD over reps; Markdown = one table per variant with ONE latency column `avg (min–max), p95` of means, SDs in the CSV; X = batch size / channels / send rate / cases / cases / operation / sensitivity cell; M28: the tables end with measured send rate (tx/s), finalized throughput (TPS), finalization latency avg (s), finalization latency p95 (s), audit time per event (ms)) + PNG charts for the numeric-X experiments (not ops or sens; matplotlib optional); e3a also writes e3a-saturation.json (per variant saturationSendRateTps, keptUpToSendRateTps, generatorLimitSendRateTps, latencyKneeSendRateTps — the rule is report.e3a_verdict with the sweeps.yaml e3a ratios: finalized throughput, Caliper's successful-only throughput for rounds collected before finalization records, < saturation_ratio × send rate, unless the measured send rate < generator_ratio × send rate — the load-generator limit, flagged `generator-limit`); ops → ops-writes.* and ops-reads.*; E1 reference rows carry no batch size and print `ref`, never the literal `None`; the per-round tables (e3a, ops) carry a header note that on-chain/off-chain bytes per event, audit time (per case and per event) and anchoring delay are measured once per RUN and therefore repeat on every row
 ```
 
-`experiment.py` shells out to: `bash reset-network.sh` (before every run unless
-`--reuse-network`), `bash
+`experiment.py` shells out to: `bash reset-network.sh … --endorsement <the run's policy>`
+(before every run unless `--reuse-network`), `bash
 provision-channel.sh case-NNN` (missing channels), `node benchmark/trace/generate.js … --out
 <path>` (reads the printed sha256, moves the file to `benchmark/traces/<hash>.json`), `python
 checkpoint.py`, `npx caliper launch manager --caliper-workspace . --caliper-benchconfig <abs
 bench.yaml> --caliper-networkconfig <rel for standard/anchoring/parallel-anchored; for parallel ALWAYS the absolute run-dir rendering <run>/parallel-c<C>.yaml> --caliper-report-path <abs>` (cwd `benchmark/`, env
 `GLEIPNIR_TXLOG_DIR=<run>/rounds/<label>`, `GATEWAY_URL`, `BATCHER_URL`, `GLEIPNIR_TOKEN`),
 `GET $BATCHER_URL/status` (the per-round settle: poll until no root is `pending`) and, on the
-LAST round, `POST $BATCHER_URL/flush` + `GET /status` **before** that round's checkpoint so the
+LAST round, `POST $BATCHER_URL/flush` + `GET /status?events=1` (→ `anchoring.json`, with each
+batch's `enqueuedAtMs`) **before** that round's checkpoint so the
 run-end partial batch is inside the `t0→tN` delta, `node benchmark/audit/reconstruct.js`,
 `python collect.py <run-dir>`. Anchored runs get `BATCH_SIZE`,
-`BATCH_FLUSH_MS`, `BATCH_EPOCH` written to `.env` and the batcher recreated with `docker
+`BATCH_FLUSH_MS`, `BATCH_IDLE_MS`, `BATCH_EPOCH` written to `.env` and the batcher recreated with `docker
 compose -p gleipnir … --profile anchoring --profile parallel-anchored up -d --force-recreate
 merkle-batcher`. Volume names assume compose project `gleipnir`.
 
@@ -692,10 +829,10 @@ it is one GoLevelDB directory shared by all of a peer's channels).
    identity alone cannot endorse. So Parallel-Anchored adds `peer0-anchor` + `ca-anchor`
    (compose profile only). The §3 table's "2 peers / 2 CAs" holds for the other three
    variants. The alternative (endorse anchor roots with Org1) would violate the verbatim
-   §4.4 policy — rejected.
+   §4.4 policy — rejected. **Superseded for new runs by §12-24** (M28: no anchor org).
 2. **4 CAs, not 2.** CA-based enrollment (per the §4.4 "enrolled via Fabric CA 1.5.19"
    requirement) needs a CA per org: org1, org2, orderer, anchor. The §3 table counted
-   only the peer-org CAs.
+   only the peer-org CAs. **Superseded for new runs by §12-24** (M28: 3 CAs — org1, org2, orderer).
 3. **Chaincode-as-a-Service.** The stack pins Go 1.25.5 (docs/AS-BUILT.md §2), but the
    peer's in-image build (`fabric-ccenv:2.5`) ships an older Go toolchain. CCaaS builds the chaincode in our
    own `golang:1.25.5` image, honoring the pin exactly, and is the fabric-samples-2.5
@@ -705,7 +842,7 @@ it is one GoLevelDB directory shared by all of a peer's channels).
    anchor-client owns the anchor-channel session. The §3 note "gateway is the only
    component holding fabric-gateway sessions" cannot hold simultaneously with §4.4
    (anchor-client submits roots itself); scoping it to app channels preserves both
-   intents.
+   intents. **Superseded for new runs by §12-24** (M28: the gateway holds the only Fabric sessions).
 5. **Event sub-key uses tx timestamp + txID** instead of a client-passed counter, because
    the binding signatures carry no counter argument (§3 above). The invariant that
    matters — concurrent `AccessLog` produces distinct keys with zero MVCC conflicts — is
@@ -1102,6 +1239,113 @@ silently pick something else.
     2–5). `reconstruct.js` now resets the `(scopeId, batchId)` root cache for every case and runs
     one untimed pass over case 1's first evidence item (trail + root reads, results discarded;
     never auto-logged) before timing. Output shape unchanged.
+
+24. **M28 — a true 2×2, finalization timing and the revised experiments** (authors,
+    2026-11-06, after the supervisor's review of the paper). The review found that the
+    design was not a true 2×2 factorial (anchoring × per-case partitioning):
+    Parallel-Anchored batched per case but committed every root to the
+    separate anchor channel `anchor-main`, written by the anchor-client under its own
+    `AnchorClientMSP` org (§12-1, §12-2, §12-4), so its case channels carried nothing.
+    Campaigns 1–5 ran that earlier design; it stays reproducible from commit `573017b`.
+    - **Roots in each case's own channel.** The batcher submits every root of both anchored
+      variants through the gateway's bearer-authed `POST /internal/anchor-root`. Anchoring's
+      meta stays `{scopeId: "shared", leafCount}` (no `caseId` → chaincode scope `shared`, on
+      `coc-main`); Parallel-Anchored's is `{scopeId, leafCount, caseId}` with `caseId` =
+      `scopeId` = `case-NNN`, committed on channel `case-NNN`. `variantRouter.rootChannel`
+      picks the channel for the commit and for both root reads (`/internal/anchor-root/…` and
+      `/api/v1/anchor-roots/…`, now one handler); the verification service reads every root
+      through the gateway (§6, §9). The chaincode is unchanged. Why: each factor now means the
+      same at both levels of the other — Parallel and Parallel-Anchored differ only in
+      anchoring, like Standard and Anchoring — and each Parallel-Anchored case channel
+      carries its own data. Side effect: every ledger write uses one chaincode deployment and
+      one endorsement policy on the app channels.
+    - **Anchor channel removed.** Gone: `services/anchor-client/`, `peer0-anchor`,
+      `ccaas-evidence-anchor`, `ca-anchor`, the `AnchorClientMSP` org (configtx `AnchorOrg` and
+      the `AnchorChannel` profile; registerEnroll.sh's anchor org, `anchor-only` mode and
+      `ENABLE_ANCHOR_ORG`, so the §12-19 anchor-org enrolment is gone too), the `anchor-main`
+      creation and deploy in up.sh, `CCAAS_ID_ANCHOR`, the `peer0anchor-ledger` volume
+      (compose and reset-network.sh, which now removes five ledger volumes, not the six of
+      §12-15), ports 4003, 9054, 9448, 11051 and 11052, the anchor-peer wait in
+      `benchcore.stack_up_script`, the anchor-client image in build-images.sh, and the anchor
+      containers in rounds.py's monitor list and checkpoint.py's peers. The
+      `parallel-anchored` compose profile stays, with the same three services as `anchoring`.
+      **Kept:** collect.py's anchor-channel accounting (`ANCHOR_CHANNEL`,
+      `anchorChannelDeltaBytes`, `gleipnir-anchor-client` in the off-chain container group),
+      only so that the campaign 1–5 run folders still collect to the same numbers; new runs
+      have no anchor channel, so `anchorChannelDeltaBytes` is 0.
+    - **Finalization latency from exact per-event times.** Batch records gain `closeReason`
+      and `enqueuedAtMs` (§5; the latter only in `GET /status?events=1`, which experiment.py
+      writes to `anchoring.json` after the final flush); the REST connector copies an anchored
+      write's `batchId`/`leafIndex` onto its tx-log line; collect.py adds per round
+      `finalization` and per run `anchoring.idleTimeoutMs` / `closeReasons` /
+      `delayPerEventMs` (§10). Why: the anchored variants' REST write latency is enqueue
+      latency (the 202), which the review found not comparable with a commit; submission →
+      the commit that protects the event is the one latency all four variants share, and
+      finalized throughput is the E3a saturation measure. **Kept, a known limit:** size-only
+      batching across rounds — at a round end an anchored event can wait in an open batch for
+      the next round's events or the run-end flush; `pausedEvents` counts these events, and
+      their latency includes the pause.
+    - **Endorsement policy as a run setting.** `endorsement.policy: any|all` (default `any`,
+      1-of-any as before; `all` = 2-of-2) through up.sh / reset-network.sh `--endorsement`,
+      `.env` `ENDORSEMENT` and `lib.sh endorsement_policy` (§3); experiment.py passes the
+      run's policy, refuses `--reuse-network` on a mismatch and records
+      `controls.endorsement`; cell flag `--endorsement`. configtx.yaml now declares AnchorPeers
+      for Org1 and Org2, which `configtxgen -outputBlock` encodes into each channel's genesis
+      block (checked against Fabric's release-2.5 source, `internal/configtxgen/encoder`
+      `NewApplicationOrgGroup` — the branch head, not the v2.5.15 tag), so cross-org gossip
+      lets `peer0.org1` reach Org2's peer for 2-of-2. Why: the review noted that one
+      organization endorses alone; 1-of-any isolates performance and is not a production
+      policy, so the `sens` cell `endorse-all` measures 2-of-2 at the baseline point. Cost:
+      cross-org gossip changes the network of every variant slightly, so the check of the
+      three unchanged variants against campaigns 1–5 is approximate. Not yet verified on a
+      live stack.
+    - **Idle batch timer.** `anchoring.idle_timeout_ms` / `BATCH_IDLE_MS` (default 0 = off)
+      closes a batch that long after its LAST event (re-armed by every event, no cap); the
+      existing `anchoring.flush_timeout_ms` / `BATCH_FLUSH_MS` is now the age timer (after the
+      FIRST event). experiment.py sets `BATCH_IDLE_MS` per run and records
+      `controls.idleTimeoutMs`; cell flag `--idle-timeout-ms`. Why: it measures how much a
+      timer shortens the window in which an accepted event is not yet protected. Used only by
+      the `sens` cell `idle-5s`; size-only batching stays the default of every other run.
+    - **Every case audited.** `workload.audit_cases` 5 → 50 (≥ every grid case count, still
+      capped at the run's cases), because the review found that only the first five cases
+      were audited; `summary.msPerEvent` becomes the report column "audit time per event
+      (ms)", beside audit time per case.
+    - **Fault-injection scripts** (§11). `crash-test.sh` shows that a batcher crash loses the
+      accepted (202) events of the open batch — no receipt, no trail entry, no root — because
+      the open batch lives only in memory (the documented behaviour, §5).
+      `tamper-test.sh` shows what each attack on the un-hardened receipt store does to
+      verification and to the trail. Both are functional tests (curl + jq + docker), not
+      chaincode security tooling; the receipt store stays un-hardened. **Kept, a known
+      limit:** a restarted batcher container keeps its fixed `BATCH_EPOCH`, numbers batches
+      from `b000000` again and can reuse batch ids whose roots are already on the ledger
+      (roots are write-once: that batch's root commit fails, and its receipts name a batch id
+      whose on-chain root belongs to the earlier batch); crash-test.sh reports it
+      (`restartReusesBatchIds`). Compose sets no restart policy, and experiment.py recreates
+      the batcher with a fresh epoch for every run, so only a manual restart hits it. Neither
+      script has run live yet.
+    - **Experiments** (§10, §11; procedure in `docs/methodology/experiments.md`). E3a is
+      redesigned (block `e3a`: a base ladder of 100–1000 tx/s with 1,500 events per case per
+      round, then the climb until each variant saturates or the load generator tops out,
+      judged on finalized throughput), because no saturation was found in 10–200 tx/s; this
+      replaces §12-14's E3a grid and saturation rule, and the top-level `send_rates_tps` is
+      now the ramp grid only. New `e3c` (cases at a fixed per-case send rate of 5 tx/s, because
+      E3b, at a fixed total send rate, measures the overhead of more cases rather than
+      workload scalability) and `sens` (sensitivity cells at the baseline point, repetition by
+      repetition so that drift within a night spreads over the cells). report.py adds the e3c
+      and sens tables and the finalization columns; e3a-saturation.json adds
+      `keptUpToSendRateTps` and `generatorLimitSendRateTps`. E2 and the ramp stay runnable but
+      are not part of the new campaigns. The desktop app gains the e3c/sens modes and the new
+      sweeps.yaml fields.
+    - **Comment cleanup of the run.json-hashed configs.** The cleanup changes only comments,
+      in core.yaml, orderer.yaml, the compose files and sweeps.yaml (core.yaml and
+      orderer.yaml parse to identical data; every value change in those files belongs to an
+      item above); their blob SHAs in `run.json` (`configShas`, `sweepsSha`) change all the
+      same.
+    - **Reset race fixed.** A peer's operations `/healthz` can answer before its gRPC endpoint
+      serves; the first `peer lifecycle chaincode install` then failed to connect. up.sh now
+      waits for org1 and org2 with `lib.sh wait_peer_grpc` (retries `peer channel list` in the
+      cli container) after the healthz waits and before the install. 12 failed attempts in
+      campaigns 1–5 came from this race.
 
 Anything else that seems to require deviating from docs/ARCHITECTURE.md: stop
 and ask the authors; contract changes are never made silently.

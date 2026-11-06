@@ -5,9 +5,9 @@
 // workloads are identical across variants; only the write path differs:
 //
 //   standard          -> submit on coc-main
-//   anchoring         -> enqueue to the merkle-batcher (root committed at boundary)
+//   anchoring         -> enqueue to the merkle-batcher (one shared batch; root -> coc-main)
 //   parallel          -> submit on case-<id>
-//   parallel-anchored -> enqueue to the merkle-batcher (per-case, root -> anchor channel)
+//   parallel-anchored -> enqueue to the merkle-batcher (per-case batch; root -> case-<id>)
 //
 // Reads differ too: the batched variants keep no per-event record on
 // the app channel (only the Merkle root goes on-chain), so ReadEvidence /
@@ -46,6 +46,14 @@ function channelFor(variant, caseId, defaultChannel) {
     return caseId;
   }
   return defaultChannel;
+}
+
+// The channel holding a scope's Merkle roots: Anchoring's one `shared` scope
+// lives on the default channel; a Parallel-Anchored scope IS a case id, and
+// its roots live on that case's own channel. The direct variants have none.
+function rootChannel(variant, scopeId, defaultChannel) {
+  if (!isBatched(variant)) throw new RequestError(404, 'no anchor roots in this variant');
+  return channelFor(variant, scopeId, defaultChannel);
 }
 
 // Route a write. spec = { variant, fn, ccArgs, event, caseId }.
@@ -112,4 +120,4 @@ async function routeRead(spec, deps) {
   return JSON.stringify(foldHead(evidenceId, events));
 }
 
-module.exports = { RequestError, channelFor, routeWrite, routeRead, foldHead };
+module.exports = { RequestError, channelFor, rootChannel, routeWrite, routeRead, foldHead };
