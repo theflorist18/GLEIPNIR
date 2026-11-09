@@ -72,6 +72,8 @@ E0 smoke trace, 60 items per worker) keeps ≥ 7 (S/8; 5.6 s at 5 tx/s) and has 
 When every active lifecycle is cooling down, the one with the oldest head write goes; for the
 campaign shapes (≥ 5 cases × 224 events/case/round) that happens only in a worker's last
 ≤ `headGap` items (at most 72 measured); cells with ≤ 4 cases fall back earlier (docs/CONTRACTS.md §12-22).
+E3a's traces have 16 workers (`e3a.workers`, 25 lifecycles each): about 590 such pairs per base-ladder
+run and 620 per climb run, almost all in the run's last round (docs/CONTRACTS.md §12-25).
 `caseId` is the channel routing key `case-NNN`, `NNN = ((dataCase−1) mod channels)+1`. DISPOSE ends `round(dispose_fraction × owned)`
 of each worker's evidence; the weighted interleave ends every lifecycle near the end of the
 sequence, so all DISPOSEs fall in the last round (E3a and the ramp: each run's top send-rate level) —

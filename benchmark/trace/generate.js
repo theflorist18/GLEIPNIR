@@ -50,8 +50,10 @@ const pad2 = (n) => String(n).padStart(2, '0');
 const pad3 = (n) => String(n).padStart(3, '0');
 const ACTIONS = ['view', 'download', 'export', 'annotate'];
 // Rule (e): 110 items = 2.2 s at 200 tx/s / 4 workers (the top of sweeps.yaml send_rates_tps and
-// workers — raise it if either grows), longer than the slowest commit below saturation (a timer-cut
-// block: BatchTimeout 2 s, configtx.yaml). Recorded in params, so it is part of the trace hash.
+// workers), longer than the slowest commit below saturation (a timer-cut block: BatchTimeout 2 s,
+// configtx.yaml). E3a runs faster over more workers (2500 tx/s / 16 = 0.70 s) and keeps 110: a larger
+// gap would change every trace (its race bound: docs/CONTRACTS.md §12-25). Recorded in params, so it
+// is part of the trace hash.
 const HEAD_GAP = 110;
 const HEAD_READ = new Set(['TRANSFER', 'DISPOSE']);
 

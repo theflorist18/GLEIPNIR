@@ -53,8 +53,8 @@ TAB_HELP = {
         "                   of CPU, not the architecture)."),
     "E3 main": (
         "Goal: the paper's main experiment — compare the 4 architectures' scalability, baselines fixed.",
-        "E3a  scalability vs LOAD: send rate raised round by round from 100 tx/s and climbing until each\n"
-        "     variant saturates (finalized throughput < 0.9 x send rate) or the load generator tops out.\n"
+        "E3a  scalability vs LOAD: send rate raised round by round from 100 tx/s to the same top (2,500 tx/s)\n"
+        "     for every variant; saturated = finalized throughput < 0.9 x send rate.\n"
         "E3b  scalability vs CASES at a fixed TOTAL send rate (Parallel variants: one channel per case), up\n"
         "     to max cases — the cost of adding channels.\n"
         "E3c  scalability vs CASES at a fixed PER-CASE send rate: the load grows with the cases.\n"
@@ -90,7 +90,8 @@ FIELD_HELP = {
         "Keep it fixed for the whole campaign."),
     "workers": (
         "Caliper worker processes = the load-generating CLIENTS (4 per round, for every variant — not one per\n"
-        "variant). They share the send rate and transaction count (5 tx/s = ~1.25 each); each replays its\n"
+        "variant; E3a uses its own e3a.workers = 16 to reach its top send rate). They share the send rate\n"
+        "and transaction count (5 tx/s = ~1.25 each); each replays its\n"
         "own slice of the trace. Not redundancy: several workers keep the client from being the bottleneck.\n"
         "Too few -> 'measured send rate' falls below 'send rate'; too many -> they take CPU from Fabric on\n"
         "this one laptop (their own CPU is NOT in the CPU column). Verify with the E0 ramp; fix before E1.\n"
@@ -213,9 +214,9 @@ FIELD_HELP = {
         "BRACKET saturation (>= 2 levels below, 1 above). 'Use trimmed grid' only drops the levels beyond\n"
         "the first one above the highest saturation point. E3a has its own ladder (e3a.send_rates_tps)."),
     "e3a.send_rates_tps": (
-        "E3a's base ladder (configured input, tx/s): one round per rate, ascending, on one ledger. A variant\n"
-        "that still keeps up at the top climbs on by itself (next ladder = the top rate x 1.25, x 1.25^2, ...)\n"
-        "until it saturates or the load generator tops out; a saturated one gets one run halfway back."),
+        "E3a's base ladder (configured input, tx/s): one round per rate, ascending, on one ledger. Then every\n"
+        "variant runs the same climb rates up to the common top (e3a.climb.send_rates_tps), and a variant\n"
+        "that saturated after keeping up gets one run halfway between the two rates."),
     "e3a.events_per_case_per_round": (
         "E3a base-ladder round size: events per case per send rate. 1,500 x 20 cases = 30,000 tx = 300 s of\n"
         "sending at 100 tx/s and 30 s at 1,000 tx/s, so the end-of-round wait for the last blocks (up to\n"
@@ -242,8 +243,8 @@ CUSTOM_HELP = {
 MODE_HELP = {
     "e0": "Functional check of all four variants at a low send rate. Results are labelled 'smoke'.",
     "ramp": "One round per send rate, ascending, to find roughly where each variant saturates.",
-    "e3a": ("All 4 variants, one round per send rate from 100 tx/s; a variant that keeps up climbs on\n"
-            "(x 1.25 per step) until it saturates or the load generator tops out. The run count grows."),
+    "e3a": ("All 4 variants, one round per send rate from 100 tx/s up to the same top (2,500 tx/s), then one\n"
+            "halfway run per variant that saturated. 16 Caliper workers."),
     "e3b": "All 4 variants, number of cases raised (up to max cases) at the baseline TOTAL send rate.",
     "e3c": "All 4 variants, number of cases raised at a fixed PER-CASE send rate (the total grows with them).",
     "ops": "Each operation as its own round at the E3 point; writes and reads in separate tables.",

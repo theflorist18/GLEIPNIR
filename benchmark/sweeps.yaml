@@ -42,22 +42,21 @@ ramp:                              # E0 short ramp to locate approximate saturat
   events_per_case_per_round: 224    # = the E3b slice: an 800-tx round (40) would let Parallel's 2 s end-of-round block wait read as saturation at 50 tx/s
 
 # ---- E3a: send rate up to saturation, at baseline.channels cases ----
-# One ledger per run, one round per send rate, ascending. A variant that keeps up at the top of
-# its last ladder climbs on (experiment.py, the climb rule in docs/methodology/experiments.md):
-# each step is judged on the mean over the repetitions. Finalized throughput = finalizations
-# per second while the load is still being sent (collect.py).
+# One ledger per run, one round per send rate, ascending. Every variant runs the base ladder and
+# then the climb rates up to the common top (experiment.py, the rule in
+# docs/methodology/experiments.md); each rate is judged on the mean over the repetitions.
+# Finalized throughput = finalizations per second while the load is still being sent (collect.py).
 e3a:
   send_rates_tps: [100, 150, 200, 300, 400, 600, 800, 1000]   # the base ladder
   events_per_case_per_round: 1500  # base-ladder rounds: 30,000 tx at 20 cases = 300 s of sending at 100 tx/s, 30 s at 1000 tx/s
+  workers: 16                      # Caliper worker processes in e3a only (the other experiments use `workers`); 4 send Parallel at most ~770 tx/s
   saturation_ratio: 0.9            # saturated: finalized throughput < this x the configured send rate ...
-  generator_ratio: 0.95            # ... while the measured send rate >= this x configured; below it the load generator is the limit (stop)
+  generator_ratio: 0.95            # ... while the measured send rate >= this x configured; below it the load generator is the limit (that rate is not judged)
   climb:
-    factor: 1.25                   # next ladder: the last top rate x factor, x factor^2, ... (rounded to whole tx/s)
-    rates_per_ladder: 4            # rounds per extension run
-    min_send_s: 30                 # an extension round holds enough events for this many seconds at the run's top rate
-    max_send_rate_tps: 10000       # never plan a rate above this (the load generator tops out far below it)
-  # After the first saturated rate: one run at the rate halfway back to the last rate that kept
-  # up, with the saturated run's round size; then the variant stops.
+    send_rates_tps: [1250, 1500, 2000, 2500]   # run by EVERY variant after the base ladder, one run per repetition; 2500 = the common top
+    min_send_s: 30                 # a climb round holds enough events for this many seconds at the run's top rate
+  # Then a variant that saturated, having kept up at a lower rate, gets one run at the rate halfway
+  # between the two, with the saturated run's round size.
 
 # ---- E3c: cases at a FIXED per-case send rate (E3b holds the TOTAL send rate instead) ----
 e3c:

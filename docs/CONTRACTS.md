@@ -525,9 +525,10 @@ ramp: { events_per_case_per_round: 224 }     # E0 ramp = the E3b slice: 40 would
 e3a:                      # E3a: send rate up to saturation at baseline.channels cases; one ledger per run, one round per send rate, ascending
   send_rates_tps: [100, 150, 200, 300, 400, 600, 800, 1000]   # the base ladder
   events_per_case_per_round: 1500  # base-ladder rounds: 30,000 tx at 20 cases = 300 s of sending at 100 tx/s, 30 s at 1000 tx/s
+  workers: 16                      # Caliper workers in e3a only (§12-25); every other experiment uses `workers`
   saturation_ratio: 0.9            # saturated: finalized throughput < this × the configured send rate ...
-  generator_ratio: 0.95            # ... while the measured send rate ≥ this × configured; below it the load generator is the limit (stop)
-  climb: { factor: 1.25, rates_per_ladder: 4, min_send_s: 30, max_send_rate_tps: 10000 }   # next ladder = top × factor^1..4; rounds ≥ min_send_s at its top rate
+  generator_ratio: 0.95            # ... while the measured send rate ≥ this × configured; below it the load generator is the limit (that rate is not judged)
+  climb: { send_rates_tps: [1250, 1500, 2000, 2500], min_send_s: 30 }   # every variant, after the base ladder; 2500 = the common top; rounds ≥ min_send_s at the top rate
 e3c: { send_rate_per_case_tps: 5, case_counts: [5, 10, 30, 40, 50] }   # E3c: send rate = cases × 5; 20 cases × 5 = the baseline cell (sens/baseline, added by the analysis)
 sensitivity:              # sens: cells of sweeps.yaml path overrides at the baseline point; anchoring.*-only cells run on the anchored variants alone
   baseline: {}                                     # the reference cell
@@ -557,7 +558,9 @@ sensitivity:              # sens: cells of sweeps.yaml path overrides at the bas
   campaign traces, 7 (5.6 s at 5 tx/s) in the E0 smoke trace's 60-item rounds — and when every
   active lifecycle is cooling down, the one with the oldest head write goes — for the campaign
   shapes (≥ 5 cases × 224 events/case/round) that happens only in a worker's last ≤ `headGap`
-  items (at most 72 measured); cells with ≤ 4 cases fall back earlier (§12-22);
+  items (at most 72 measured); cells with ≤ 4 cases fall back earlier (§12-22); E3a's traces
+  have 16 workers (§12-25), 25 lifecycles each, and about 590 such pairs per base-ladder run and
+  620 per climb run, almost all in the run's last round;
   each worker holds exactly `rounds × S` items, `S = cases × eventsPerCasePerRound / workers` (integer, asserted);
   round `k` replays items `[k·S, (k+1)·S)`. DISPOSE count per worker =
   `round(dispose_fraction × owned evidence)`, `dispose_fraction` from `sweeps.yaml`
@@ -632,7 +635,7 @@ sensitivity:              # sens: cells of sweeps.yaml path overrides at the bas
   `benchmark/results/<exp>/<variant>/<levels>/r<rep>/` with `levels =
   batch<N>-ch<C>-cases<K>[-ref]` (fixed key order, e.g. `batch50-ch20-cases20`; `cell` runs append
   `-rate<R>[-<R>…]` and, with control overrides, `-x<hash>`; **M28**: e3a climb runs append
-  their send rates, e.g. `-rate1250-1562-1953-2441`, and the midpoint run also `-midpoint`,
+  their send rates, e.g. `-rate1250-1500-2000-2500`, and the midpoint run also `-midpoint`,
   e.g. `-rate1125-midpoint` — base-ladder runs append nothing; `sens` runs append the cell
   name, e.g. `batch50-ch20-cases20-endorse-all`) containing
   `run.json` (seeded by experiment.py), `rounds/<label>/{bench.yaml, round.json, caliper.log,
@@ -752,20 +755,20 @@ sensitivity:              # sens: cells of sweeps.yaml path overrides at the bas
   `docs/methodology/experiments.md`):
   - `e3a`: per variant, `repetitions` runs of the base ladder (`e3a.send_rates_tps`, one round
     per send rate, ascending, `e3a.events_per_case_per_round`, `baseline.channels` cases, one
-    ledger per run), then the climb (experiment.py `e3a_next_runs`; rule = `report.e3a_verdict`
-    on the mean over the reps per send rate, walking up): measured send rate <
-    `generator_ratio` × configured → load-generator limit, the variant stops; else finalized
-    throughput < `saturation_ratio` × configured → saturated (runs collected before
-    finalization records fall back to Caliper's successful-only throughput). A variant that
-    kept up at every rate gets the next ladder — top × `factor`, × `factor`², … ×
-    `factor`^`rates_per_ladder`, rounded, none above `max_send_rate_tps` (an empty ladder
-    ends the variant) — as one more run per repetition, one round per rate, each round holding
-    ⌈`min_send_s` × the ladder's top rate ÷ cases⌉ events per case, raised until the workers
-    divide the slice; the first saturated rate earns ONE midpoint run per repetition halfway
-    back to the last rate that kept up (the saturated run's round size), then the variant
-    stops. Rates above the stop point are measured (same run) but never judged. A climb step
-    with fewer complete reps than `repetitions` (a crash) is planned again first; `--resume`
-    re-derives the climb from the complete runs.
+    ledger per run), then the climb (experiment.py `e3a_next_runs`): EVERY variant runs the
+    same rates `e3a.climb.send_rates_tps` up to the common top (2500 tx/s) as one more run per
+    repetition, one round per rate, each round holding ⌈`min_send_s` × the top rate ÷ cases⌉
+    events per case, raised until the workers divide the slice. E3a runs with `e3a.workers`
+    Caliper workers (every other experiment: `workers`). Rule = `report.e3a_verdict` on the
+    mean over the reps per send rate, walking up: measured send rate < `generator_ratio` ×
+    configured → load-generator limit; else finalized throughput < `saturation_ratio` ×
+    configured → saturated (runs collected before finalization records fall back to Caliper's
+    successful-only throughput); the walk ends at the first of these, and rates above it are
+    measured but never judged. After the climb, a variant whose first saturated rate follows a
+    rate that kept up earns ONE midpoint run per repetition halfway between the two (the
+    saturated run's round size), then it is done; every other variant is done at once. A
+    climb step with fewer complete reps than `repetitions` (a crash) is planned again first;
+    `--resume` re-derives the climb from the complete runs.
   - `e3c`: as e3b over `e3c.case_counts` (≤ `baseline.channels_max`), but at send rate = cases ×
     `e3c.send_rate_per_case_tps` (25–250 tx/s); the grid leaves out 20 cases (20 × 5 =
     100 tx/s, the baseline point), which the `sens` `baseline` cell measures in the same
@@ -1346,6 +1349,25 @@ silently pick something else.
       waits for org1 and org2 with `lib.sh wait_peer_grpc` (retries `peer channel list` in the
       cli container) after the healthz waits and before the install. 12 failed attempts in
       campaigns 1–5 came from this race.
+25. **E3a: one common top send rate and its own worker count** (authors, 2026-11-09, after
+    campaign 6). Campaign 6 ended each variant's climb at its own verdict: Standard saturated
+    on the base ladder, Parallel ended at the load-generator limit (4 Caliper workers sent it
+    at most ≈ 770 tx/s, so its saturation point stayed unknown), and only the anchored
+    variants climbed (1250, 1562, 1953, 2441 tx/s). Now every variant runs the same climb
+    rates, `e3a.climb.send_rates_tps` = 1250, 1500, 2000, 2500 tx/s (replacing `factor`,
+    `rates_per_ladder` and `max_send_rate_tps`), whatever its verdict, so all four are
+    measured up to one common top; the midpoint run follows the climb, under the same rule for
+    all four (§10). E3a uses `e3a.workers` = 16 Caliper workers (`experiment.e3a_sweeps`; one
+    worker sent Parallel about 190 tx/s in campaign 6); every other experiment keeps `workers`
+    = 4, so its runs stay comparable with campaign 6's. Campaign 6's E3a ran the earlier rule
+    with 4 workers. The trace is generated for the 16 workers. Its 110-item head gap then
+    lasts 1.76 s at 1000 tx/s and 0.70 s at 2500 tx/s, so the climb's 1250–2000 tx/s rounds
+    have no head pair closer than 0.5 s. The end of each worker's sequence (25 lifecycles per
+    worker) holds more forced pairs: about 590 per base-ladder run and 620 per climb run, almost
+    all in the run's last round, where about 260 (1000 tx/s) and 480 (2500 tx/s) fall within
+    0.5 s and can fail on Standard and Parallel as the trace race (counted, never filtered,
+    §12-22). Replaying the 4-worker trace with 16 workers was rejected: at the climb rates it
+    would put 1,400–4,200 head pairs per round within 0.5 s.
 
 Anything else that seems to require deviating from docs/ARCHITECTURE.md: stop
 and ask the authors; contract changes are never made silently.

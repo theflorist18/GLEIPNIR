@@ -82,14 +82,14 @@ What the code enforces (a violation aborts the run):
 |---|---|---|---|
 | Workload mix | CREATE = 1 per evidence; remaining events TRANSFER 0.15 / ACCESS 0.85; DISPOSE ends 0.5 of evidence | fraction | `workload.mix` |
 | PRNG seed and trace | seed 20260922, mulberry32; trace pre-generated and replayed identically in all variants | — | `seed`; `run.json trace.hash` + params |
-| Trace head-op spacing | lifecycles interleaved in proportion to their remaining ops (every lifecycle ends near the end of the sequence, so all DISPOSEs fall in the last round — E3a and the ramp: each run's top send-rate level; trace-based DISPOSE latency comes only from that round, the per-operation breakdown from `ops`); within a round an evidence's TRANSFER/DISPOSE sits ≥ `headGap` items after its previous CREATE/TRANSFER in the worker's sequence — 110 in campaign traces (2.2 s at 200 tx/s ÷ 4 workers, above BatchTimeout 2 s); a round shorter than that (the E0 smoke trace, 60 items per worker) keeps ≥ 7 (S/8; 5.6 s at 5 tx/s) — so below saturation its predecessor has normally committed before it is endorsed (exceptions: §7 residual trace race; CONTRACTS §12-22) | items | `HEAD_GAP` in `trace/generate.js` (S/8 for a shorter round); `run.json trace.params.headGap` (part of the hash) |
+| Trace head-op spacing | lifecycles interleaved in proportion to their remaining ops (every lifecycle ends near the end of the sequence, so all DISPOSEs fall in the last round — E3a and the ramp: each run's top send-rate level; trace-based DISPOSE latency comes only from that round, the per-operation breakdown from `ops`); within a round an evidence's TRANSFER/DISPOSE sits ≥ `headGap` items after its previous CREATE/TRANSFER in the worker's sequence — 110 in campaign traces (2.2 s at 200 tx/s ÷ 4 workers, above BatchTimeout 2 s; E3a's traces have 16 workers, so 1.76 s at 1000 tx/s and 0.70 s at 2500 tx/s); a round shorter than that (the E0 smoke trace, 60 items per worker) keeps ≥ 7 (S/8; 5.6 s at 5 tx/s) — so below saturation its predecessor has normally committed before it is endorsed (exceptions: §7 residual trace race; CONTRACTS §12-22) | items | `HEAD_GAP` in `trace/generate.js` (S/8 for a shorter round); `run.json trace.params.headGap` (part of the hash) |
 | Evidence payload (synthetic Codex-Entry filler, hashed into `storage.integrity_proof`) | 256 | B | `workload.payload_bytes` |
 | Evidence items per case | 20 | evidence/case | `workload.evidence_per_case` |
 | Events per case per round | 224 (E1, E2, E3b, E3c, sens and the ramp); 1,500 on E3a's base ladder; an E3a climb run: enough for ≥ 30 s of sending at its top rate (§4.5) | events/(case·round) | `workload.events_per_case_per_round`, `ramp.events_per_case_per_round`, `e3a.events_per_case_per_round`, `e3a.climb.min_send_s` |
-| Rounds per run | 5 (E1, E2, E3b, E3c, sens); one round per send rate (E3a: 8 on the base ladder, 4 per climb run, 1 for the midpoint run); one per operation (per-op) | rounds | `workload.rounds`; `e3a.send_rates_tps`, `e3a.climb.rates_per_ladder` |
+| Rounds per run | 5 (E1, E2, E3b, E3c, sens); one round per send rate (E3a: 8 on the base ladder, 4 in the climb run, 1 in the midpoint run); one per operation (per-op) | rounds | `workload.rounds`; `e3a.send_rates_tps`, `e3a.climb.send_rates_tps` |
 | Steady-state floor | ≥ 1000 cumulative events per channel per run, judged on the generated trace's least-loaded channel; a run below is labelled `sub-floor`, never `steady` (nominal 5 × 224 × 1 = 1,120 at 1:1; the least-loaded channel gets 1,046–1,102 over the E2/E3b/E3c case grids) | events/channel | `regimes.steady.min_events_per_channel` |
 | Repetitions | r = 3; statistic = mean ± SD over repetitions | runs/cell | `repetitions` |
-| Caliper workers | 4 | processes | `workers` |
+| Caliper workers | 4; 16 in E3a | processes | `workers`, `e3a.workers` |
 | Block-cutting parameters | BatchTimeout 2 s; MaxMessageCount 10; AbsoluteMaxBytes 99 MB; PreferredMaxBytes 512 KB | s / messages / MB / KB | `network/configtx/configtx.yaml` (cited by commit SHA) |
 | Endorsement policy | every application channel: `OR('Org1MSP.peer','Org2MSP.peer')` (1-of-any) in every cell but the sensitivity cell `endorse-all` (2-of-2, §2.1); campaigns 1–5 also had the anchor channel's `AND('AnchorClientMSP.member')` | — | `endorsement.policy`; `orchestration/lib.sh` `endorsement_policy`; `run.json controls.endorsement` |
 | Chaincode version | `1.0` (`CC_VERSION`; the git SHA pins the code) | — | `orchestration/lib.sh` |
@@ -180,11 +180,11 @@ cells as E2's (the same channel counts, send rate and trace).
 | Item | Value |
 |---|---|
 | Variants | all four; batch = `baseline.batch_size` (anchored) |
-| Swept | send rate — **one round per rate, ascending**, within a single network lifetime per run. First the base ladder 100, 150, 200, 300, 400, 600, 800, 1000 tx/s (`e3a.send_rates_tps`) at 1,500 events/(case·round): 30,000 tx per round at 20 cases, i.e. 300 s of sending at 100 tx/s and 30 s at 1000 tx/s. Then the climb (§4.5): a variant that kept up gets the next ladder; a saturated one gets a single midpoint run and then stops |
-| Fixed | cases = `baseline.channels` (20) in every variant; channels = cases on the Parallel variants, 1 on Standard and Anchoring; size-only batching; endorsement 1-of-any; r = 3 |
+| Swept | send rate — **one round per rate, ascending**, within a single network lifetime per run. First the base ladder 100, 150, 200, 300, 400, 600, 800, 1000 tx/s (`e3a.send_rates_tps`) at 1,500 events/(case·round): 30,000 tx per round at 20 cases, i.e. 300 s of sending at 100 tx/s and 30 s at 1000 tx/s. Then the climb (§4.5): every variant runs 1250, 1500, 2000 and 2500 tx/s (`e3a.climb.send_rates_tps`, the common top); a variant that saturated after keeping up then gets a single midpoint run |
+| Fixed | cases = `baseline.channels` (20) in every variant; channels = cases on the Parallel variants, 1 on Standard and Anchoring; size-only batching; endorsement 1-of-any; r = 3; 16 Caliper workers (`e3a.workers`) |
 | Dependent variables | all of §2.3; the verdict per send rate (kept up, saturated, load-generator limit) by rule §4.5 on finalized throughput, with the latency knee shown alongside |
 | Outputs | `results/e3a/e3a-climb.json` (the rule from `sweeps.yaml`, and per variant its points, verdict and next step; rewritten after every climb step); `report.py --exp e3a` → per-round tables and `e3a-saturation.json` (`saturationSendRateTps`, `keptUpToSendRateTps`, `generatorLimitSendRateTps`, `latencyKneeSendRateTps`) |
-| Labels | round labels are always `rate<R>`, also in a one-rate midpoint run; climb runs carry their rates in the run directory (`…-cases20-rate1250-1562-1953-2441/r0`), the midpoint run also `-midpoint` |
+| Labels | round labels are always `rate<R>`, also in a one-rate midpoint run; climb runs carry their rates in the run directory (`…-cases20-rate1250-1500-2000-2500/r0`), the midpoint run also `-midpoint` |
 | Steady floor | every E3a run is far above the floor: the base ladder gives 8 × 1,500 = 12,000 events per channel at 1:1; a climb or midpoint run at least 1,500 |
 
 Campaigns 1–5 ran E3a over the ramp grid (10–200 tx/s) at 224 events/(case·round), one
@@ -292,9 +292,15 @@ is `baseline.channels` in `sweeps.yaml` (the E2 median); the E2/E3b/E3c grids an
 `experiment.py --exp cell --cases N` change it. The case count is the same for every variant
 within a cell.
 
-4.5 **E3a: the climb to saturation** (authors, 2026-11-06). Per variant, the complete E3a runs
-so far are judged together, on the mean over the repetitions at each send rate
-(`report.py` `e3a_verdict`), walking up the rates:
+4.5 **E3a: the climb to saturation** (authors, 2026-11-06; one common top for all four
+variants, 2026-11-09). Every variant runs the base ladder and then the same climb rates up to
+the common top, 1250, 1500, 2000 and 2500 tx/s (`e3a.climb.send_rates_tps`), as one more run per
+repetition. Every climb round holds enough events for ≥ 30 s of sending at the top rate
+(`min_send_s`; events per case rounded up until the per-worker slice is whole). E3a runs with 16
+Caliper workers (`e3a.workers`): in campaign 6, 4 workers sent Parallel at most ≈ 770 tx/s, so
+its saturation point stayed unknown. Per variant, the complete E3a runs are judged together, on
+the mean over the repetitions at each send rate (`report.py` `e3a_verdict`), walking up the
+rates:
 
 - **load-generator limit** — the measured send rate < 0.95 × the configured send rate
   (`e3a.generator_ratio`): Caliper, not the system, is the limit;
@@ -303,17 +309,14 @@ so far are judged together, on the mean over the repetitions at each send rate
 - else the variant **kept up** at that rate.
 
 The first rate that is a load-generator limit or saturated ends the walk; rates above it are
-listed, never judged. Then `experiment.py` (`e3a_next_runs`) plans the next step per variant:
+listed, never judged. After the climb, `experiment.py` (`e3a_next_runs`) plans at most one more
+step per variant:
 
-- **kept up at every rate** → the next ladder: the top rate × 1.25, × 1.25², × 1.25³, × 1.25⁴,
-  rounded to whole tx/s (`e3a.climb.factor`, `rates_per_ladder`; never above
-  `max_send_rate_tps` = 10,000), one run per repetition. Every round holds enough events for
-  ≥ 30 s of sending at the ladder's top rate (`min_send_s`; events per case rounded up until the
-  per-worker slice is whole). Example: kept up to 1000 tx/s → 1250, 1562, 1953, 2441 tx/s.
 - **first saturated rate S** after the last rate K that kept up → ONE midpoint run at
   round((K + S) / 2) tx/s with the saturated run's round size, unless that rate was already
-  measured; then the variant stops. A variant saturated at its lowest rate gets no midpoint.
-- **load-generator limit** → the variant stops.
+  measured; then the variant is done. Example: kept up at 1500, saturated at 2000 → 1750 tx/s.
+- **saturated at its lowest rate, kept up to the top, or a load-generator limit** → the variant
+  is done.
 
 A step with fewer complete repetitions than `repetitions` (a crash in the middle of a step) is
 planned again before any decision, so a verdict never rests on part of a step. The plan is a
@@ -423,11 +426,10 @@ flowchart TD
     B --> C{"Dimension"}
     C -->|"E3a: vs load"| D["Fix: cases = baseline.channels (20); channels = cases (Parallel variants) or 1 (Standard, Anchoring)"]
     D --> E["Base ladder, one run: checkpoint t0 (B), then one round per send rate ascending 100, 150, 200, 300, 400, 600, 800, 1000 (tx/s) at 1,500 events/case, checkpoint after each round (B)"]
-    E --> F{"Rule 4.5 on the mean over reps, walking up: measured send rate ≥ 0.95 × send rate? finalized throughput ≥ 0.9 × send rate?"}
-    F -->|"kept up at every rate"| G["Next ladder: top rate × 1.25, × 1.25², × 1.25³, × 1.25⁴ (tx/s), rounds ≥ 30 s at the top rate"]
-    G --> F
-    F -->|"first saturated rate"| H["One midpoint run halfway back to the last rate that kept up (tx/s), then stop"]
-    F -->|"load-generator limit"| I["Stop: the load generator is the limit"]
+    E --> G["Climb, one more run for every variant: 1250, 1500, 2000, 2500 (tx/s), the common top; rounds ≥ 30 s at the top rate; 16 Caliper workers in E3a"]
+    G --> F{"Rule 4.5 on the mean over reps, walking up: measured send rate ≥ 0.95 × send rate? finalized throughput ≥ 0.9 × send rate?"}
+    F -->|"first saturated rate after one that kept up"| H["One midpoint run halfway between the two (tx/s), then done"]
+    F -->|"kept up to the top, saturated at the lowest rate, or load-generator limit"| I["Done"]
     C -->|"E3b: vs cases, fixed total send rate"| J["Fix: send rate = baseline.send_rate_tps (100 tx/s in total), cases 5..50 trimmed to ≤ channels_max"]
     C -->|"E3c: vs cases, fixed per-case send rate"| K["Fix: send rate = cases × 5 (tx/s), cases 5, 10, 30, 40, 50; the 20-case point = the sens baseline cell"]
     C -->|"sens: sensitivity cells"| L["Baseline point; cells baseline, endorse-all (2-of-2), idle-5s (anchored only); repetition by repetition"]
@@ -461,7 +463,7 @@ flowchart TD
 | Caliper throughput numerator (issue #1418) | Caliper's reported throughput counts Succ + Fail | `collect.py` recomputes successful-only throughput (Succ / window) and records the policy string in every manifest |
 | End-of-round drain inside the throughput window | the window is `lastFinish − firstCreate`, so it includes the wait for the round's last blocks (≤ BatchTimeout 2 s after the last send), a bias of ≈ 2 s ÷ (round duration + 2 s) that falls on Parallel (every channel's last partial block waits for the timer): for 4,480-tx rounds (the ramp and the E3a of campaigns 1–5, 20 cases) ≈ 1 % at 25 tx/s, ≈ 2 % at 50, ≈ 4 % at 100, ≈ 6–9 % at 150–200 (≈ 0.91 × send rate at 200, one point from the 0.9 rule); at 50 tx/s ≈ 8 % and ≈ 4 % for the 1,120- and 2,240-tx rounds of 5 and 10 cases. Standard's single channel fills its blocks (modelled ≤ 0.6 %) and the anchored variants' REST acks wait for no block, so on its own the drain puts Parallel ≈ 4–8 % below Standard at 5–10 cases (E3b) and adds a rising trend to E2's throughput vs channels (§4.2 a) | the ramp replays the 224-events/case slice instead of 800-tx rounds, which would read ≈ 0.89 × send rate on Parallel at 50 tx/s (modelled; CONTRACTS §12-21); a drain-free rate can be recomputed from the per-transaction `tCreate`/`tFinal` — this was **OPEN for the authors and the supervisor** until M28: `collect.py` now computes the **finalized throughput**, whose window ends at the round's last submission and so leaves the drain out, and E3a judges saturation on it; E3a's 30,000-tx rounds also keep the drain in Caliper's throughput ≤ ≈ 6 % (2 s after 30 s of sending at 1000 tx/s). Caliper's successful-only throughput (`windowS` = lastFinal − firstCreate) is still reported; where E2 §4.2(a), the 200 tx/s flag on Parallel in the E3a of campaigns 1–5 and E3b cross-variant throughput use it, this bias is stated |
 | Synthetic workload and trace | fixed proportions and payload sizes may not match real casework | trace parameters and hash are recorded; mix is a documented controlled variable |
-| Residual trace race (Standard, Parallel) | Caliper does not await submissions, so a TRANSFER/DISPOSE endorsed before the same evidence's previous CREATE/TRANSFER commits fails (`MVCC_READ_CONFLICT` or "evidence not found"); within a round the generator spaces such pairs ≥ 110 items apart in campaign traces and ≥ 7 (S/8; 5.6 s at 5 tx/s) in the E0 smoke trace's 60-item rounds (§2.2), except — for the campaign shapes (≥ 5 cases × 224 events/case/round) — in a worker's last ≤ `headGap` items (at most 72 measured); cells with ≤ 4 cases fall back earlier; beyond the saturation knee commit latency can exceed the spacing; E3a's send rates above 200 tx/s shorten the 110-item spacing in time (0.44 s at 1000 tx/s over 4 workers), so there the race can grow below saturation too | modelled below saturation ≤ 0.1 % (Parallel, 20 cases: 0.004 % at 50 tx/s over a 5-round run, 0.10 % in the 200 tx/s round; 5–10 cases at 50 tx/s: 0.07–0.08 %; 0.48 % and 1.79 % with the previous generator (uniform interleave, no spacing)); past the knee it grows with commit latency (pessimistic queue model: Standard 2–6 % at 150–200 tx/s); counted in the failure rate and classes, never retried or filtered (CONTRACTS §12-22) |
+| Residual trace race (Standard, Parallel) | Caliper does not await submissions, so a TRANSFER/DISPOSE endorsed before the same evidence's previous CREATE/TRANSFER commits fails (`MVCC_READ_CONFLICT` or "evidence not found"); within a round the generator spaces such pairs ≥ 110 items apart in campaign traces and ≥ 7 (S/8; 5.6 s at 5 tx/s) in the E0 smoke trace's 60-item rounds (§2.2), except — for the campaign shapes (≥ 5 cases × 224 events/case/round) — in a worker's last ≤ `headGap` items (at most 72 measured); cells with ≤ 4 cases fall back earlier; beyond the saturation knee commit latency can exceed the spacing; E3a's send rates above 200 tx/s shorten the 110-item spacing in time (0.70 s at 2500 tx/s over E3a's 16 workers; 0.44 s at 1000 tx/s over 4 workers in campaign 6), so there the race can grow below saturation too; E3a's 16-worker traces (25 lifecycles per worker) also end each worker's sequence with more forced pairs, about 590 per base-ladder run and 620 per climb run, almost all in the run's last round, where about 260 (1000 tx/s) and 480 (2500 tx/s) fall within 0.5 s (0.9 % and 0.6 % of those rounds), against none in the climb's 1250–2000 tx/s rounds | modelled below saturation ≤ 0.1 % (Parallel, 20 cases: 0.004 % at 50 tx/s over a 5-round run, 0.10 % in the 200 tx/s round; 5–10 cases at 50 tx/s: 0.07–0.08 %; 0.48 % and 1.79 % with the previous generator (uniform interleave, no spacing)); past the knee it grows with commit latency (pessimistic queue model: Standard 2–6 % at 150–200 tx/s); counted in the failure rate and classes, never retried or filtered (CONTRACTS §12-22) |
 | Endorsement policy 1-of-any | one organization's peer endorses alone: the policy isolates the architectures' own cost but is not a production policy | stated as scope; the sensitivity cell `endorse-all` (2-of-2, all four variants) measures the difference against the `baseline` cell of the same night |
 | Network change in M28 for every variant | the anchor peers in `configtx.yaml` give every channel cross-org gossip, so Standard, Anchoring and Parallel run on a slightly different network than in campaigns 1–5; Parallel-Anchored is a different design there (roots on the anchor channel) | a check of the three unchanged variants against campaigns 1–5 is stated as approximate; Parallel-Anchored is compared only within the campaigns from campaign 6 on |
 | Drift within a night (the WSL2 guest's system clock, host load) | timing metrics of runs made hours apart can differ | the sensitivity cells run repetition by repetition, so drift spreads evenly over them; storage bytes per event does not depend on the clock |
@@ -489,7 +491,7 @@ Implemented and labelled as defaults; the supervisor confirms or overrides.
 | 11 | E3b run for all four variants (data-scaling sweep for Standard and Anchoring) | keeps the 2×2 frame complete on the cases axis; the single-channel cells are the comparison Parallel is measured against |
 | 12 | `run.json` records cores/memory; hardware line in the paper optional | reproducibility evidence at zero cost; the supervisor said the paper line is optional |
 | 13 | E0 derives no channel count: the pre-set `baseline.channels` = 20 (below the host's 24 physical cores) serves the ramp and E1 until E2 replaces it | the supervisor's review lists a provisional channel count as an E0 output, but E0 has no channel sweep; a pre-set value below the core limit is the honest reading — the supervisor confirms |
-| 14 | E3a climb (§4.5): base ladder 100–1000 tx/s at 1,500 events/(case·round); a variant that keeps up gets the next ladder (× 1.25 per rate, 4 rates, rounds ≥ 30 s); the first saturated rate gets one midpoint run; saturated = finalized throughput < 0.9 × send rate while the measured send rate ≥ 0.95 × send rate (authors, 2026-11-06) | finds each variant's saturation instead of reporting none within a fixed grid (the supervisor's review of the paper noted that none was found); the generator check keeps a Caliper limit from reading as a system limit; long rounds keep the end-of-round drain small |
+| 14 | E3a climb (§4.5): base ladder 100–1000 tx/s at 1,500 events/(case·round), then every variant runs the same climb rates 1250, 1500, 2000, 2500 tx/s (the common top; rounds ≥ 30 s), then one midpoint run after the first saturated rate; saturated = finalized throughput < 0.9 × send rate while the measured send rate ≥ 0.95 × send rate; 16 Caliper workers in E3a (authors, 2026-11-06; common top and workers 2026-11-09) | finds each variant's saturation instead of reporting none within a fixed grid (the supervisor's review of the paper noted that none was found); one common top measures all four variants at the same send rates; 16 workers let the load generator reach the top for Parallel (4 sent it at most ≈ 770 tx/s in campaign 6); the generator check keeps a Caliper limit from reading as a system limit; long rounds keep the end-of-round drain small |
 | 15 | Endorsement 1-of-any in every cell; 2-of-2 only in the sensitivity cell `endorse-all`, all four variants, in the same night as its `baseline` cell (authors, 2026-11-06) | 1-of-any isolates the architectures' own cost; it is not a production policy, so the cell measures what 2-of-2 adds |
 | 16 | Size-only batching in every cell; a 5 s idle timer with no cap only in the sensitivity cell `idle-5s`, anchored variants (authors, 2026-11-06) | a timer would make the effective batch size depend on the send rate; the cell measures how much a timer shortens the window in which an accepted event is not yet protected |
 

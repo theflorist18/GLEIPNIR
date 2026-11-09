@@ -165,7 +165,10 @@ def new_plans():
     assert runs[0]["runId"] == f"e3a/standard/ch1-cases{B['channels']}/r0", runs[0]["runId"]
     assert runs[0]["trace"]["events_per_case_per_round"] == e["events_per_case_per_round"]
     assert runs[0]["trace"]["rounds"] == len(e["send_rates_tps"]) and runs[0]["regime"] == "steady"
-    assert [s["label"] for s in E.build_rounds(SW, runs[0], "t.json")][:2] == ["rate100", "rate150"]
+    assert [s["label"] for s in E.build_rounds(runs[0]["sweeps"], runs[0], "t.json")][:2] == ["rate100", "rate150"]
+    # E3a runs with its own Caliper worker count; the other experiments keep `workers`.
+    assert {r["sweeps"]["workers"] for r in runs} == {r["trace"]["workers"] for r in runs} == {e["workers"]} != {ws}
+    assert E.plan(SW, "e1", ["standard"], 1)[0]["trace"]["workers"] == ws
 
     # E3c: the per-case send rate is fixed, so the total grows with the cases; 20 cases is sens/baseline.
     runs = E.plan(SW, "e3c", R.VARIANTS, 3)
@@ -226,46 +229,71 @@ def e3a_manifest(v, rates, rep, ratio=lambda r: 1.0, gen=lambda r: 1.0, events=N
 
 def e3a_climb():
     base, reps = sorted(SW["e3a"]["send_rates_tps"]), 3
+    ladder, ws, cases = sorted(SW["e3a"]["climb"]["send_rates_tps"]), SW["e3a"]["workers"], B["channels"]
+    ev = E.fit_events_up(cases, -(-SW["e3a"]["climb"]["min_send_s"] * ladder[-1] // cases), ws)
 
     def step(ms, variants=("standard",)):
         return E.e3a_next_runs(SW, list(variants), reps, ms)
 
-    # Kept up everywhere -> the next ladder from the top rate, sized for >= min_send_s at its top rate.
+    def climbed(v, **kw):
+        return [e3a_manifest(v, ladder, r, events=ev, **kw) for r in range(reps)]
+
+    # After the base ladder every variant climbs the same rates to the common top, each round
+    # sized for >= min_send_s at the top rate, with e3a's own worker count.
     ms = [e3a_manifest("standard", base, r) for r in range(reps)]
     runs, out = step(ms)
-    assert [r["rates"] for r in runs] == [[1250, 1562, 1953, 2441]] * reps, [r["rates"] for r in runs]
-    assert runs[0]["trace"]["events_per_case_per_round"] == 3662 and runs[0]["trace"]["rounds"] == 4
-    assert runs[0]["runId"] == "e3a/standard/ch1-cases20-rate1250-1562-1953-2441/r0", runs[0]["runId"]
+    assert [r["rates"] for r in runs] == [ladder] * reps, [r["rates"] for r in runs]
+    assert ladder == [1250, 1500, 2000, 2500] and ev == 3752 and runs[0]["trace"]["rounds"] == 4
+    assert runs[0]["trace"]["events_per_case_per_round"] == ev and runs[0]["trace"]["workers"] == ws == 16
+    assert runs[0]["runId"] == "e3a/standard/ch1-cases20-rate1250-1500-2000-2500/r0", runs[0]["runId"]
     assert out["standard"]["keptUpTo"] == 1000 and out["standard"]["saturatedAt"] is None
+    # ...and a variant that kept up at the top, too, is done.
+    runs, out = step(ms + climbed("standard"))
+    assert runs == [] and out["standard"]["keptUpTo"] == 2500 and "common top" in out["standard"]["decision"], out
 
     # A partly finished step (one rep missing) is planned again before anything is judged.
-    ladder = [1250, 1562, 1953, 2441]
-    part = ms + [e3a_manifest("standard", ladder, r, events=3662) for r in (0, 1)]
+    part = ms + [e3a_manifest("standard", ladder, r, events=ev) for r in (0, 1)]
     runs, out = step(part)
     assert [(r["rates"], r["rep"]) for r in runs] == [(ladder, 0), (ladder, 1), (ladder, 2)], runs
     assert "missing repetitions" in out["standard"]["decision"]
 
-    # Saturated at 800 (finalized < 0.9 x) -> ONE run at 700, halfway back, with the saturated run's round size.
-    sat = [e3a_manifest("parallel", base, r, ratio=lambda x: 0.5 if x >= 800 else 1.0) for r in range(reps)]
+    # Saturated at 800 (finalized < 0.9 x) on the base ladder: it still climbs to the common top,
+    # then gets ONE run at 700, halfway back, with the saturated run's round size.
+    def half(x):
+        return 0.5 if x >= 800 else 1.0
+    sat = [e3a_manifest("parallel", base, r, ratio=half) for r in range(reps)]
+    runs, out = step(sat, ("parallel",))
+    assert [r["rates"] for r in runs] == [ladder] * reps and "-midpoint" not in runs[0]["runId"], runs
+    sat += climbed("parallel", ratio=half)
     runs, out = step(sat, ("parallel",))
     assert [r["rates"] for r in runs] == [[700]] * reps and runs[0]["runId"].endswith("-rate700-midpoint/r0"), runs
     assert runs[0]["trace"]["events_per_case_per_round"] == SW["e3a"]["events_per_case_per_round"]
-    assert [s["label"] for s in E.build_rounds(SW, runs[0], "t.json")] == ["rate700"]
+    assert [s["label"] for s in E.build_rounds(runs[0]["sweeps"], runs[0], "t.json")] == ["rate700"]
     assert (out["parallel"]["saturatedAt"], out["parallel"]["keptUpTo"]) == (800, 600)
     # ...after which the variant is done, whatever the midpoint showed.
     done = sat + [e3a_manifest("parallel", [700], r, tag="-midpoint") for r in range(reps)]
     runs, out = step(done, ("parallel",))
     assert runs == [] and out["parallel"]["saturatedAt"] == 800 and out["parallel"]["keptUpTo"] == 700, out
 
-    # The load generator tops out (measured < 0.95 x configured) -> stop, never judged as saturation.
-    gen = [e3a_manifest("anchoring", base, r, ratio=lambda x: 0.5 if x >= 600 else 1.0,
-                        gen=lambda x: 0.9 if x >= 600 else 1.0) for r in range(reps)]
+    # Saturated only on the climb, at 2000: the halfway run (1750) has the climb run's round size.
+    runs, out = step([e3a_manifest("anchoring", base, r) for r in range(reps)]
+                     + climbed("anchoring", ratio=lambda x: 0.5 if x >= 2000 else 1.0), ("anchoring",))
+    assert [r["rates"] for r in runs] == [[1750]] * reps and runs[0]["trace"]["events_per_case_per_round"] == ev, runs
+
+    # The load generator tops out (measured < 0.95 x configured): never judged as saturation; the
+    # climb still runs, and no halfway run follows.
+    lim = {"ratio": lambda x: 0.5 if x >= 600 else 1.0, "gen": lambda x: 0.9 if x >= 600 else 1.0}
+    gen = [e3a_manifest("anchoring", base, r, **lim) for r in range(reps)]
     runs, out = step(gen, ("anchoring",))
+    assert [r["rates"] for r in runs] == [ladder] * reps and out["anchoring"]["generatorLimitAt"] == 600, runs
+    runs, out = step(gen + climbed("anchoring", **lim), ("anchoring",))
     assert runs == [] and out["anchoring"]["generatorLimitAt"] == 600 and out["anchoring"]["saturatedAt"] is None
 
-    # Saturated at the lowest rate: nothing kept up, so no midpoint.
+    # Saturated at the lowest rate: it climbs as well, but nothing kept up, so no halfway run.
     low = [e3a_manifest("standard", base, r, ratio=lambda x: 0.5) for r in range(reps)]
     runs, out = step(low)
+    assert [r["rates"] for r in runs] == [ladder] * reps, runs
+    runs, out = step(low + climbed("standard", ratio=lambda x: 0.5))
     assert runs == [] and out["standard"]["saturatedAt"] == base[0] and out["standard"]["keptUpTo"] is None
 
     # Variants climb independently in one step.

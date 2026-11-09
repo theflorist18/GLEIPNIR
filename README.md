@@ -312,7 +312,7 @@ Run them in this order; each calibration step fills a `baseline` value in
 | `ramp` | all four | send rate | Finds a sub-saturation send rate: suggests `baseline.send_rate_tps`. |
 | `e1` | Anchoring, Parallel-Anchored (+ Standard and Parallel reference runs) | batch size | Batch-size calibration: suggests `baseline.batch_size`. |
 | `e2` | Parallel | channel count | Channel-count calibration: suggests `baseline.channels` (the median of the healthy range) and `baseline.channels_max`. |
-| `e3a` | all four | send rate | Scalability against load: one round per send rate from 100 tx/s up. A variant that keeps up climbs to higher send rates until it saturates or the load generator reaches its limit. |
+| `e3a` | all four | send rate | Scalability against load: one round per send rate from 100 tx/s up to a common top of 2,500 tx/s for every variant (16 Caliper workers), then one run halfway between each variant's last rate that kept up and its first saturated rate. |
 | `e3b` | all four | case count | Scalability against the number of cases at a fixed total send rate: the cost of adding channels (one channel per case on the Parallel variants). |
 | `e3c` | all four | case count | The same at a fixed send rate per case (5 tx/s), so the load grows with the cases. |
 | `ops` | all four | operation type | Per-operation breakdown at the E3 operating point: writes, reads, and (anchored variants) verification. |

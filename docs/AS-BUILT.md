@@ -716,7 +716,7 @@ unless overridden; e0/ramp always 1 rep):
 | `ramp` | all 4 | send rate | `ramp.events_per_case_per_round` | one `rate<R>` round per send rate; prints throughput vs send rate + suggested `baseline.send_rate_tps` (confirm with the supervisor) |
 | `e1` | anchoring (1 ch), parallel-anchored (`baseline.channels`) + standard/parallel **reference** runs (`levels.reference`) | `batch_sizes` | `baseline.send_rate_tps` | `workload.rounds` trace slices `slice<k>` |
 | `e2` | parallel | `channel_counts` | `baseline.send_rate_tps` | slices; cases = channels (one channel per case) |
-| `e3a` | all 4 | send rate: since M28 the base ladder `e3a.send_rates_tps` (100 … 1000 tx/s), then the climb | `baseline.batch_size`, `baseline.channels`; base-ladder rounds of `e3a.events_per_case_per_round` (1,500) | one `rate<R>` round per send rate, ascending, one ledger per run. The climb (M28) judges each step on the reps' mean (`report.e3a_verdict`), walking up: measured send rate < 0.95 × configured → load-generator limit (stop); else finalized throughput < 0.9 × configured → saturated, and the first saturated rate earns ONE run halfway back to the last rate that kept up (the saturated run's round size, dir tag `-midpoint`), then the variant stops; a variant that kept up everywhere gets the next ladder (top × 1.25, × 1.25², × 1.25³, × 1.25⁴, rounded; rounds ≥ 30 s at the ladder's top rate; never above 10,000 tx/s); a step with fewer complete reps is planned again first |
+| `e3a` | all 4 | send rate: since M28 the base ladder `e3a.send_rates_tps` (100 … 1000 tx/s), then the climb | `baseline.batch_size`, `baseline.channels`; base-ladder rounds of `e3a.events_per_case_per_round` (1,500) | one `rate<R>` round per send rate, ascending, one ledger per run. The climb (M28; one common top since CONTRACTS §12-25): every variant runs the same climb rates `e3a.climb.send_rates_tps` (1250, 1500, 2000, 2500 tx/s; rounds ≥ 30 s at the top rate) with 16 Caliper workers (`e3a.workers`); each rate is judged on the reps' mean (`report.e3a_verdict`), walking up: measured send rate < 0.95 × configured → load-generator limit; else finalized throughput < 0.9 × configured → saturated; the walk ends at the first of these. After the climb, a first saturated rate that follows a rate that kept up earns ONE run halfway between the two (the saturated run's round size, dir tag `-midpoint`); a step with fewer complete reps is planned again first |
 | `e3b` | all 4 | `case_counts` ≤ `baseline.channels_max` | `baseline.send_rate_tps` (fixed TOTAL send rate) | slices; parallel* channels = cases, standard/anchoring 1 |
 | `e3c` | all 4 | `e3c.case_counts` ≤ `baseline.channels_max` (M28) | fixed PER-CASE send rate: send rate = cases × `e3c.send_rate_per_case_tps` (5 → 25 … 250 tx/s); 20 cases × 5 = the baseline cell, measured by `sens` (report.py does not merge it in: the analysis adds the `sens` baseline rows at 20 cases) | slices; parallel* channels = cases, standard/anchoring 1 |
 | `ops` | all 4 | operation | E3 point | `create transfer access dispose` (writes), `read-evidence read-trail` (reads), `verify-event` (anchored) |
@@ -812,7 +812,7 @@ Since M28 `run.json` `controls` also record `idleTimeoutMs` and
 **Run identity:** `runId = <exp>/<variant>/<levels>/r<rep>` with `levels =
 batch<N>-ch<C>-cases<K>[-ref]` (fixed key order; `cell` appends `-rate<R>…` and, with control
 overrides, `-x<hash>`; since M28 an e3a climb run appends its rates, e.g.
-`-rate1250-1562-1953-2441`, a midpoint run also `-midpoint`, and a sens run
+`-rate1250-1500-2000-2500`, a midpoint run also `-midpoint`, and a sens run
 its cell name, e.g. `-endorse-all`). Regime labels: `smoke`
 (e0 only, under `results/e0/`), `steady` (write events on the least-loaded channel — nominal at plan time, then the generated trace's actual count — ≥
 `regimes.steady.min_events_per_channel` = 10³) or `sub-floor` (below it).
@@ -855,9 +855,10 @@ ramp: { events_per_case_per_round: 224 }   # = the E3b slice: 40 would let Paral
 e3a:                                       # M28: send rate up to saturation, at baseline.channels cases
   send_rates_tps: [100, 150, 200, 300, 400, 600, 800, 1000]   # the base ladder, one round per rate
   events_per_case_per_round: 1500          # base-ladder rounds: 30,000 tx at 20 cases
+  workers: 16                              # Caliper workers in e3a only; every other experiment uses `workers`
   saturation_ratio: 0.9                    # saturated: finalized throughput < this x the configured send rate ...
   generator_ratio: 0.95                    # ... while the measured send rate >= this x configured (below: load-generator limit)
-  climb: { factor: 1.25, rates_per_ladder: 4, min_send_s: 30, max_send_rate_tps: 10000 }
+  climb: { send_rates_tps: [1250, 1500, 2000, 2500], min_send_s: 30 }   # every variant; 2500 = the common top
 e3c: { send_rate_per_case_tps: 5, case_counts: [5, 10, 30, 40, 50] }   # M28: send rate = cases x 5
 sensitivity:                               # M28: cells of sweeps.yaml path overrides at the baseline point
   baseline: {}
@@ -887,7 +888,9 @@ per-operation breakdown from `ops`); within a round a TRANSFER/DISPOSE sits
 campaign traces, 7 (S/8; 5.6 s at 5 tx/s) in the E0 smoke trace's 60-item
 rounds; closer, for the campaign shapes (≥ 5 cases × 224 events/case/round),
 only in a worker's last ≤ `headGap` items (at most 72 measured), while cells
-with ≤ 4 cases fall back earlier — so below saturation it is normally not
+with ≤ 4 cases fall back earlier, and E3a's 16-worker traces leave about 590–620
+such pairs per run, almost all in the run's last round (CONTRACTS §12-25) — so
+below saturation it is normally not
 endorsed before its predecessor commits (CONTRACTS §12-22). Each worker holds
 exactly `rounds × S` items (`S = cases × eventsPerCasePerRound / workers`),
 and round `k` replays

@@ -72,12 +72,12 @@ ad-hoc run) · `--no-monitor` · `--no-audit` · `--verbose` (echo Caliper's ful
 `--sweeps FILE` (its blob SHA is what `run.json` records). A fresh ledger is the default. A
 repeated `--variant` is de-duplicated.
 
-**E3a climb.** After the base ladder, `e3a_next_runs` judges each variant on its complete runs
-(`report.e3a_verdict`: the reps' mean per send rate, docs/methodology/experiments.md §4.5) and
-plans its next step: a variant that kept up at every rate gets the next ladder (`e3a.climb`), the
-first saturated rate gets one midpoint run halfway back to the last rate that kept up (dir tag
-`-midpoint`), and a load-generator limit ends the variant. A step with missing repetitions is
-planned again first. `results/e3a/e3a-climb.json` is rewritten after every step; `--resume`
+**E3a climb.** After the base ladder, `e3a_next_runs` plans the same climb run for every variant
+(`e3a.climb.send_rates_tps`, up to the common top), then judges each variant on its complete runs
+(`report.e3a_verdict`: the reps' mean per send rate, docs/methodology/experiments.md §4.5): a
+first saturated rate that follows a rate that kept up gets one midpoint run halfway between the
+two (dir tag `-midpoint`); every other variant is done. E3a runs with `e3a.workers` Caliper
+workers (`e3a_sweeps`). A step with missing repetitions is planned again first. `results/e3a/e3a-climb.json` is rewritten after every step; `--resume`
 re-derives the climb from the complete runs, and `--dry-run` shows the base ladder only. The
 verdict reads every complete manifest under `results/e3a/`, so archive an earlier campaign's
 E3a runs before a new one starts.
