@@ -154,6 +154,7 @@ def main():
     baseline_rules()
     new_plans()
     e3a_climb()
+    e3a_rules()
     print("test_experiment: all checks passed")
 
 
@@ -176,7 +177,10 @@ def new_plans():
     assert len(runs) == 4 * 3 * len(SW["e3c"]["case_counts"]) and B["channels"] not in SW["e3c"]["case_counts"]
     assert all(r["rates"] == [r["levels"]["cases"] * per_case] * SW["workload"]["rounds"] for r in runs)
     assert {r["levels"]["cases"]: r["rates"][0] for r in runs}[50] == 250
+    assert {r["levels"]["cases"]: r["rates"][0] for r in runs}[100] == 500 and len(runs) == 72
     assert {r["regime"] for r in runs} == {"steady"}
+    # E3b's grid stops at 50 although channels_max is 100 (E3c's 100-case point).
+    assert max(r["levels"]["cases"] for r in E.plan(SW, "e3b", R.VARIANTS, 3)) == 50
 
     # sens: repetition by repetition; the idle cell only on the anchored variants; each run carries
     # its own effective constants, the cell's overrides and the cell name in its dir.
@@ -215,11 +219,11 @@ def new_plans():
     assert E.fit_events_up(20, 3662, ws) == 3662 and E.fit_events_up(5, 3, ws) == 4
 
 
-def e3a_manifest(v, rates, rep, ratio=lambda r: 1.0, gen=lambda r: 1.0, events=None, tag=""):
+def e3a_manifest(v, rates, rep, ratio=lambda r: 1.0, gen=lambda r: 1.0, events=None):
     """A complete e3a run: finalized throughput and measured send rate as ratios of each round's rate."""
     lv = f"batch{B['batch_size']}-" if v in R.ANCHORED_VARIANTS else ""
     rate_dir = "" if rates == sorted(SW["e3a"]["send_rates_tps"]) else "-rate" + "-".join(map(str, rates))
-    return {"variant": v, "repetition": rep, "runId": f"e3a/{v}/{lv}ch1-cases{B['channels']}{rate_dir}{tag}/r{rep}",
+    return {"variant": v, "repetition": rep, "runId": f"e3a/{v}/{lv}ch1-cases{B['channels']}{rate_dir}/r{rep}",
             "levels": {"sendRateTps": rates[0] if len(rates) == 1 else None},
             "trace": {"params": {"eventsPerCasePerRound": events or SW["e3a"]["events_per_case_per_round"]}},
             "rounds": [{"index": i, "sendRateTps": r, "throughputSuccessfulOnlyTps": r,
@@ -243,9 +247,9 @@ def e3a_climb():
     ms = [e3a_manifest("standard", base, r) for r in range(reps)]
     runs, out = step(ms)
     assert [r["rates"] for r in runs] == [ladder] * reps, [r["rates"] for r in runs]
-    assert ladder == [1250, 1500, 2000, 2500] and ev == 3752 and runs[0]["trace"]["rounds"] == 4
+    assert ladder == [1250, 1500, 1750, 2000, 2250, 2500] and ev == 3752 and runs[0]["trace"]["rounds"] == 6
     assert runs[0]["trace"]["events_per_case_per_round"] == ev and runs[0]["trace"]["workers"] == ws == 16
-    assert runs[0]["runId"] == "e3a/standard/ch1-cases20-rate1250-1500-2000-2500/r0", runs[0]["runId"]
+    assert runs[0]["runId"] == "e3a/standard/ch1-cases20-rate1250-1500-1750-2000-2250-2500/r0", runs[0]["runId"]
     assert out["standard"]["keptUpTo"] == 1000 and out["standard"]["saturatedAt"] is None
     # ...and a variant that kept up at the top, too, is done.
     runs, out = step(ms + climbed("standard"))
@@ -257,31 +261,25 @@ def e3a_climb():
     assert [(r["rates"], r["rep"]) for r in runs] == [(ladder, 0), (ladder, 1), (ladder, 2)], runs
     assert "missing repetitions" in out["standard"]["decision"]
 
-    # Saturated at 800 (finalized < 0.9 x) on the base ladder: it still climbs to the common top,
-    # then gets ONE run at 700, halfway back, with the saturated run's round size.
+    # Saturated at 800 (finalized < 0.9 x) on the base ladder: it still climbs to the common top and
+    # is then done: every variant is measured at the same send rates, with no run in between.
     def half(x):
         return 0.5 if x >= 800 else 1.0
     sat = [e3a_manifest("parallel", base, r, ratio=half) for r in range(reps)]
     runs, out = step(sat, ("parallel",))
-    assert [r["rates"] for r in runs] == [ladder] * reps and "-midpoint" not in runs[0]["runId"], runs
+    assert [r["rates"] for r in runs] == [ladder] * reps, runs
     sat += climbed("parallel", ratio=half)
     runs, out = step(sat, ("parallel",))
-    assert [r["rates"] for r in runs] == [[700]] * reps and runs[0]["runId"].endswith("-rate700-midpoint/r0"), runs
-    assert runs[0]["trace"]["events_per_case_per_round"] == SW["e3a"]["events_per_case_per_round"]
-    assert [s["label"] for s in E.build_rounds(runs[0]["sweeps"], runs[0], "t.json")] == ["rate700"]
-    assert (out["parallel"]["saturatedAt"], out["parallel"]["keptUpTo"]) == (800, 600)
-    # ...after which the variant is done, whatever the midpoint showed.
-    done = sat + [e3a_manifest("parallel", [700], r, tag="-midpoint") for r in range(reps)]
-    runs, out = step(done, ("parallel",))
-    assert runs == [] and out["parallel"]["saturatedAt"] == 800 and out["parallel"]["keptUpTo"] == 700, out
+    assert runs == [] and (out["parallel"]["saturatedAt"], out["parallel"]["keptUpTo"]) == (800, 600), out
+    assert out["parallel"]["decision"] == "done: saturated at 800 tx/s, kept up at 600 tx/s", out
 
-    # Saturated only on the climb, at 2000: the halfway run (1750) has the climb run's round size.
+    # Saturated only on the climb, at 2000: done after the climb, kept up at 1750.
     runs, out = step([e3a_manifest("anchoring", base, r) for r in range(reps)]
                      + climbed("anchoring", ratio=lambda x: 0.5 if x >= 2000 else 1.0), ("anchoring",))
-    assert [r["rates"] for r in runs] == [[1750]] * reps and runs[0]["trace"]["events_per_case_per_round"] == ev, runs
+    assert runs == [] and (out["anchoring"]["saturatedAt"], out["anchoring"]["keptUpTo"]) == (2000, 1750), out
 
     # The load generator tops out (measured < 0.95 x configured): never judged as saturation; the
-    # climb still runs, and no halfway run follows.
+    # climb still runs.
     lim = {"ratio": lambda x: 0.5 if x >= 600 else 1.0, "gen": lambda x: 0.9 if x >= 600 else 1.0}
     gen = [e3a_manifest("anchoring", base, r, **lim) for r in range(reps)]
     runs, out = step(gen, ("anchoring",))
@@ -289,16 +287,17 @@ def e3a_climb():
     runs, out = step(gen + climbed("anchoring", **lim), ("anchoring",))
     assert runs == [] and out["anchoring"]["generatorLimitAt"] == 600 and out["anchoring"]["saturatedAt"] is None
 
-    # Saturated at the lowest rate: it climbs as well, but nothing kept up, so no halfway run.
+    # Saturated at the lowest rate: it climbs as well.
     low = [e3a_manifest("standard", base, r, ratio=lambda x: 0.5) for r in range(reps)]
     runs, out = step(low)
     assert [r["rates"] for r in runs] == [ladder] * reps, runs
     runs, out = step(low + climbed("standard", ratio=lambda x: 0.5))
     assert runs == [] and out["standard"]["saturatedAt"] == base[0] and out["standard"]["keptUpTo"] is None
 
-    # Variants climb independently in one step.
+    # Variants climb independently in one step: Standard (base ladder only) climbs, Parallel is done.
     runs, out = step(ms + sat, ("standard", "parallel"))
-    assert {(r["variant"], tuple(r["rates"])) for r in runs} == {("standard", tuple(ladder)), ("parallel", (700,))}
+    assert {(r["variant"], tuple(r["rates"])) for r in runs} == {("standard", tuple(ladder))}, runs
+    assert out["parallel"]["decision"].startswith("done:"), out
 
     # Rounds whose writes succeeded but finalized nothing (a lost batch link) stop the climb.
     lost = [dict(m, rounds=[dict(r, finalization=None, txlog={**r["txlog"], "perOp": {"ACCESS": {"ok": 9}}})
@@ -314,6 +313,50 @@ def e3a_climb():
     climbed = ms + [e3a_manifest("standard", ladder, r, events=3662) for r in range(reps)]
     assert exits(lambda: E.e3a_preflight(SW, ["standard"], reps, ["base run"], False, False, climbed))
     assert E.e3a_preflight(SW, ["parallel"], reps, ["base run"], False, False, climbed) == []   # other variant
+
+
+def e3a_rules():
+    """report.e3a_verdict with and without finalization records, and the latency the knee is read on."""
+    def agg(x, **met):
+        return {"variant": "anchoring", "x": x, "reference": False, "n": 3,
+                "metrics": {k: (met.get(k), 0.0, 3) for k, _, _ in REP.ALL_METRICS}}
+
+    # Finalization records but no measurable finalized throughput at 200 (its finalizations do not
+    # span the send window): not kept up. Rows without the records judge on Caliper's throughput.
+    rows = [agg(100, finalizedTps=100.0, finalizationAvgS=1.0, sendRateMeasuredTps=100.0, throughputTps=100.0),
+            agg(200, finalizedTps=None, finalizationAvgS=30.0, sendRateMeasuredTps=200.0, throughputTps=200.0)]
+    v = REP.e3a_verdict(rows, 0.9, 0.95)
+    assert (v["keptUpTo"], v["saturatedAt"]) == (100, 200), v
+    old = [agg(x, throughputTps=float(x), sendRateMeasuredTps=float(x)) for x in (100, 200)]
+    v = REP.e3a_verdict(old, 0.9, 0.95)
+    assert (v["keptUpTo"], v["saturatedAt"]) == (200, None), v
+
+    # Through the real pipeline (round_metrics -> data_points -> aggregate): ONE repetition of three has
+    # finalization records but no rate at 200, so 200 did not keep up (the other two are not enough).
+    def man(rep, fin200):
+        rounds = [{"index": i, "sendRateTps": x, "throughputSuccessfulOnlyTps": float(x),
+                   "txlog": {"sendRateMeasuredTps": float(x)},
+                   "finalization": {"finalizedTps": fin200 if x == 200 else float(x),
+                                    "latencyMs": {"mean": 1000.0, "p95": 2000.0}}} for i, x in enumerate((100, 200))]
+        return {"variant": "anchoring", "repetition": rep, "runId": f"e3a/anchoring/batch50-ch1-cases20/r{rep}",
+                "levels": {}, "rounds": rounds}
+    m0 = man(0, None)
+    assert REP.round_metrics(m0, m0["rounds"][1])["finalizedTps"] is None   # null stays missing, never 0
+    rows = REP.aggregate(REP.data_points("e3a", [m0, man(1, 200.0), man(2, 200.0)]))
+    v = REP.e3a_verdict(rows, 0.9, 0.95)
+    assert (v["keptUpTo"], v["saturatedAt"]) == (100, 200), v
+
+    # The knee is read on the finalization p95 where it exists: here the Caliper p95 (acceptance on the
+    # anchored variants) doubles at 200, the finalization p95 only at 400.
+    rows = [agg(x, finalizedTps=float(x), finalizationAvgS=1.0, sendRateMeasuredTps=float(x),
+                latencyP95S=lp, finalizationP95S=fp) for x, lp, fp in ((100, 0.03, 2.0), (200, 0.07, 1.5), (400, 0.08, 4.5))]
+    with tempfile.TemporaryDirectory() as tmp:
+        _, s = REP.saturation_flags(rows, tmp)
+        assert (s["anchoring"]["latencyKneeSendRateTps"], s["anchoring"]["latencyKneeBasis"]) == (400, "finalization p95"), s
+        for r in rows:
+            r["metrics"]["finalizationP95S"] = (None, 0.0, 0)
+        _, s = REP.saturation_flags(rows, tmp)
+        assert (s["anchoring"]["latencyKneeSendRateTps"], s["anchoring"]["latencyKneeBasis"]) == (200, "latency p95"), s
 
 
 def exits(fn):

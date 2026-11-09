@@ -73,7 +73,7 @@ When every active lifecycle is cooling down, the one with the oldest head write 
 campaign shapes (≥ 5 cases × 224 events/case/round) that happens only in a worker's last
 ≤ `headGap` items (at most 72 measured); cells with ≤ 4 cases fall back earlier (docs/CONTRACTS.md §12-22).
 E3a's traces have 16 workers (`e3a.workers`, 25 lifecycles each): about 590 such pairs per base-ladder
-run and 620 per climb run, almost all in the run's last round (docs/CONTRACTS.md §12-25).
+run and 660 per (6-round) climb run, almost all in the run's last round (docs/CONTRACTS.md §12-25, §12-28).
 `caseId` is the channel routing key `case-NNN`, `NNN = ((dataCase−1) mod channels)+1`. DISPOSE ends `round(dispose_fraction × owned)`
 of each worker's evidence; the weighted interleave ends every lifecycle near the end of the
 sequence, so all DISPOSEs fall in the last round (E3a and the ramp: each run's top send-rate level) —
@@ -186,7 +186,9 @@ still show positive throughput. GLEIPNIR does **not** report that number as-is. 
 recomputes **successful-only** throughput = `Succ / (lastFinishTime − firstCreateTime)`.
 It also computes the **finalized throughput** from the tx log and the batch records: the
 least-squares slope of the cumulative finalizations while the load is still being sent (from
-the first finalization to the last submission of the round), the measure E3a's saturation rule uses.
+the first finalization to the last submission of the round), at most the round's accepted rate
+and blank when those finalizations span less than 40 % of the send window; it is the measure E3a's
+saturation rule uses.
 `MVCC_READ_CONFLICT` is tabulated as its own failure class (issue #1397); the append-only
 sub-key design should keep it near zero. "Send rate" is the configured `fixed-rate tps`
 (input); "throughput" is what was measured (output); TPS is only a unit.

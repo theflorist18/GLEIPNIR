@@ -27,10 +27,10 @@ fabric-tools container. Python 3.10+ with `pyyaml` (`pip install -r requirements
 | `rounds.py` (library) | the ONLY renderer of Caliper configs from `sweeps.yaml`: `render_round(...)` and `render_parallel_network(C)`, which experiment.py writes per run into the run dir (no generated config is committed) |
 | `benchapp.pyw` | the desktop app: input boxes for the `sweeps.yaml` workload, grid and baseline values, Preview/Run/Resume/Cancel of each experiment through WSL, live results, history, CSV export, suggested baselines, automatic backup/restore — see below |
 | `open-web.ps1` (double-click `GLEIPNIR Web.cmd` in the repo root) | opens the evidence library: if `:8081/healthz` is down it starts Docker Desktop, starts the stack on its existing volumes (the Bench app's restore-path command, never `up.sh`), waits for the gateway, then opens the SPA in a Chrome app window with its own profile (`%LOCALAPPDATA%\GleipnirWeb`, so no shared browser cache); default browser if Chrome is absent |
-| `experiment.py --exp e0\|ramp\|e1\|e2\|e3a\|e3b\|e3c\|ops\|sens\|cell` | the campaign driver — plans cells × reps, runs the lifecycle below per run, loud failures; `e3a` adds its climb runs as the results come in; `cell` runs ONE cell at the factor levels you pass |
+| `experiment.py --exp e0\|ramp\|e1\|e2\|e3a\|e3b\|e3c\|ops\|sens\|cell` | the campaign driver — plans cells × reps, runs the lifecycle below per run, loud failures; `e3a` adds one climb run per variant and repetition once the base ladder is complete; `cell` runs ONE cell at the factor levels you pass |
 | `checkpoint.py <run> --label tK` | `du -sb` block store per channel + GoLevelDB state per peer + receipt store → `checkpoints.jsonl` (labels `t0..tN`) |
 | `collect.py <run-dir>` | run dir → `manifest.json` (rounds, per-tx percentiles, finalization, failure classes, resources, storage regression, anchoring, audit); `--selftest` |
-| `report.py --exp E [--out docs/results/E] [--no-charts] [--decimal-comma]` | ALWAYS the per-round Excel CSV `benchmark/results/E/E-results.csv` (any E incl. e0/ramp/cell); for e1, e2, e3a, e3b, e3c, ops and sens also CSV + Markdown tables (units in headers, mean ± SD over reps; Markdown one table per variant, one latency column; the last columns are measured send rate, finalized throughput, finalization latency avg / p95 and audit time per event) + optional PNG charts (none for ops and sens, whose X is no number); E1's batch-size-free reference rows print `ref`, and the per-round tables (e3a, ops) carry a header note that the run-level metrics repeat per row; e3a also writes `e3a-saturation.json` (per variant: saturation, kept-up, load-generator-limit and latency-knee send rates) |
+| `report.py --exp E [--out docs/results/E] [--no-charts] [--decimal-comma]` | ALWAYS the per-round Excel CSV `benchmark/results/E/E-results.csv` (any E incl. e0/ramp/cell); for e1, e2, e3a, e3b, e3c, ops and sens also CSV + Markdown tables (units in headers, mean ± SD over reps; Markdown one table per variant, one latency column; the last columns are measured send rate, finalized throughput, finalization latency avg / p95 and audit time per event) + optional PNG charts (none for ops and sens, whose X is no number); E1's batch-size-free reference rows print `ref`, and the per-round tables (e3a, ops) carry a header note that the run-level metrics repeat per row; e3a also writes `e3a-saturation.json` (per variant: saturation, kept-up, load-generator-limit and latency-knee send rates, with the knee's latency basis `latencyKneeBasis`) |
 | `present.py [--out docs/results/pooled-c1-c5]` (Windows, `py -3.11`; needs openpyxl) | campaigns 1–5 pooled: every cell's mean ± sample SD over its 15 runs (5 campaigns × 3 reps), read from the campaign archives through `report.py`'s own functions. Writes `gleipnir-results-pooled-c1-c5.xlsx` (README; one sheet per table with mean/SD as Excel formulas over the runs and native charts with ±1 SD error bars; one runs sheet per experiment with the 15 run values and each campaign's own mean/SD). Stops unless every cell has exactly 15 runs and each campaign's means equal its published table. Does not change any per-campaign table |
 
 `lib.sh` holds the shared helpers (compose wrapper, `peer_env`, `create_channel`,
@@ -58,7 +58,7 @@ current runs `anchorChannelDeltaBytes` is 0.
 | `ramp` | all 4 | send rate | `ramp.events_per_case_per_round`, 1 rep | one `rate<R>` round per send rate, ascending; prints throughput vs send rate + suggested `baseline.send_rate_tps` |
 | `e1` | anchoring (1 ch), parallel-anchored (`baseline.channels`) + standard/parallel **reference** runs | `batch_sizes` | `baseline.send_rate_tps` | `workload.rounds` trace slices `slice<k>` |
 | `e2` | parallel | `channel_counts` | `baseline.send_rate_tps` | `workload.rounds` slices; cases = channels (one channel per case) |
-| `e3a` | all 4 | send rate: the base ladder `e3a.send_rates_tps`, then the climb | `baseline.batch_size`, `baseline.channels` cases, `e3a.events_per_case_per_round` (climb runs: sized by `e3a.climb.min_send_s`) | one `rate<R>` round per send rate, ascending (8 on the base ladder, 4 per climb run, 1 for a midpoint run) |
+| `e3a` | all 4 | send rate: the base ladder `e3a.send_rates_tps`, then the climb | `baseline.batch_size`, `baseline.channels` cases, `e3a.events_per_case_per_round` (climb runs: sized by `e3a.climb.min_send_s`) | one `rate<R>` round per send rate, ascending (8 on the base ladder, 6 per climb run) |
 | `e3b` | all 4 | `case_counts` ≤ `baseline.channels_max` | `baseline.send_rate_tps` (the total) | `workload.rounds` slices; parallel* channels = cases |
 | `e3c` | all 4 | `e3c.case_counts` ≤ `baseline.channels_max` | send rate = cases × `e3c.send_rate_per_case_tps` | `workload.rounds` slices; parallel* channels = cases |
 | `ops` | all 4 | operation | E3 point | `create transfer access dispose` (writes) `read-evidence read-trail` (reads) `verify-event` (anchored) |
@@ -74,9 +74,8 @@ repeated `--variant` is de-duplicated.
 
 **E3a climb.** After the base ladder, `e3a_next_runs` plans the same climb run for every variant
 (`e3a.climb.send_rates_tps`, up to the common top), then judges each variant on its complete runs
-(`report.e3a_verdict`: the reps' mean per send rate, docs/methodology/experiments.md §4.5): a
-first saturated rate that follows a rate that kept up gets one midpoint run halfway between the
-two (dir tag `-midpoint`); every other variant is done. E3a runs with `e3a.workers` Caliper
+(`report.e3a_verdict`: the reps' mean per send rate, docs/methodology/experiments.md §4.5); after
+the climb every variant is done, so all four are measured at the same send rates. E3a runs with `e3a.workers` Caliper
 workers (`e3a_sweeps`). A step with missing repetitions is planned again first. `results/e3a/e3a-climb.json` is rewritten after every step; `--resume`
 re-derives the climb from the complete runs, and `--dry-run` shows the base ladder only. The
 verdict reads every complete manifest under `results/e3a/`, so archive an earlier campaign's
@@ -233,7 +232,7 @@ benchmark/results/<exp>/<exp>-results.csv            per-round Excel export (rew
 benchmark/results/e3a/e3a-climb.json                 E3a climb: the rule + every variant's points, verdict, next step
 benchmark/results/<exp>/<variant>/<levels>/r<rep>/     levels = batch<N>-ch<C>-cases<K>[-ref]
                                                        (cell: + -rate<R>[-<R>...] [-x<overrides hash>];
-                                                        e3a climb: + -rate<R>-<R>-…, midpoint: + -rate<R>-midpoint;
+                                                        e3a climb: + -rate<R>-<R>-…;
                                                         sens: + -<cell>)
   run.json            seeded identity + provenance (experiment.py)
   parallel-c<C>.yaml  Caliper network config (parallel only; rounds.py)
@@ -271,11 +270,11 @@ startedAt, finishedAt, wallSeconds`.
   On the anchored variants this is acceptance (HTTP 202) latency.
 - Finalization, per round (`rounds[].finalization`, over the successful timed writes):
   `{basis: "commit"|"root-commit", finalized, notFinalized, pausedEvents,
-  latencyMs{min,p50,p95,p99,max,mean,n}, finalizedTps, windowS}`. Integrity finalization =
+  latencyMs{min,p50,p95,p99,max,mean,n}, finalizedTps, minSpan, windowS}`. Integrity finalization =
   submission (Caliper's create time) → the event's own commit (`tFinal`, Standard/Parallel) or
   the commit of its batch's root (anchored: the tx-log line's `batchId` → that batch's
   `committedAt` in `anchoring.json`; a batch never committed → not finalized). `finalizedTps` =
-  the least-squares slope of the cumulative finalizations over [the first finalization after the round's first submission, its last submission] (anchored: every root committed in that window, weighted by its leafCount, a batch carried over from the previous round included) (`windowS`).
+  the least-squares slope of the cumulative finalizations over [the first finalization after the round's first submission, its last submission] (anchored: every root committed in that window, weighted by its leafCount, a batch carried over from the previous round included) (`windowS`), at most the round's accepted rate (successful writes ÷ send window); `null` when the finalizations inside the send window span less than 40 % of it (no rate measurable, e.g. a 4-s ops round whose roots commit in one block).
   `pausedEvents` = finalized events whose batch closed after the round's last accepted write (they
   waited for the next round or the run-end flush: a known limit of size-only batching across
   rounds).

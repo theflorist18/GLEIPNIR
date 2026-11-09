@@ -27,10 +27,10 @@ Plans (cells x repetitions; every run = ONE network lifetime):
   e3a   4 variants x reps at baseline.channels cases; batch = baseline.batch_size; Caliper
         workers = e3a.workers; ONE round per send rate, ascending: first the base ladder
         (e3a.send_rates_tps, rounds of e3a.events_per_case_per_round), then the climb — every
-        variant runs the same rates up to the common top (e3a.climb.send_rates_tps), after
-        which a variant that saturated, having kept up at a lower rate, gets a single run
-        halfway between the two. Each rate is judged on the reps' mean (report.e3a_verdict);
-        the verdicts and points are written to results/e3a/e3a-climb.json after every step.
+        variant runs the same rates up to the common top (e3a.climb.send_rates_tps), so all
+        four are measured at the same send rates. Each rate is judged on the reps' mean
+        (report.e3a_verdict); the verdicts and points are written to results/e3a/e3a-climb.json
+        after every step.
         --resume re-derives the climb from the complete runs.
   e3b   4 variants x case_counts (<= baseline.channels_max) x reps at baseline.send_rate_tps;
         parallel* channels = cases; standard/anchoring channels = 1.
@@ -255,7 +255,7 @@ def levels_dir(levels, rates=None, tag=None):
         parts.append("rate" + "-".join(str(r) for r in rates))
     if levels.get("reference"):
         parts.append("ref")
-    if tag:     # a cell's control-override hash, a sens cell name or the e3a midpoint: never a shared dir
+    if tag:     # a cell's control-override hash or a sens cell name: never a shared dir
         parts.append(tag)
     return "-".join(parts)
 
@@ -476,7 +476,7 @@ def build_rounds(sweeps, run, trace_path):
     slice_size = t["cases"] * t["events_per_case_per_round"] // sweeps["workers"]
     if run["kind"] == "smoke":
         return R.smoke_rounds(sweeps, v) + [R.trace_round(sweeps, v, "smoke-trace", trace_path, 0, slice_size, rate)]
-    per_rate = len(set(run["rates"])) > 1 or run["exp"] == "e3a"   # an e3a midpoint run has one rate
+    per_rate = len(set(run["rates"])) > 1 or run["exp"] == "e3a"   # e3a labels its rounds rate<R>, whatever their count
     return [R.trace_round(sweeps, v, f"rate{r}" if per_rate else f"slice{k}", trace_path, k, slice_size, r)
             for k, r in enumerate(run["rates"])]
 
@@ -937,14 +937,14 @@ def e3a_sweeps(sweeps):
 
 
 def e3a_next_runs(sweeps, variants, reps, manifests):
-    """The climb after the runs so far. Every variant first runs the same climb rates up to the
-    common top (sweeps.yaml e3a.climb.send_rates_tps, one run per repetition), whatever its verdict.
-    Then report.e3a_verdict over its complete e3a runs (the reps' mean per send rate) decides: a
-    variant that saturated, having kept up at a lower rate, earns ONE run halfway between the two
-    (with the saturated run's round size), after which it ends; any other variant ends at once. A
-    climb step with fewer than `reps` complete runs (a crash mid-step) is planned again first, so a
-    decision never rests on part of a step. Pure: the same complete runs always give the same next
-    runs, which is what lets --resume continue a climb. -> (runs, {variant: verdict + decision})."""
+    """The climb after the runs so far. Every variant runs the same climb rates up to the common
+    top (sweeps.yaml e3a.climb.send_rates_tps, one run per repetition), whatever its verdict, and
+    then ends, so all four are measured at the same send rates; report.e3a_verdict over its
+    complete e3a runs (the reps' mean per send rate) reports where it kept up and where it
+    saturated. A climb step with fewer than `reps` complete runs (a crash mid-step) is planned
+    again first, so a verdict never rests on part of a step. Pure: the same complete runs always
+    give the same next runs, which is what lets --resume continue a climb.
+    -> (runs, {variant: verdict + decision})."""
     sweeps = e3a_sweeps(sweeps)
     e, b = sweeps["e3a"], sweeps["baseline"]
     climb, cases = e["climb"], b["channels"]
@@ -964,7 +964,6 @@ def e3a_next_runs(sweeps, variants, reps, manifests):
                 for r in range(reps):
                     runs.append(make_run(sweeps, "e3a", v, r, "trace", cases, b["batch_size"], rates,
                                          m["trace"]["params"]["eventsPerCasePerRound"], len(rates),
-                                         tag="midpoint" if "-midpoint/" in m["runId"] else None,
                                          rates_in_dir=True))
             out[v] = {"decision": f"finishing {len(partial)} climb step(s) with missing repetitions"}
             continue
@@ -984,20 +983,13 @@ def e3a_next_runs(sweeps, variants, reps, manifests):
         verdict = REP.e3a_verdict(rows, e["saturation_ratio"], e["generator_ratio"])
         measured = {r["x"] for r in rows}
         sat, kept, gen = verdict["saturatedAt"], verdict["keptUpTo"], verdict["generatorLimitAt"]
-        mid = None if sat is None or kept is None else int(round((kept + sat) / 2))
-        midpoint_done = any("-midpoint/" in m.get("runId", "") for m in ms)
-        rates = events = tag = None
+        rates = events = None
         if not rows:
             decision = "no complete run"
         elif not set(ladder) <= measured:
             rates = ladder
             events = fit_events_up(cases, -(-climb["min_send_s"] * ladder[-1] // cases), sweeps["workers"])
             decision = f"climb to the common top: {' '.join(map(str, ladder))} tx/s"
-        elif mid is not None and not midpoint_done and mid not in measured:
-            rates, tag = [mid], "midpoint"
-            events = next(m["trace"]["params"]["eventsPerCasePerRound"] for m in ms
-                          if any(r.get("sendRateTps") == sat for r in m["rounds"]))
-            decision = f"saturated at {sat} tx/s: one run at {mid} tx/s, halfway back to {kept} tx/s"
         elif gen is not None:
             decision = f"done: load generator limit at {gen} tx/s"
         elif sat is not None:
@@ -1007,7 +999,7 @@ def e3a_next_runs(sweeps, variants, reps, manifests):
         if rates:
             for r in range(reps):
                 runs.append(make_run(sweeps, "e3a", v, r, "trace", cases, b["batch_size"], rates, events,
-                                     len(rates), tag=tag, rates_in_dir=True))
+                                     len(rates), rates_in_dir=True))
         out[v] = {**verdict, "decision": decision}
     return runs, out
 
@@ -1100,7 +1092,7 @@ def main():
     eta = eta_seconds(args.exp, len(todo) + len(climb_next))
     print(f"ETA: {'unknown (no complete runs in runlog.jsonl yet)' if eta is None else f'{eta / 3600:.1f} h'}")
     if args.exp == "e3a":
-        print("  then the climb: every variant runs e3a.climb.send_rates_tps, then the halfway runs (sweeps.yaml e3a.climb)")
+        print("  then the climb: every variant runs e3a.climb.send_rates_tps (sweeps.yaml e3a.climb)")
     if args.dry_run:
         return
     if args.reuse_network and len(todo) > 1:

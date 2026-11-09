@@ -22,7 +22,8 @@ y = x reference; e3a_verdict: saturation = first send rate where the mean finali
 throughput < e3a.saturation_ratio x send rate, unless the measured send rate fell below
 e3a.generator_ratio x send rate at that rate or earlier — the load-generator limit; the
 ratios are the climb's own (results/e3a/e3a-climb.json, else sweeps.yaml); latency knee = first
-rate where p95 >= 2 x p95 at the lowest rate), E3b and E3c X = cases, sens X = the
+rate where the finalization p95 >= 2 x that at the lowest rate, the Caliper p95 for runs without
+finalization records), E3b and E3c X = cases, sens X = the
 sensitivity cell, ops -> two tables (writes, reads) keyed by round label.
 
 Run-level numbers are means over the run's rounds (p95 = mean of per-round p95;
@@ -138,9 +139,10 @@ def round_metrics(m, r):
         "auditSPerCase": au["mean"] / 1000.0 if isinstance(au.get("mean"), (int, float)) else None,
         "anchoringDelayS": an.get("meanS"),
         "sendRateMeasuredTps": tl.get("sendRateMeasuredTps"),
-        # A round collected with finalization records but none finalized finalized nothing: 0, not
-        # missing. Rounds collected before those records existed have no value (None).
-        "finalizedTps": (fin.get("finalizedTps") or 0.0) if fin else None,
+        # A round that finalized nothing reads 0. None: collect.py measured no rate in the round (its
+        # finalizations did not span its send window), or the round was collected before the
+        # finalization records existed.
+        "finalizedTps": fin.get("finalizedTps") if fin else None,
         "finalizationAvgS": fin_lat["mean"] / 1000.0 if isinstance(fin_lat.get("mean"), (int, float)) else None,
         "finalizationP95S": fin_lat["p95"] / 1000.0 if isinstance(fin_lat.get("p95"), (int, float)) else None,
         "auditMsPerEvent": summary.get("msPerEvent"),
@@ -416,13 +418,21 @@ def e3a_verdict(rows, saturation_ratio, generator_ratio):
     send rates: a measured send rate below generator_ratio x configured means the load generator,
     not the system, is the limit (stop); otherwise a throughput below saturation_ratio x configured
     is saturation (stop). The throughput is the finalized throughput (finalizations while the load
-    is still being sent); runs collected before it existed fall back to Caliper's successful-only
+    is still being sent); a rate where any repetition with finalization records has no measurable
+    finalized throughput (its finalizations inside the send window span less than
+    collect.FINALIZED_TPS_MIN_SPAN of it) did not keep up, so a verdict never rests on part of the
+    repetitions; runs collected before those records existed fall back to Caliper's successful-only
     throughput. Rates above the stop point are listed, never judged.
     -> {saturatedAt, keptUpTo, generatorLimitAt, points}."""
     out = {"saturatedAt": None, "keptUpTo": None, "generatorLimitAt": None, "points": []}
     for r in sorted((r for r in rows if isinstance(r["x"], (int, float))), key=lambda r: r["x"]):
         m = r["metrics"]
-        tps = m["finalizedTps"][0] if m["finalizedTps"][0] is not None else m["throughputTps"][0]
+        fin = m["finalizedTps"][0]
+        if fin is not None and m["finalizedTps"][2] < m["finalizationAvgS"][2]:
+            fin = None   # a repetition finalized events but has no rate (one that finalized nothing reads
+            # 0.0 with no latency and can offset such a null in these counts; with 3 repetitions its 0.0
+            # alone keeps the capped mean below the ratio, so the rate still reads saturated)
+        tps = fin if fin is not None or m["finalizationAvgS"][0] is not None else m["throughputTps"][0]
         measured = m["sendRateMeasuredTps"][0]
         out["points"].append({"sendRateTps": r["x"], "throughputTps": tps, "sendRateMeasuredTps": measured,
                               "reps": r["n"]})
@@ -451,7 +461,9 @@ def e3a_ratios(results_dir=RESULTS_DIR):
 
 
 def saturation_flags(rows, results_dir=RESULTS_DIR):
-    """E3a: per variant, the e3a_verdict of its rows; latency knee = p95 >= 2 x p95(lowest rate)."""
+    """E3a: per variant, the e3a_verdict of its rows; latency knee = p95 >= 2 x p95(lowest rate), on
+    the finalization p95 (the latency all four variants share; the anchored variants' Caliper
+    latency ends at acceptance), or the Caliper p95 for runs collected before finalization records."""
     sat_ratio, gen_ratio = e3a_ratios(results_dir)
     flags, summary = {}, {}
     for v in VARIANT_ORDER:
@@ -460,9 +472,10 @@ def saturation_flags(rows, results_dir=RESULTS_DIR):
             continue
         verdict = e3a_verdict(vr, sat_ratio, gen_ratio)
         sat, gen = verdict["saturatedAt"], verdict["generatorLimitAt"]
-        p95_0 = vr[0]["metrics"]["latencyP95S"][0]
-        knee = next((r["x"] for r in vr if p95_0 and r["metrics"]["latencyP95S"][0]
-                     and r["metrics"]["latencyP95S"][0] >= 2 * p95_0), None)
+        lat = "finalizationP95S" if vr[0]["metrics"]["finalizationP95S"][0] is not None else "latencyP95S"
+        p95_0 = vr[0]["metrics"][lat][0]
+        knee = next((r["x"] for r in vr if p95_0 and r["metrics"][lat][0]
+                     and r["metrics"][lat][0] >= 2 * p95_0), None)
         for r in vr:
             f = []
             if sat is not None and r["x"] >= sat:
@@ -473,7 +486,8 @@ def saturation_flags(rows, results_dir=RESULTS_DIR):
                 f.append("latency-knee")
             flags[(v, r["x"])] = ",".join(f)
         summary[v] = {"saturationSendRateTps": sat, "keptUpToSendRateTps": verdict["keptUpTo"],
-                      "generatorLimitSendRateTps": gen, "latencyKneeSendRateTps": knee}
+                      "generatorLimitSendRateTps": gen, "latencyKneeSendRateTps": knee,
+                      "latencyKneeBasis": "finalization p95" if lat == "finalizationP95S" else "latency p95"}
     return flags, summary
 
 
@@ -724,7 +738,7 @@ def build(exp, results_dir=RESULTS_DIR, out_dir=None, charts_on=True, decimal_co
             print(f"  {v}: saturation at send rate {s['saturationSendRateTps']} tx/s, kept up to "
                   f"{s['keptUpToSendRateTps']}, load-generator limit at {s['generatorLimitSendRateTps']} "
                   f"(rule: finalized throughput < {sat_ratio}x send rate while the measured send rate "
-                  f">= {gen_ratio}x); latency knee at {s['latencyKneeSendRateTps']}")
+                  f">= {gen_ratio}x); latency knee ({s['latencyKneeBasis']}) at {s['latencyKneeSendRateTps']}")
         with open(os.path.join(out_dir, "e3a-saturation.json"), "w", encoding="utf-8") as fh:
             json.dump(sat, fh, indent=2)
     if exp == "e1":

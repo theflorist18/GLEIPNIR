@@ -671,7 +671,9 @@ MaxMessageCount 10.
 **Node configs:** `network/core.yaml` and `network/orderer.yaml` are verbatim
 Fabric 2.5.15 sampleconfig with enumerated deltas only — core.yaml pins the
 world state to **goleveldb** (rich queries are therefore impossible by
-construction) and enables the `ccaas` external builder; orderer.yaml sets
+construction) and raises the gateway concurrency limit
+`peer.limits.concurrency.gatewayService` from 500 to 3,250 (CONTRACTS §12-26; campaigns 1–6
+ran 500); the `ccaas` external builder is the sampleconfig's own entry; orderer.yaml sets
 `BootstrapMethod: none` (channel participation). Both files are
 version-controlled from the first commit and their git blob SHAs are embedded
 in every run manifest.
@@ -705,7 +707,7 @@ admin operations run inside the `gleipnir-cli` fabric-tools container.
 | `experiment.py --exp e0\|ramp\|e1\|e2\|e3a\|e3b\|e3c\|ops\|sens\|cell [--variant V]* [--reps N] [--resume] [--dry-run] [--reuse-network] [--no-monitor] [--no-audit] [--verbose] [--send-rate R…] [--batch-size B] [--cases N] [--seed …] [--rounds …] [--events-per-case …] [--idle-timeout-ms F] [--endorsement any\|all] (+ the other control flags)` | the campaign driver (factor + control flags `--exp cell` only, CONTRACTS §12-18; `[run i/n]` progress + ETA, one result line per round, `results/<exp>/<exp>-results.csv` rewritten after every run): plans cells × repetitions, runs the lifecycle below per run (one network lifetime each, **fresh ledger by default**, reset with the run's endorsement policy; `--reuse-network` opts out for one warned ad-hoc run and is refused when the stack's `ENDORSEMENT` differs), loud failures, `runlog.jsonl`; e3a adds the climb after the base ladder (M28: `e3a_next_runs`, verdicts in `results/e3a/e3a-climb.json` after every step; `--resume` re-derives the climb from the complete runs) |
 | `checkpoint.py <runPath> --label tK` | storage checkpoint via `docker exec du -sb` against the **named volumes**: per-channel block store, per-peer GoLevelDB state dir, receipt store `/data` → `checkpoints.jsonl` (`t0` before the first round, `t<k+1>` after every round) |
 | `collect.py <run-dir> [--baseline R]` / `--selftest` | run dir → `manifest.json`: round table + docker resource stats from `caliper.log`, per-tx percentiles/failure classes from `tx-w*.jsonl`, per-round finalization (M28; tx-log `batchId` joined to `anchoring.json` on the anchored variants), OLS storage regression, anchoring + audit summaries |
-| `report.py --exp E [--out docs/results/E] [--no-charts] [--decimal-comma]` | ALWAYS the per-round Excel CSV `benchmark/results/E/E-results.csv` (any E incl. e0/ramp/cell; supervisor column order; UTF-8 BOM); for e1, e2, e3a, e3b, e3c, ops and sens also per-experiment CSV + Markdown tables (units in headers, mean ± SD over reps; Markdown = one table per variant, ONE latency column `avg (min–max), p95` of means; sens X = the cell name) + PNG charts (one per metric, one line per variant; none for ops and sens; E1 with Standard/Parallel reference lines, its batch-size-free reference rows printed as `ref` rather than the literal `None`; E3a flagged by `e3a_verdict` — `saturated`, `generator-limit`, `latency-knee` — → `e3a-saturation.json`, which since M28 also holds `keptUpToSendRateTps` and `generatorLimitSendRateTps`; ops → `ops-writes.*` / `ops-reads.*`). Since M28 the tables end with measured send rate (tx/s), finalized throughput (TPS), finalization latency avg and p95 (s) and audit time per event (ms). The per-round tables (e3a, ops) open with a note that on-chain/off-chain bytes per event, audit time (per case and per event) and anchoring delay are measured once per RUN, so the same value repeats on every row |
+| `report.py --exp E [--out docs/results/E] [--no-charts] [--decimal-comma]` | ALWAYS the per-round Excel CSV `benchmark/results/E/E-results.csv` (any E incl. e0/ramp/cell; supervisor column order; UTF-8 BOM); for e1, e2, e3a, e3b, e3c, ops and sens also per-experiment CSV + Markdown tables (units in headers, mean ± SD over reps; Markdown = one table per variant, ONE latency column `avg (min–max), p95` of means; sens X = the cell name) + PNG charts (one per metric, one line per variant; none for ops and sens; E1 with Standard/Parallel reference lines, its batch-size-free reference rows printed as `ref` rather than the literal `None`; E3a flagged by `e3a_verdict` — `saturated`, `generator-limit`, `latency-knee` — → `e3a-saturation.json`, which since M28 also holds `keptUpToSendRateTps` and `generatorLimitSendRateTps` (and `latencyKneeBasis`, CONTRACTS §12-27); ops → `ops-writes.*` / `ops-reads.*`). Since M28 the tables end with measured send rate (tx/s), finalized throughput (TPS), finalization latency avg and p95 (s) and audit time per event (ms). The per-round tables (e3a, ops) open with a note that on-chain/off-chain bytes per event, audit time (per case and per event) and anchoring delay are measured once per RUN, so the same value repeats on every row |
 
 **Experiment plans** (`experiment.py --exp`; every cell × `repetitions`, r = 3
 unless overridden; e0/ramp always 1 rep):
@@ -716,9 +718,9 @@ unless overridden; e0/ramp always 1 rep):
 | `ramp` | all 4 | send rate | `ramp.events_per_case_per_round` | one `rate<R>` round per send rate; prints throughput vs send rate + suggested `baseline.send_rate_tps` (confirm with the supervisor) |
 | `e1` | anchoring (1 ch), parallel-anchored (`baseline.channels`) + standard/parallel **reference** runs (`levels.reference`) | `batch_sizes` | `baseline.send_rate_tps` | `workload.rounds` trace slices `slice<k>` |
 | `e2` | parallel | `channel_counts` | `baseline.send_rate_tps` | slices; cases = channels (one channel per case) |
-| `e3a` | all 4 | send rate: since M28 the base ladder `e3a.send_rates_tps` (100 … 1000 tx/s), then the climb | `baseline.batch_size`, `baseline.channels`; base-ladder rounds of `e3a.events_per_case_per_round` (1,500) | one `rate<R>` round per send rate, ascending, one ledger per run. The climb (M28; one common top since CONTRACTS §12-25): every variant runs the same climb rates `e3a.climb.send_rates_tps` (1250, 1500, 2000, 2500 tx/s; rounds ≥ 30 s at the top rate) with 16 Caliper workers (`e3a.workers`); each rate is judged on the reps' mean (`report.e3a_verdict`), walking up: measured send rate < 0.95 × configured → load-generator limit; else finalized throughput < 0.9 × configured → saturated; the walk ends at the first of these. After the climb, a first saturated rate that follows a rate that kept up earns ONE run halfway between the two (the saturated run's round size, dir tag `-midpoint`); a step with fewer complete reps is planned again first |
+| `e3a` | all 4 | send rate: since M28 the base ladder `e3a.send_rates_tps` (100 … 1000 tx/s), then the climb | `baseline.batch_size`, `baseline.channels`; base-ladder rounds of `e3a.events_per_case_per_round` (1,500) | one `rate<R>` round per send rate, ascending, one ledger per run. The climb (M28; one common top since CONTRACTS §12-25): every variant runs the same climb rates `e3a.climb.send_rates_tps` (1250, 1500, 1750, 2000, 2250, 2500 tx/s; rounds ≥ 30 s at the top rate) with 16 Caliper workers (`e3a.workers`); each rate is judged on the reps' mean (`report.e3a_verdict`), walking up: measured send rate < 0.95 × configured → load-generator limit; else finalized throughput < 0.9 × configured → saturated; the walk ends at the first of these. After the climb every variant is done, so all four are measured at the same send rates (CONTRACTS §12-28; campaign 6 also ran one midpoint run, dir tag `-midpoint`); a step with fewer complete reps is planned again first |
 | `e3b` | all 4 | `case_counts` ≤ `baseline.channels_max` | `baseline.send_rate_tps` (fixed TOTAL send rate) | slices; parallel* channels = cases, standard/anchoring 1 |
-| `e3c` | all 4 | `e3c.case_counts` ≤ `baseline.channels_max` (M28) | fixed PER-CASE send rate: send rate = cases × `e3c.send_rate_per_case_tps` (5 → 25 … 250 tx/s); 20 cases × 5 = the baseline cell, measured by `sens` (report.py does not merge it in: the analysis adds the `sens` baseline rows at 20 cases) | slices; parallel* channels = cases, standard/anchoring 1 |
+| `e3c` | all 4 | `e3c.case_counts` ≤ `baseline.channels_max` (M28) | fixed PER-CASE send rate: send rate = cases × `e3c.send_rate_per_case_tps` (5 → 25 … 500 tx/s); 20 cases × 5 = the baseline cell, measured by `sens` (report.py does not merge it in: the analysis adds the `sens` baseline rows at 20 cases) | slices; parallel* channels = cases, standard/anchoring 1 |
 | `ops` | all 4 | operation | E3 point | `create transfer access dispose` (writes), `read-evidence read-trail` (reads), `verify-event` (anchored) |
 | `sens` | all 4; a cell that overrides only `anchoring.*` runs on the anchored variants alone (M28) | the `sensitivity` cell: `baseline`, `endorse-all` (`endorsement.policy: all`), `idle-5s` (`anchoring.idle_timeout_ms: 5000`) | the baseline point (`baseline.send_rate_tps`, `baseline.channels` cases, `baseline.batch_size`, `workload.rounds` × 224 events/case); each run carries its own effective constants | slices; repetition by repetition (every cell once, then again: 12 + 12 + 6 = 30 runs at r = 3); the cell name tags the levels dir and `run.json` `cell` |
 | `cell` | all 4 (or `--variant`) | — (one ad-hoc cell) | CLI `--send-rate`/`--batch-size`/`--cases` (= channels on parallel*), else `sweeps.yaml` baseline | several send rates → one `rate<R>` round each, ascending; one → `workload.rounds` slices; `results/cell/`, exported to the per-round CSV only (no aggregated table) |
@@ -762,7 +764,7 @@ multi-channel cells; latency min/avg/max (Caliper) + p50/p95/p99 per round
 and per operation type (from the per-transaction JSONL); per round (M28) the
 integrity **finalization** of the successful timed writes, `finalization
 {basis, finalized, notFinalized, pausedEvents, latencyMs{min, p50, p95, p99,
-max, mean, n}, finalizedTps, windowS}` — submission (Caliper's create time) →
+max, mean, n}, finalizedTps, minSpan, windowS}` — submission (Caliper's create time) →
 the event's own commit on Standard/Parallel (`basis: commit`, `tFinal`), or →
 the commit of the Merkle root of the batch its `202` named on the anchored
 variants (`basis: root-commit`, `anchoring.json` `committedAt`; an event whose
@@ -770,9 +772,11 @@ batch never committed is not finalized; a round with no batch link at all, as
 in runs logged before it existed, has no finalization record); `finalizedTps` =
 the least-squares slope of the cumulative finalizations over [the first
 finalization after the round's first submission, its last submission]
-(anchored: every root committed in that window, weighted by its leafCount), so
-a variant that keeps up reads about the send rate whatever its latency and a
-saturated one reads its capacity; `pausedEvents` = finalized events whose batch
+(anchored: every root committed in that window, weighted by its leafCount), at
+most the round's accepted rate, `null` when the finalizations inside the send
+window span less than 40 % of it (CONTRACTS §12-27), so a variant that keeps up
+reads about the send rate whatever its latency and a saturated one reads its
+capacity; `pausedEvents` = finalized events whose batch
 closed after the round's last accepted write; success/failure
 counts, failure rate (%) and the classes `MVCC_READ_CONFLICT`,
 `ENDORSEMENT_POLICY_FAILURE`, `TIMEOUT`, `HTTP_4XX`, `HTTP_5XX`, `OTHER`
@@ -812,7 +816,7 @@ Since M28 `run.json` `controls` also record `idleTimeoutMs` and
 **Run identity:** `runId = <exp>/<variant>/<levels>/r<rep>` with `levels =
 batch<N>-ch<C>-cases<K>[-ref]` (fixed key order; `cell` appends `-rate<R>…` and, with control
 overrides, `-x<hash>`; since M28 an e3a climb run appends its rates, e.g.
-`-rate1250-1500-2000-2500`, a midpoint run also `-midpoint`, and a sens run
+`-rate1250-1500-1750-2000-2250-2500` (campaign 6's midpoint runs also `-midpoint`), and a sens run
 its cell name, e.g. `-endorse-all`). Regime labels: `smoke`
 (e0 only, under `results/e0/`), `steady` (write events on the least-loaded channel — nominal at plan time, then the generated trace's actual count — ≥
 `regimes.steady.min_events_per_channel` = 10³) or `sub-floor` (below it).
@@ -837,14 +841,14 @@ batch_sizes: [10, 25, 50, 100, 200]               # E1 — ONE grid for Anchorin
 channel_counts: [5, 10, 20, 30, 40, 50]           # E2 — Parallel only; bounded by host cores
 send_rates_tps: [10, 25, 50, 75, 100, 150, 200]   # ramp — configured send rate (input, not output); E3a has its own ladder (M28)
 case_counts: [5, 10, 20, 30, 40, 50]              # E3b — trimmed to ≤ baseline.channels_max
-baseline: { send_rate_tps: 100, batch_size: 50, channels: 20, channels_max: 50 }   # calibrated by the ramp/E1/E2 (2026-10-01/02); "baseline", never "optimal"; channels = the set case count (parallel*: one channel per case)
+baseline: { send_rate_tps: 100, batch_size: 50, channels: 20, channels_max: 100 }   # calibrated by the ramp/E1/E2 (2026-10-01/02; channels_max 100 for E3c's 100-case point, CONTRACTS §12-29); "baseline", never "optimal"; channels = the set case count (parallel*: one channel per case)
 workload:
   evidence_per_case: 20
   events_per_case_per_round: 224  # cases*224/workers must be an integer for every grid case count
   rounds: 5                       # trace slices per run (E1/E2/E3b/E3c/sens; E3a: one slice per send rate)
   mix: { transfer_weight: 0.15, access_weight: 0.85, dispose_fraction: 0.5 }
   payload_bytes: 256
-  audit_cases: 50                 # M28: >= the largest case count, so every case (capped at the run's case count)
+  audit_cases: 100                # >= the largest case count, so every case (capped at the run's case count)
 anchoring: { flush_timeout_ms: 0, idle_timeout_ms: 0 }   # age / idle batch timer (idle: M28); both 0 = size-only batching
 endorsement: { policy: any }         # M28: any = 1-of-any (default), all = 2-of-2, on every app channel
 monitor:   { interval_s: 5 }         # Caliper docker monitor
@@ -858,8 +862,8 @@ e3a:                                       # M28: send rate up to saturation, at
   workers: 16                              # Caliper workers in e3a only; every other experiment uses `workers`
   saturation_ratio: 0.9                    # saturated: finalized throughput < this x the configured send rate ...
   generator_ratio: 0.95                    # ... while the measured send rate >= this x configured (below: load-generator limit)
-  climb: { send_rates_tps: [1250, 1500, 2000, 2500], min_send_s: 30 }   # every variant; 2500 = the common top
-e3c: { send_rate_per_case_tps: 5, case_counts: [5, 10, 30, 40, 50] }   # M28: send rate = cases x 5
+  climb: { send_rates_tps: [1250, 1500, 1750, 2000, 2250, 2500], min_send_s: 30 }   # every variant; 2500 = the common top
+e3c: { send_rate_per_case_tps: 5, case_counts: [5, 10, 30, 40, 50, 100] }   # M28: send rate = cases x 5
 sensitivity:                               # M28: cells of sweeps.yaml path overrides at the baseline point
   baseline: {}
   endorse-all: { endorsement.policy: all }
@@ -888,8 +892,8 @@ per-operation breakdown from `ops`); within a round a TRANSFER/DISPOSE sits
 campaign traces, 7 (S/8; 5.6 s at 5 tx/s) in the E0 smoke trace's 60-item
 rounds; closer, for the campaign shapes (≥ 5 cases × 224 events/case/round),
 only in a worker's last ≤ `headGap` items (at most 72 measured), while cells
-with ≤ 4 cases fall back earlier, and E3a's 16-worker traces leave about 590–620
-such pairs per run, almost all in the run's last round (CONTRACTS §12-25) — so
+with ≤ 4 cases fall back earlier, and E3a's 16-worker traces leave about 590–660
+such pairs per run, almost all in the run's last round (CONTRACTS §12-25, §12-28) — so
 below saturation it is normally not
 endorsed before its predecessor commits (CONTRACTS §12-22). Each worker holds
 exactly `rounds × S` items (`S = cases × eventsPerCasePerRound / workers`),
@@ -954,7 +958,7 @@ limit: the 0.6.0 peer-gateway connector sets no error string, so fabric-mode
 
 **Audit reconstruction** (`audit/reconstruct.js`, `npm run audit`; host-side,
 gateway only): the first `audit_cases` data-cases of the trace (since M28
-`audit_cases: 50`, capped at the run's case count, so every case), timed per
+`audit_cases: 100`, 50 in campaign 6, capped at the run's case count, so every case), timed per
 case with `hrtime` — on-chain trail on Standard/Parallel, `?proofs=1` + leaf
 recompute + sibling-path fold + one root read per `(scopeId, batchId)` per
 case (the cache is reset for every case) on the anchored variants, after one

@@ -18,7 +18,7 @@ baseline:
   send_rate_tps: 100      # from the ramp (sub-saturation) → used by E1, E2, E3b, ops, sens   [set from ramp 2026-10-01: no saturation up to the top level, half of it]
   batch_size: 50          # from E1 (rule: docs/methodology/experiments.md §4) → E3, ops, sens  [set by hand 2026-10-02: §4.1 selects no level (E1 on-chain B/event steps 47–60 %); 50 keeps total on+off-chain bytes within 0.2 % of the N=25 minimum]
   channels: 20            # the SET case count (= channels on parallel*, one per case): E2 MEDIAN → E1, E3a, ops, sens, ramp, cell default  [set from e2 2026-10-02]
-  channels_max: 50        # from E2: top of the healthy range → E3b/E3c upper bound          [set from e2 2026-10-02]
+  channels_max: 100       # upper bound of the E3b/E3c case grids: E2's healthy range covered its whole grid, up to 50 [2026-10-02]; 100 for E3c's 100-case point
 
 # ---- controlled workload (identical across variants; recorded in every run.json) ----
 workload:
@@ -27,7 +27,7 @@ workload:
   rounds: 5                       # trace slices per run (E1/E2/E3b/E3c/sens); E3a uses one slice per send rate
   mix: { transfer_weight: 0.15, access_weight: 0.85, dispose_fraction: 0.5 }  # CREATE = 1/evidence; DISPOSE ends dispose_fraction of evidence
   payload_bytes: 256              # synthetic Codex-Entry filler hashed into storage.integrity_proof
-  audit_cases: 50                 # cases reconstructed per run (audit reconstruction time); >= the largest case count, so every case
+  audit_cases: 100                # cases reconstructed per run (audit reconstruction time); >= the largest case count, so every case
 anchoring:
   flush_timeout_ms: 0             # age timer: close a batch this long after its FIRST event; 0 = off
   idle_timeout_ms: 0              # idle timer: close a batch this long after its LAST event (no cap); 0 = off. Both 0 = size-only batching, partial batch flushed at run end
@@ -53,15 +53,15 @@ e3a:
   saturation_ratio: 0.9            # saturated: finalized throughput < this x the configured send rate ...
   generator_ratio: 0.95            # ... while the measured send rate >= this x configured; below it the load generator is the limit (that rate is not judged)
   climb:
-    send_rates_tps: [1250, 1500, 2000, 2500]   # run by EVERY variant after the base ladder, one run per repetition; 2500 = the common top
+    send_rates_tps: [1250, 1500, 1750, 2000, 2250, 2500]   # run by EVERY variant after the base ladder, one run per repetition; 2500 = the common top
     min_send_s: 30                 # a climb round holds enough events for this many seconds at the run's top rate
-  # Then a variant that saturated, having kept up at a lower rate, gets one run at the rate halfway
-  # between the two, with the saturated run's round size.
+  # Every variant runs exactly these rates, so all four are measured at the same send rates; a
+  # saturation point is known to the next rate of the grid.
 
 # ---- E3c: cases at a FIXED per-case send rate (E3b holds the TOTAL send rate instead) ----
 e3c:
-  send_rate_per_case_tps: 5        # send rate = cases x this (5 cases → 25 tx/s … 50 cases → 250 tx/s)
-  case_counts: [5, 10, 30, 40, 50] # 20 cases x 5 = the baseline cell: measured in the same campaign by sens/baseline
+  send_rate_per_case_tps: 5        # send rate = cases x this (5 cases → 25 tx/s … 100 cases → 500 tx/s)
+  case_counts: [5, 10, 30, 40, 50, 100]   # 20 cases x 5 = the baseline cell: measured in the same campaign by sens/baseline
 
 # ---- sens: sensitivity cells at the baseline point (all run in ONE night, so they share a VM boot) ----
 # Each cell overrides sweeps.yaml paths. A cell that overrides only anchoring.* runs on the anchored

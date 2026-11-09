@@ -119,11 +119,12 @@ chaincode image builds with its own pinned toolchain.
 PyYAML (matplotlib for charts).
 
 **Hardware.** One fully loaded channel needs about one CPU core, so the core
-count limits how many channels the Parallel variants can use (the channel grid
-goes up to 50). The published campaigns ran in a WSL2 VM with 32 cores and
+count limits how many channels the Parallel variants can use (E2's channel grid
+goes up to 50; E3c's top cell runs 100 channels at 5 tx/s each, about 4 cores and
+up to about 5 GB of Fabric memory). The published campaigns ran in a WSL2 VM with 32 cores and
 about 10 GB of memory. Each of them was about 150 runs and about 30 hours of
-run time; a campaign of the current experiment set is at least 222 runs (E3a
-adds runs as it climbs), roughly 45 hours or more. `experiment.py --dry-run`
+run time; a campaign of the current experiment set is 246 runs (12 of them E3a
+climb runs), roughly 59 hours. `experiment.py --dry-run`
 prints an estimate for each plan from the run times already logged.
 
 **Pinned images and libraries** (change none of them; `:latest` Fabric images
@@ -311,10 +312,10 @@ Run them in this order; each calibration step fills a `baseline` value in
 | `e0` | all four | nothing | Functional smoke test of every operation, labelled `smoke`; never a performance result. |
 | `ramp` | all four | send rate | Finds a sub-saturation send rate: suggests `baseline.send_rate_tps`. |
 | `e1` | Anchoring, Parallel-Anchored (+ Standard and Parallel reference runs) | batch size | Batch-size calibration: suggests `baseline.batch_size`. |
-| `e2` | Parallel | channel count | Channel-count calibration: suggests `baseline.channels` (the median of the healthy range) and `baseline.channels_max`. |
-| `e3a` | all four | send rate | Scalability against load: one round per send rate from 100 tx/s up to a common top of 2,500 tx/s for every variant (16 Caliper workers), then one run halfway between each variant's last rate that kept up and its first saturated rate. |
+| `e2` | Parallel | channel count | Channel-count calibration: suggests `baseline.channels` (the median of the healthy range) and `baseline.channels_max` (100 since campaign 6's E3c re-run; applying E2's suggestion would set it back to E2's top). |
+| `e3a` | all four | send rate | Scalability against load: one round per send rate from 100 tx/s up to a common top of 2,500 tx/s for every variant (16 Caliper workers): all four run the same 14 send rates. |
 | `e3b` | all four | case count | Scalability against the number of cases at a fixed total send rate: the cost of adding channels (one channel per case on the Parallel variants). |
-| `e3c` | all four | case count | The same at a fixed send rate per case (5 tx/s), so the load grows with the cases. |
+| `e3c` | all four | case count | The same at a fixed send rate per case (5 tx/s), so the load grows with the cases: 5 to 100 cases, 25 to 500 tx/s. |
 | `ops` | all four | operation type | Per-operation breakdown at the E3 operating point: writes, reads, and (anchored variants) verification. |
 | `sens` | all four (the idle-timer cell: anchored variants) | the cell | Sensitivity cells at the baseline point: a baseline cell, 2-of-2 endorsement and a 5 s idle batch timer, run repetition by repetition. |
 | `cell` | all four, or `--variant` | your own levels | One ad-hoc cell at the factor levels you pass; a probe, not an E1–E3 data point. |

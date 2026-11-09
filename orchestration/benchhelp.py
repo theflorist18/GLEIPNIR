@@ -25,7 +25,7 @@ TAB_HELP = {
         "SMOKE TEST (label 'smoke'): functional correctness only — never used for results.\n\n"
         "RAMP: steps the send rate up (one round per rate) to find where each variant's throughput stops\n"
         "keeping up (throughput < 0.9 x send rate = saturation). From it the app suggests the BASELINE\n"
-        "SEND RATE (safely below saturation). E3a has its own ladder and climbs to saturation by itself.\n\n"
+        "SEND RATE (safely below saturation). E3a has its own fixed grid: 14 send rates up to 2,500 tx/s.\n\n"
         "Tip: ramp coarsely first (e.g. 100 ... 1000 tx/s). Where throughput flattens, look at the CPU\n"
         "column: headroom left = an architecture limit (the finding); CPU maxed out = the laptop itself\n"
         "(a threat to validity).\n"
@@ -49,14 +49,14 @@ TAB_HELP = {
         "level, failure rate <= 1 % and total CPU <= 0.9 x cores x 100 %. The healthy range runs from the\n"
         "lowest level up to the first unhealthy one.\n"
         "  baseline cases = the MEDIAN of that range (never its maximum)\n"
-        "  max cases      = its top (E3b does not go beyond it: past it you measure the host running out\n"
-        "                   of CPU, not the architecture)."),
+        "  max cases      = its top, 50 (set to 100 since campaign 6's E3c re-run for E3c's 100-case\n"
+        "                   point at 5 tx/s per channel; E3b's own grid still stops at 50)."),
     "E3 main": (
         "Goal: the paper's main experiment — compare the 4 architectures' scalability, baselines fixed.",
         "E3a  scalability vs LOAD: send rate raised round by round from 100 tx/s to the same top (2,500 tx/s)\n"
         "     for every variant; saturated = finalized throughput < 0.9 x send rate.\n"
         "E3b  scalability vs CASES at a fixed TOTAL send rate (Parallel variants: one channel per case), up\n"
-        "     to max cases — the cost of adding channels.\n"
+        "     to 50 cases — the cost of adding channels.\n"
         "E3c  scalability vs CASES at a fixed PER-CASE send rate: the load grows with the cases.\n"
         "Sensitivity cells: 2-of-2 endorsement and a 5 s idle batch timer against a baseline cell.\n"
         "Per-operation breakdown: each operation (create, transfer, access, dispose + the reads) tested on its\n"
@@ -112,7 +112,7 @@ FIELD_HELP = {
         "Round size = cases x this (20 x 224 = 4,480 tx, split over the workers); it sets HOW MANY, the send\n"
         "rate sets HOW FAST: round length ~ round size / send rate (4,480 at 50 tx/s ~ 90 s).\n"
         "Per run each case gets rounds x this (5 x 224 = 1,120), above the steady floor of 1,000. The seeded\n"
-        "trace scatters channels around it: the least-loaded Parallel channel gets 1,046–1,102 over the case\n"
+        "trace scatters channels around it: the least-loaded Parallel channel gets 1,030–1,102 over the case\n"
         "grid (200 left some at 935–999, sub-floor). cases x this must divide by the\n"
         "workers for every case count (with 4 workers: a multiple of 4).\n"
         "High send rates make rounds short (4,480 tx at 200 tx/s ~ 22 s)."),
@@ -150,7 +150,7 @@ FIELD_HELP = {
         "'audit time per case (s)' and 'audit time per event (ms)' ('how long to reconstruct one case's CoC').\n"
         "Standard/Parallel read each trail from the ledger; the anchored variants fetch receipts, recompute\n"
         "each Merkle path and check it against the on-chain root. More cases = steadier mean, longer run.\n"
-        "Capped at the run's case count, so 50 audits every case of every run."),
+        "Capped at the run's case count, so 100 audits every case of every run."),
     "anchoring.flush_timeout_ms": (
         "Anchored variants only. The batcher closes a batch when it holds 'batch size' events; this age timer\n"
         "would ALSO close it this many ms after its FIRST event. 0 = off: every batch really has the batch size\n"
@@ -191,8 +191,9 @@ FIELD_HELP = {
         "calibrated there). After E2 it becomes the MEDIAN of E2's healthy range (never its maximum) for\n"
         "E3a, the per-operation breakdown and the Custom test default."),
     "baseline.channels_max": (
-        "Top of E2's healthy range. E3b's case grid is trimmed to <= this, so E3b never measures the host\n"
-        "running out of CPU."),
+        "Upper bound of the E3b and E3c case grids (each grid is trimmed to <= this). E2's healthy range\n"
+        "reached its top tested level, 50; 100 lets E3c reach 100 cases at 5 tx/s each, while E3b's own\n"
+        "grid stops at 50, so neither measures the host running out of CPU."),
     "regimes.smoke.cases": "E0 smoke test: number of cases (Parallel variants get one channel per case).",
     "regimes.smoke.evidence_per_case": "E0 smoke test: evidence items per case (small on purpose).",
     "regimes.smoke.logs_per_case_min": (
@@ -215,8 +216,8 @@ FIELD_HELP = {
         "the first one above the highest saturation point. E3a has its own ladder (e3a.send_rates_tps)."),
     "e3a.send_rates_tps": (
         "E3a's base ladder (configured input, tx/s): one round per rate, ascending, on one ledger. Then every\n"
-        "variant runs the same climb rates up to the common top (e3a.climb.send_rates_tps), and a variant\n"
-        "that saturated after keeping up gets one run halfway between the two rates."),
+        "variant runs the same climb rates up to the common top (e3a.climb.send_rates_tps), so all four\n"
+        "are measured at the same send rates."),
     "e3a.events_per_case_per_round": (
         "E3a base-ladder round size: events per case per send rate. 1,500 x 20 cases = 30,000 tx = 300 s of\n"
         "sending at 100 tx/s and 30 s at 1,000 tx/s, so the end-of-round wait for the last blocks (up to\n"
@@ -227,7 +228,7 @@ FIELD_HELP = {
         "fully loaded channel (Fabric guidance); WSL also has only ~7.6 GB of memory."),
     "case_counts": (
         "E3b's levels: number of cases (all 4 variants; Parallel variants get one channel per case).\n"
-        "Trimmed to <= max cases from E2."),
+        "Trimmed to <= max cases."),
 }
 
 # ---------------------------------------------------------------- Custom test factors, modes, buttons
@@ -243,9 +244,9 @@ CUSTOM_HELP = {
 MODE_HELP = {
     "e0": "Functional check of all four variants at a low send rate. Results are labelled 'smoke'.",
     "ramp": "One round per send rate, ascending, to find roughly where each variant saturates.",
-    "e3a": ("All 4 variants, one round per send rate from 100 tx/s up to the same top (2,500 tx/s), then one\n"
-            "halfway run per variant that saturated. 16 Caliper workers."),
-    "e3b": "All 4 variants, number of cases raised (up to max cases) at the baseline TOTAL send rate.",
+    "e3a": ("All 4 variants, one round per send rate from 100 tx/s up to the same top (2,500 tx/s), the same\n"
+            "rates for every variant. 16 Caliper workers."),
+    "e3b": "All 4 variants, number of cases raised (up to 50) at the baseline TOTAL send rate.",
     "e3c": "All 4 variants, number of cases raised at a fixed PER-CASE send rate (the total grows with them).",
     "ops": "Each operation as its own round at the E3 point; writes and reads in separate tables.",
     "sens": ("At the baseline point: the baseline cell, 2-of-2 endorsement (all 4 variants) and a 5 s idle\n"

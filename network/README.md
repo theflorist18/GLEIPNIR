@@ -45,7 +45,8 @@ created `anchor-main`, a channel of a third peer org (AnchorClientMSP, with its 
   policy needs. The chaincode endorsement policy is not set here: `orchestration/lib.sh`
   `endorsement_policy` sets it when it commits the chaincode on a channel.
 - `core.yaml` / `orderer.yaml` — verbatim 2.5.15 sampleconfig (core.yaml pinned to goleveldb,
-  rich-query backend removed); mounted into peers/orderers; overrides via env in compose.
+  rich-query backend removed, gateway concurrency limit 3250); mounted into peers/orderers;
+  overrides via env in compose.
 - `crypto/registerEnroll.sh` — Fabric CA 1.5.19 enrollment for the three orgs (NodeOUs).
   Output → `organizations/` (gitignored).
 - `compose/compose-{net,ca,services}.yaml` + `.env` — the three-file topology, always merged

@@ -232,7 +232,7 @@ FIELDS = {
     "baseline.send_rate_tps": ("send rate (tx/s) — from E0", "int"),
     "baseline.batch_size": ("batch size (events) — from E1", "int"),
     "baseline.channels": ("cases (= channels on Parallel variants) — E2 median", "int"),
-    "baseline.channels_max": ("max cases / channels — E2 top of healthy range", "int"),
+    "baseline.channels_max": ("max cases / channels (E3b/E3c grid bound)", "int"),
     "regimes.smoke.cases": ("smoke cases (n) — Parallel runs one channel per case", "int"),
     "regimes.smoke.evidence_per_case": ("smoke evidence per case (n)", "int"),
     "regimes.smoke.logs_per_case_min": ("smoke logs per case, min (n)", "int"),

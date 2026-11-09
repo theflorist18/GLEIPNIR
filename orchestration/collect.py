@@ -327,6 +327,9 @@ def batch_times(run_dir):
             for b in st.get("batches", []) if b.get("batchId")}
 
 
+FINALIZED_TPS_MIN_SPAN = 0.4   # the finalizations inside a round's send window must span this share of it
+
+
 def _rate(points):
     """Least-squares slope (per second) of the cumulative count over time; points = [(ms, count)],
     ascending. 0.0 with fewer than two points: nothing measurable was finalized."""
@@ -350,11 +353,15 @@ def finalization_metrics(records, anchored, batches):
 
     finalizedTps = the rate at which finalizations happened while the load was still being sent:
     the least-squares slope of the cumulative finalizations over [the first finalization after the
-    round's first submission, its last submission]. Anchored, that counts every root committed in
+    round's first submission, its last submission], at most the round's accepted rate (successful
+    writes / send window: over a round finalization cannot outpace acceptance, so a steeper slope
+    is a catch-up after a slow start, not capacity). Anchored, that counts every root committed in
     the window with its leafCount (a batch carried over from the previous round included), because
     root commits come in whole batches. A system that keeps up reads about the send rate whatever
-    its latency; a saturated one reads its finalization capacity. A round whose writes all failed
-    reads 0.
+    its latency; a saturated one reads its finalization capacity. A round that finalized nothing
+    reads 0. None when the finalizations inside the send window span less than
+    FINALIZED_TPS_MIN_SPAN of it (no root committed while the load was sent, or all of them in one
+    block, as in a 4-s ops round): no rate is measurable there.
 
     Known limit: on the anchored variants an event left in an open batch when a round ends waits
     for the next round's events, a timer or the run-end flush; `pausedEvents` counts them (their
@@ -380,10 +387,18 @@ def finalization_metrics(records, anchored, batches):
         commits = sorted((c, n) for _closed, c, n in batches.values() if c is not None and first_submit <= c <= last_submit)
     else:
         commits = sorted((f, 1) for _, f in done if f <= last_submit)
+    window = last_submit - first_submit
+    span = (commits[-1][0] - commits[0][0]) / window if commits and window > 0 else 0.0
+    if not done:
+        tps = 0.0
+    elif span < FINALIZED_TPS_MIN_SPAN:
+        tps = None
+    else:
+        tps = min(_rate(commits), round(len(writes) / (window / 1000.0), 3))
     return {"basis": "root-commit" if anchored else "commit", "finalized": len(done),
             "notFinalized": len(writes) - len(done), "pausedEvents": paused,
             "latencyMs": summarize([f - c for c, f in done]),
-            "finalizedTps": _rate(commits),
+            "finalizedTps": tps, "minSpan": FINALIZED_TPS_MIN_SPAN,
             "windowS": round((last_submit - commits[0][0]) / 1000.0, 3) if commits else None}
 
 
@@ -804,7 +819,7 @@ def selftest():
         f = finalization_metrics(recs, True, {"bA": (1500, 2500, 2), "bB": (3600, 4000, 1), "bX": (3200, None, 1)})
         assert (f["basis"], f["finalized"], f["notFinalized"], f["pausedEvents"]) == ("root-commit", 3, 1, 1), f
         assert f["latencyMs"]["min"] == 1500 and f["latencyMs"]["max"] == 2500 and f["latencyMs"]["mean"] == 2000
-        assert f["windowS"] == 0.5 and f["finalizedTps"] == 0.0, f   # one root inside the window: no slope yet
+        assert f["windowS"] == 0.5 and f["finalizedTps"] is None, f   # one root inside the window: no rate
         f = finalization_metrics(recs, False, {})
         assert (f["basis"], f["finalized"], f["notFinalized"], f["pausedEvents"]) == ("commit", 4, 0, 0), f
         assert f["latencyMs"]["mean"] == 4.75, f
@@ -825,6 +840,20 @@ def selftest():
                 for i in range(100)]
         bt = {f"b{k}": (100 * (10 * k + 9), 100 * (10 * k + 9) + 500, 10) for k in range(10)}
         assert finalization_metrics(recs, True, bt)["finalizedTps"] == 10.0
+        # A 4-s round whose roots all commit in one block: no rate (the slope read ~60,000/s).
+        burst = [{"op": "ACCESS", "ok": True, "tCreate": 10 * i, "tFinal": 10 * i + 5, "batchId": f"b{i // 50}"}
+                 for i in range(400)]
+        bt = {f"b{k}": (10 * (50 * k + 49), 3000 + k, 50) for k in range(8)}
+        assert finalization_metrics(burst, True, bt)["finalizedTps"] is None
+        # A slow start, then a catch-up at 12.2/s: capped at the accepted rate, 100 writes / 9.9 s.
+        late = [{"op": "ACCESS", "ok": True, "tCreate": 100 * i, "tFinal": max(3000, 100 * i) + 300} for i in range(100)]
+        assert finalization_metrics(late, False, {})["finalizedTps"] == 10.101
+        # One write (a zero send window), and a direct round whose commits all come after its last
+        # submission: no rate either; the rule is recorded with the value.
+        one = finalization_metrics([keep[0]], False, {})
+        assert one["finalizedTps"] is None and one["minSpan"] == FINALIZED_TPS_MIN_SPAN, one
+        after = [{"op": "ACCESS", "ok": True, "tCreate": 100 * i, "tFinal": 20000 + i} for i in range(100)]
+        assert finalization_metrics(after, False, {})["finalizedTps"] is None
         assert m["audit"]["cases"] == 1 and m["audit"]["summary"]["msPerCase"]["mean"] == 12.0
         assert to_mb("1.2GB") == 1228.8 and to_mb("512KB") == 0.5 and to_mb("123.4MB") == 123.4 and to_mb("-") is None
         assert classify_err("HTTP 404") == "HTTP_4XX" and classify_err(None) == "OTHER"
